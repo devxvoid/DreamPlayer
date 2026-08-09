@@ -1,30 +1,33 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:dream_player/main.dart';
+import 'package:dream_player/app.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  testWidgets('App shows library and settings shell', (tester) async {
+    await tester.pumpWidget(const DreamPlayerApp());
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    expect(find.text('DreamPlayer'), findsOneWidget);
+    expect(find.text('Your library'), findsOneWidget);
+    expect(find.text('Library'), findsOneWidget);
+    expect(find.text('Settings'), findsOneWidget);
+  });
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
+  testWidgets('Switching to settings tab shows settings', (tester) async {
+    await tester.pumpWidget(const DreamPlayerApp());
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    await tester.tap(find.text('Settings'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Playback'), findsOneWidget);
+    expect(find.text('Folders to scan'), findsOneWidget);
+  });
+
+  testWidgets('Tapping a video opens the player screen', (tester) async {
+    await tester.pumpWidget(const DreamPlayerApp());
+
+    await tester.tap(find.text('Interstellar (2014) 1080p'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Now playing'), findsOneWidget);
   });
 }
