@@ -13,6 +13,17 @@ class DreamPlayerApp extends StatelessWidget {
       title: 'DreamPlayer',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.dark(),
+      builder: (context, child) {
+        final mediaQuery = MediaQuery.of(context);
+        final clampedTextScaler = mediaQuery.textScaler.clamp(
+          minScaleFactor: 1.0,
+          maxScaleFactor: 1.3,
+        );
+        return MediaQuery(
+          data: mediaQuery.copyWith(textScaler: clampedTextScaler),
+          child: child!,
+        );
+      },
       home: const RootShell(),
     );
   }

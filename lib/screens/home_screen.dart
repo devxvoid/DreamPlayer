@@ -156,32 +156,50 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         SliverPadding(
           padding: const EdgeInsets.all(16),
-          sliver: SliverGrid(
-            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 260,
-              mainAxisSpacing: 14,
-              crossAxisSpacing: 14,
-              childAspectRatio: 0.82,
-            ),
-            delegate: SliverChildBuilderDelegate(
-              (context, index) {
-                final video = _videos[index];
-                return VideoCard(
-                  video: video,
-                  onTap: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => PlayerScreen(video: video),
-                      ),
+          sliver: SliverLayoutBuilder(
+            builder: (context, constraints) {
+              final width = constraints.crossAxisExtent;
+              final columns = _columnsForWidth(width);
+              const spacing = 14.0;
+              final itemWidth = (width - spacing * (columns - 1)) / columns;
+              final itemHeight = itemWidth * 9 / 16 + _textBlockHeight;
+              return SliverGrid(
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: columns,
+                  mainAxisSpacing: spacing,
+                  crossAxisSpacing: spacing,
+                  mainAxisExtent: itemHeight,
+                ),
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) {
+                    final video = _videos[index];
+                    return VideoCard(
+                      video: video,
+                      onTap: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => PlayerScreen(video: video),
+                          ),
+                        );
+                      },
                     );
                   },
-                );
-              },
-              childCount: _videos.length,
-            ),
+                  childCount: _videos.length,
+                ),
+              );
+            },
           ),
         ),
       ],
     );
   }
+
+  static int _columnsForWidth(double width) {
+    if (width >= 1000) return 6;
+    if (width >= 760) return 4;
+    if (width >= 480) return 3;
+    return 2;
+  }
+
+  static const double _textBlockHeight = 84;
 }
