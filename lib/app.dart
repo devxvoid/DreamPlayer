@@ -41,13 +41,26 @@ class _RootShellState extends State<RootShell> {
 
   @override
   Widget build(BuildContext context) {
+    final mediaQuery = MediaQuery.of(context);
+    // Android edge-to-edge reports `padding.top == 0` (transparent status
+    // bar), so SliverAppBar/AppBar won't push content below the status bar.
+    // Map the real status-bar inset (`viewPadding`) into `padding` for the
+    // library/settings tabs so they never clash with the status bar.
+    final padded = mediaQuery.copyWith(
+      padding: mediaQuery.padding.copyWith(
+        top: mediaQuery.viewPadding.top,
+      ),
+    );
     return Scaffold(
-      body: IndexedStack(
-        index: _selectedIndex,
-        children: const [
-          HomeScreen(),
-          SettingsScreen(),
-        ],
+      body: MediaQuery(
+        data: padded,
+        child: IndexedStack(
+          index: _selectedIndex,
+          children: const [
+            HomeScreen(),
+            SettingsScreen(),
+          ],
+        ),
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedIndex,

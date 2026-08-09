@@ -23,7 +23,7 @@ class PlayerScreen extends StatefulWidget {
   State<PlayerScreen> createState() => _PlayerScreenState();
 }
 
-class _PlayerScreenState extends State<PlayerScreen> {
+class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver {
   /// Native ExoPlayer (Media3) backend hosted in a platform view.
   ExoPlayerController? _exo;
   StreamSubscription<ExoPlayerEvent>? _exoSub;
@@ -31,6 +31,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
   bool _controlsVisible = true;
   bool _muted = false;
   bool _fullscreen = false;
+
+  Timer? _hideTimer;
+  bool? _lastLandscape;
+  static const Duration _autoHideAfter = Duration(seconds: 3);
 
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
@@ -54,6 +58,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // Keep the system UI mode constant (immersive) for the whole player
+    // screen. Toggling immersive/edgeToEdge during the rotation transition
+    // fights the system's own rotation animation and makes the video jitter.
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _syncOrientationFromPlatform();
+    });
     if (!_inTests) {
       _init();
     }
@@ -85,6 +97,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   void _onExoEvent(ExoPlayerEvent e) {
+    final wasPlaying = _playing;
+    final wasBuffering = _buffering;
     _playing = e.playing;
     _position = e.position;
     _duration = e.duration;
@@ -106,43 +120,113 @@ class _PlayerScreenState extends State<PlayerScreen> {
       _liveAudioCodec = formatMedia3Audio(e.audioMime, e.audioCodecs);
       if (e.audioChannels > 0) _liveAudioChannelCount = e.audioChannels;
     }
+    if (wasPlaying != _playing || wasBuffering != _buffering) {
+      _syncControlsForPlaybackState();
+    }
     if (mounted) setState(() {});
+  }
+
+  /// Keeps the controls visible while paused or buffering, and starts the
+  /// auto-hide countdown only while playing.
+  void _syncControlsForPlaybackState() {
+    if (_playing && !_buffering) {
+      _restartHideTimer();
+    } else {
+      _hideTimer?.cancel();
+      _controlsVisible = true;
+    }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _hideTimer?.cancel();
     _exoSub?.cancel();
     _exo?.dispose();
-    if (_fullscreen) {
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-    }
+    SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
   }
 
-  void _toggleControls() {
-    setState(() => _controlsVisible = !_controlsVisible);
+  /// Reveals the controls (and restarts the auto-hide countdown).
+  void _showControls() {
+    if (mounted && !_controlsVisible) setState(() => _controlsVisible = true);
+    _restartHideTimer();
   }
 
-  void _toggleFullscreen() {
-    setState(() => _fullscreen = !_fullscreen);
-    SystemChrome.setEnabledSystemUIMode(
-      _fullscreen ? SystemUiMode.immersiveSticky : SystemUiMode.edgeToEdge,
-    );
+  void _restartHideTimer() {
+    _hideTimer?.cancel();
+    if (!_playing || _buffering || _dragging) return;
+    _hideTimer = Timer(_autoHideAfter, () {
+      if (mounted && _controlsVisible && _playing && !_buffering && !_dragging) {
+        setState(() => _controlsVisible = false);
+      }
+    });
+  }
+
+  void _onScreenTap() {
+    if (_controlsVisible) {
+      _hideTimer?.cancel();
+      setState(() => _controlsVisible = false);
+    } else {
+      _showControls();
+    }
+  }
+
+  @override
+  void didChangeMetrics() {
+    super.didChangeMetrics();
+    _syncOrientationFromPlatform();
+  }
+
+  /// Tracks the current orientation from the platform dispatcher's size. The
+  /// player screen is always immersive, so this just keeps `_fullscreen` (the
+  /// fullscreen-button icon) in sync with the device orientation.
+  void _syncOrientationFromPlatform() {
+    if (!mounted) return;
+    final view = WidgetsBinding.instance.platformDispatcher.implicitView;
+    if (view == null) return;
+    _applyOrientation(view.physicalSize.width > view.physicalSize.height);
+  }
+
+  /// Tracks the current orientation. The player screen is always immersive, so
+  /// rotation only re-lays-out (no system UI change) — this is what keeps the
+  /// video from jittering mid-rotation.
+  void _applyOrientation(bool landscape) {
+    if (landscape == _lastLandscape) return;
+    _lastLandscape = landscape;
+    _fullscreen = landscape;
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _toggleFullscreen() async {
+    final landscape = !_fullscreen;
+    if (landscape) {
+      await SystemChrome.setPreferredOrientations([
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+    } else {
+      await SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+    }
+    _showControls();
   }
 
   void _toggleMute() {
     _muted = !_muted;
     _exo?.setMuted(_muted);
-    setState(() {});
+    _showControls();
   }
 
   void _seekBy(Duration delta) {
     _exo?.seekTo(_position + delta);
+    _showControls();
   }
 
   void _onSeekStart(double value) {
     _dragging = true;
     _dragValue = value;
+    _hideTimer?.cancel();
     setState(() {});
   }
 
@@ -155,7 +239,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _exo?.seekTo(Duration(milliseconds: value.round()));
     _dragging = false;
     _dragValue = value;
-    setState(() {});
+    _showControls();
   }
 
   void _togglePlayPause() {
@@ -169,6 +253,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     } else {
       exo.play();
     }
+    _showControls();
   }
 
   String _formatDuration(Duration d) {
@@ -250,36 +335,30 @@ class _PlayerScreenState extends State<PlayerScreen> {
         : null;
 
     final videoLayer = _exo != null && _error == null
-        ? GestureDetector(
-            onTap: _toggleControls,
-            child: ExoPlayerView(controller: _exo!),
-          )
-        : GestureDetector(
-            onTap: _toggleControls,
-            child: Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [colorScheme.primaryContainer, Colors.black],
-                ),
+        ? ExoPlayerView(controller: _exo!)
+        : Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [colorScheme.primaryContainer, Colors.black],
               ),
-              child: Center(
-                child: _error != null
-                    ? Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Text(
-                          _error!,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(color: Colors.white70),
-                        ),
-                      )
-                    : const Icon(
-                        Icons.movie_filter,
-                        size: 96,
-                        color: Colors.white24,
+            ),
+            child: Center(
+              child: _error != null
+                  ? Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Text(
+                        _error!,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: Colors.white70),
                       ),
-              ),
+                    )
+                  : const Icon(
+                      Icons.movie_filter,
+                      size: 96,
+                      color: Colors.white24,
+                    ),
             ),
           );
 
@@ -288,6 +367,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
       body: Stack(
         children: [
           Positioned.fill(child: videoLayer),
+          // Full-screen tap catcher on top of the (Android platform) video
+          // layer. Hybrid-composition platform views can swallow touches, so a
+          // plain GestureDetector wrapping the view is unreliable; catching taps
+          // one layer up guarantees the controls always appear on touch.
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: _onScreenTap,
+              child: const SizedBox.expand(),
+            ),
+          ),
           if (_buffering && _backendReady && _error == null)
             const Center(
               child: CircularProgressIndicator(color: Colors.white),
@@ -322,15 +412,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
                             ),
                           ),
                         ),
-                        IconButton(
-                          onPressed: _toggleFullscreen,
-                          icon: Icon(
-                            _fullscreen
-                                ? Icons.fullscreen_exit
-                                : Icons.fullscreen,
-                          ),
-                          color: Colors.white,
-                        ),
                       ],
                     ),
                     const SizedBox(height: 4),
@@ -357,114 +438,120 @@ class _PlayerScreenState extends State<PlayerScreen> {
             offset: _controlsVisible ? Offset.zero : const Offset(0, 1),
             child: Align(
               alignment: Alignment.bottomCenter,
-              child: SafeArea(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                  child: Container(
+              child: Container(
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.75),
+                ),
+                child: SafeArea(
+                  top: false,
+                  child: ConstrainedBox(
                     constraints: BoxConstraints(
                       maxHeight: MediaQuery.sizeOf(context).height * 0.5,
                     ),
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.6),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
                     child: SingleChildScrollView(
                       reverse: true,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Text(
-                                _formatDuration(_dragging
-                                    ? Duration(
-                                        milliseconds: _dragValue.round(),
-                                      )
-                                    : _position),
-                                style: const TextStyle(color: Colors.white),
-                              ),
-                              Text(
-                                _formatDuration(total),
-                                style: const TextStyle(color: Colors.white),
-                              ),
-                            ],
-                          ),
-                          Slider(
-                            value: sliderValue,
-                            max: maxMs,
-                            onChangeStart: _onSeekStart,
-                            onChanged: _onSeekUpdate,
-                            onChangeEnd: _onSeekEnd,
-                          ),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              IconButton(
-                                onPressed: !_backendReady
-                                    ? null
-                                    : () => _seekBy(const Duration(seconds: -10)),
-                                icon: const Icon(Icons.replay_10),
-                                color: Colors.white,
-                              ),
-                              const SizedBox(width: 12),
-                              IconButton(
-                                onPressed: !_backendReady
-                                    ? null
-                                    : _togglePlayPause,
-                                icon: Icon(
-                                  _completed
-                                      ? Icons.replay
-                                      : _playing
-                                          ? Icons.pause_circle_filled
-                                          : Icons.play_circle_fill,
-                                  size: 48,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  _formatDuration(_dragging
+                                      ? Duration(
+                                          milliseconds: _dragValue.round(),
+                                        )
+                                      : _position),
+                                  style: const TextStyle(color: Colors.white),
                                 ),
-                                color: Colors.white,
-                              ),
-                              const SizedBox(width: 12),
-                              IconButton(
-                                onPressed: !_backendReady
-                                    ? null
-                                    : () => _seekBy(const Duration(seconds: 10)),
-                                icon: const Icon(Icons.forward_10),
-                                color: Colors.white,
-                              ),
-                            ],
-                          ),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              IconButton(
-                                onPressed: _toggleMute,
-                                icon: Icon(
-                                  _muted ? Icons.volume_off : Icons.volume_up,
+                                Text(
+                                  _formatDuration(total),
+                                  style: const TextStyle(color: Colors.white),
                                 ),
-                                color: Colors.white,
-                              ),
-                              IconButton(
-                                onPressed: () {},
-                                icon: const Icon(Icons.closed_caption),
-                                color: Colors.white,
-                              ),
-                              IconButton(
-                                onPressed: () {},
-                                icon: const Icon(Icons.tune),
-                                color: Colors.white,
-                              ),
-                              IconButton(
-                                onPressed: _toggleFullscreen,
-                                icon: Icon(
-                                  _fullscreen
-                                      ? Icons.fullscreen_exit
-                                      : Icons.fullscreen,
+                              ],
+                            ),
+                            Slider(
+                              value: sliderValue,
+                              max: maxMs,
+                              onChangeStart: _onSeekStart,
+                              onChanged: _onSeekUpdate,
+                              onChangeEnd: _onSeekEnd,
+                            ),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                IconButton(
+                                  onPressed: !_backendReady
+                                      ? null
+                                      : () =>
+                                          _seekBy(const Duration(seconds: -10)),
+                                  icon: const Icon(Icons.replay_10),
+                                  color: Colors.white,
                                 ),
-                                color: Colors.white,
-                              ),
-                            ],
-                          ),
-                        ],
+                                const SizedBox(width: 12),
+                                IconButton(
+                                  onPressed: !_backendReady
+                                      ? null
+                                      : _togglePlayPause,
+                                  icon: Icon(
+                                    _completed
+                                        ? Icons.replay
+                                        : _playing
+                                            ? Icons.pause_circle_filled
+                                            : Icons.play_circle_fill,
+                                    size: 48,
+                                  ),
+                                  color: Colors.white,
+                                ),
+                                const SizedBox(width: 12),
+                                IconButton(
+                                  onPressed: !_backendReady
+                                      ? null
+                                      : () =>
+                                          _seekBy(const Duration(seconds: 10)),
+                                  icon: const Icon(Icons.forward_10),
+                                  color: Colors.white,
+                                ),
+                              ],
+                            ),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                IconButton(
+                                  onPressed: _toggleMute,
+                                  icon: Icon(
+                                    _muted
+                                        ? Icons.volume_off
+                                        : Icons.volume_up,
+                                  ),
+                                  color: Colors.white,
+                                ),
+                                IconButton(
+                                  onPressed: () {},
+                                  icon: const Icon(Icons.closed_caption),
+                                  color: Colors.white,
+                                ),
+                                IconButton(
+                                  onPressed: () {},
+                                  icon: const Icon(Icons.tune),
+                                  color: Colors.white,
+                                ),
+                                IconButton(
+                                  onPressed: _toggleFullscreen,
+                                  icon: Icon(
+                                    _fullscreen
+                                        ? Icons.fullscreen_exit
+                                        : Icons.fullscreen,
+                                  ),
+                                  color: Colors.white,
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
