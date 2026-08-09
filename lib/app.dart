@@ -1,11 +1,42 @@
 import 'package:flutter/material.dart';
 
 import 'screens/home_screen.dart';
+import 'screens/player_screen.dart';
 import 'screens/settings_screen.dart';
+import 'services/open_intent.dart';
 import 'theme/app_theme.dart';
 
-class DreamPlayerApp extends StatelessWidget {
+/// Used by the "Open with" intent handler to navigate without a BuildContext.
+final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
+
+class DreamPlayerApp extends StatefulWidget {
   const DreamPlayerApp({super.key});
+
+  @override
+  State<DreamPlayerApp> createState() => _DreamPlayerAppState();
+}
+
+class _DreamPlayerAppState extends State<DreamPlayerApp> {
+  @override
+  void initState() {
+    super.initState();
+    _listenForIntents();
+  }
+
+  Future<void> _listenForIntents() async {
+    final service = OpenIntentService.instance;
+    service.intents.listen((intent) {
+      final navigator = appNavigatorKey.currentState;
+      if (navigator == null) return;
+      navigator.push(
+        MaterialPageRoute<void>(
+          builder: (_) => PlayerScreen(video: intent.toVideoItem()),
+        ),
+      );
+    });
+    // Fetches the intent that launched the app (if any).
+    await service.init();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -13,6 +44,7 @@ class DreamPlayerApp extends StatelessWidget {
       title: 'DreamPlayer',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.dark(),
+      navigatorKey: appNavigatorKey,
       builder: (context, child) {
         final mediaQuery = MediaQuery.of(context);
         final clampedTextScaler = mediaQuery.textScaler.clamp(

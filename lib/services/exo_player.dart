@@ -149,7 +149,8 @@ class ExoPlayerController {
     _pending.clear();
   }
 
-  Future<void> open(String path) => _send('open', {'path': path});
+  Future<void> open(String path, {String? uri}) =>
+      _send('open', uri != null && uri.isNotEmpty ? {'uri': uri} : {'path': path});
 
   Future<void> play() => _send('play');
 

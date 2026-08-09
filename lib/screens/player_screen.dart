@@ -89,7 +89,13 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       _exo = exo;
       _exoSub = exo.events.listen(_onExoEvent);
       if (mounted) setState(() {});
-      await exo.open(widget.video.path);
+      if (widget.video.path == null && widget.video.uri == null) {
+        if (mounted) {
+          setState(() => _error = 'No video source provided.');
+        }
+        return;
+      }
+      await exo.open(widget.video.path ?? '', uri: widget.video.uri);
     } catch (e) {
       if (mounted) {
         setState(() => _error = 'Playback unavailable: $e');

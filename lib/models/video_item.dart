@@ -5,7 +5,8 @@ class VideoItem {
   const VideoItem({
     required this.id,
     required this.title,
-    required this.path,
+    this.path,
+    this.uri,
     required this.duration,
     this.sizeBytes,
     this.resolution,
@@ -19,7 +20,12 @@ class VideoItem {
 
   final String id;
   final String title;
-  final String path;
+
+  /// Absolute file path, or `null` when only a URI is available.
+  final String? path;
+
+  /// e.g. a `content://` URI handed over from an "Open with" intent.
+  final String? uri;
   final Duration duration;
   final int? sizeBytes;
   final String? resolution;

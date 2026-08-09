@@ -135,14 +135,19 @@ class ExoPlayerView(
             when (call.method) {
                 "open" -> {
                     val path = call.argument<String>("path")
-                    if (path == null) {
-                        result.error("bad_args", "Missing path", null)
-                    } else {
-                        player.setMediaItem(MediaItem.fromUri(android.net.Uri.fromFile(File(path))))
-                        player.prepare()
-                        player.play()
-                        result.success(null)
+                    val uri = call.argument<String>("uri")
+                    val mediaItem = when {
+                        !uri.isNullOrEmpty() -> MediaItem.fromUri(android.net.Uri.parse(uri))
+                        path != null -> MediaItem.fromUri(android.net.Uri.fromFile(File(path)))
+                        else -> {
+                            result.error("bad_args", "Missing path or uri", null)
+                            return@setMethodCallHandler
+                        }
                     }
+                    player.setMediaItem(mediaItem)
+                    player.prepare()
+                    player.play()
+                    result.success(null)
                 }
                 "play" -> {
                     player.play()
