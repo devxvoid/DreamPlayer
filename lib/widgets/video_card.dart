@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../models/hdr_format.dart';
 import '../models/video_item.dart';
 
 class VideoCard extends StatelessWidget {
@@ -45,6 +46,15 @@ class VideoCard extends StatelessWidget {
                         color: Colors.white54,
                       ),
                     ),
+                    if (video.hdrFormat != HdrFormat.sdr)
+                      Positioned(
+                        top: 8,
+                        left: 8,
+                        child: _Badge(
+                          label: _hdrShortLabel(video.hdrFormat),
+                          background: _hdrColor(video.hdrFormat),
+                        ),
+                      ),
                     if (video.resolution != null)
                       Positioned(
                         top: 8,
@@ -73,10 +83,10 @@ class VideoCard extends StatelessWidget {
                           fontWeight: FontWeight.w600,
                         ),
                   ),
-                  if (video.audioCodec != null) ...[
+                  if (video.audioCodecLabel != null) ...[
                     const SizedBox(height: 2),
                     Text(
-                      video.audioCodec!,
+                      video.audioCodecLabel!,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -95,16 +105,17 @@ class VideoCard extends StatelessWidget {
 }
 
 class _Badge extends StatelessWidget {
-  const _Badge({required this.label});
+  const _Badge({required this.label, this.background = Colors.black54});
 
   final String label;
+  final Color background;
 
   @override
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
-        color: Colors.black54,
+        color: background,
         borderRadius: BorderRadius.circular(4),
       ),
       child: Text(
@@ -116,5 +127,31 @@ class _Badge extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+String _hdrShortLabel(HdrFormat format) {
+  switch (format) {
+    case HdrFormat.dolbyVision:
+      return 'DV';
+    case HdrFormat.hdr10plus:
+      return 'HDR10+';
+    case HdrFormat.hdr10:
+      return 'HDR10';
+    case HdrFormat.sdr:
+      return 'SDR';
+  }
+}
+
+Color _hdrColor(HdrFormat format) {
+  switch (format) {
+    case HdrFormat.dolbyVision:
+      return const Color(0xFF7C4DFF);
+    case HdrFormat.hdr10plus:
+      return const Color(0xFFF9A825);
+    case HdrFormat.hdr10:
+      return const Color(0xFFF57C00);
+    case HdrFormat.sdr:
+      return const Color(0xFF616161);
   }
 }

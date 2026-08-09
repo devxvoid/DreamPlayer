@@ -1,7 +1,13 @@
 import 'package:flutter/material.dart';
 
+import '../models/hdr_format.dart';
+import '../models/video_item.dart';
+import '../widgets/format_chip.dart';
+
 class PlayerScreen extends StatefulWidget {
-  const PlayerScreen({super.key});
+  const PlayerScreen({super.key, required this.video});
+
+  final VideoItem video;
 
   @override
   State<PlayerScreen> createState() => _PlayerScreenState();
@@ -16,9 +22,29 @@ class _PlayerScreenState extends State<PlayerScreen> {
     });
   }
 
+  Color get _hdrColor {
+    switch (widget.video.hdrFormat) {
+      case HdrFormat.dolbyVision:
+        return const Color(0xFFB388FF);
+      case HdrFormat.hdr10plus:
+        return const Color(0xFFFFC400);
+      case HdrFormat.hdr10:
+        return const Color(0xFFFF8A65);
+      case HdrFormat.sdr:
+        return const Color(0xFF9E9E9E);
+    }
+  }
+
+  Color get _videoColor => const Color(0xFF4FC3F7);
+
+  Color get _audioColor => const Color(0xFF81C784);
+
+  Color get _infoColor => const Color(0xFF90A4AE);
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final video = widget.video;
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -54,30 +80,65 @@ class _PlayerScreenState extends State<PlayerScreen> {
             child: SafeArea(
               child: Padding(
                 padding: const EdgeInsets.all(8),
-                child: Row(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    IconButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      icon: const Icon(Icons.arrow_back),
-                      color: Colors.white,
-                    ),
-                    const SizedBox(width: 4),
-                    const Expanded(
-                      child: Text(
-                        'Now playing',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
+                    Row(
+                      children: [
+                        IconButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          icon: const Icon(Icons.arrow_back),
                           color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
                         ),
-                      ),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            video.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () {},
+                          icon: const Icon(Icons.cast),
+                          color: Colors.white,
+                        ),
+                      ],
                     ),
-                    IconButton(
-                      onPressed: () {},
-                      icon: const Icon(Icons.cast),
-                      color: Colors.white,
+                    const SizedBox(height: 4),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      child: Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          FormatChip(
+                            label: video.hdrLabel,
+                            color: _hdrColor,
+                          ),
+                          if (video.videoCodecLabel != null)
+                            FormatChip(
+                              label: video.videoCodecLabel!,
+                              color: _videoColor,
+                            ),
+                          if (video.audioCodecLabel != null)
+                            FormatChip(
+                              label: video.audioCodecLabel!,
+                              color: _audioColor,
+                            ),
+                          if (video.resolution != null)
+                            FormatChip(
+                              label: video.resolution!,
+                              color: _infoColor,
+                            ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -108,9 +169,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
                               '00:00',
                               style: TextStyle(color: Colors.white),
                             ),
-                            const Text(
-                              '02:49:00',
-                              style: TextStyle(color: Colors.white),
+                            Text(
+                              video.durationLabel,
+                              style: const TextStyle(color: Colors.white),
                             ),
                           ],
                         ),

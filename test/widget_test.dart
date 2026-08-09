@@ -1,6 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:dream_player/app.dart';
+import 'package:dream_player/screens/player_screen.dart';
+import 'package:dream_player/widgets/format_chip.dart';
 
 void main() {
   testWidgets('App shows library and settings shell', (tester) async {
@@ -22,12 +24,16 @@ void main() {
     expect(find.text('Folders to scan'), findsOneWidget);
   });
 
-  testWidgets('Tapping a video opens the player screen', (tester) async {
+  testWidgets('Tapping a video opens the player with codec chips', (
+    tester,
+  ) async {
     await tester.pumpWidget(const DreamPlayerApp());
 
     await tester.tap(find.text('Interstellar (2014) 1080p'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Now playing'), findsOneWidget);
+    expect(find.byType(PlayerScreen), findsOneWidget);
+    expect(find.byType(FormatChip), findsWidgets);
+    expect(find.text('DTS-HD MA 5.1'), findsOneWidget);
   });
 }
