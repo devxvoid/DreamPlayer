@@ -1,0 +1,103 @@
+name: iOS Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload_testflight:
+        description: 'Upload to TestFlight after signing'
+        type: boolean
+        required: false
+        default: false
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - 'README.md'
+      - '.github/**'
+
+jobs:
+  build-ios:
+    name: Build iOS app
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Accept Xcode license
+        run: sudo xcodebuild -license accept || true
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Fetch dependencies
+        run: |
+          flutter config --enable-ios
+          flutter pub get
+
+      - name: Run tests
+        run: flutter test
+
+      # --- Unsigned build (always produced so you can inspect the app) ---
+      - name: Build unsigned iOS app
+        run: flutter build ios --release --no-codesign
+
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p Payload
+          cp -r build/ios/iphoneos/Runner.app Payload/
+          zip -ryq DreamPlayer-unsigned.ipa Payload
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: DreamPlayer-unsigned.ipa
+          path: DreamPlayer-unsigned.ipa
+
+      # --- Code signing (only runs once secrets are configured) ---
+      - name: Import signing certificate
+        if: ${{ secrets.IOS_CERT_BASE64 != '' }}
+        env:
+          CERT_BASE64: ${{ secrets.IOS_CERT_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.IOS_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          echo "$CERT_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$CERT_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$CERT_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -P "$CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$CERT_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN"
+
+      - name: Install provisioning profile
+        if: ${{ secrets.IOS_PROFILE_BASE64 != '' }}
+        env:
+          PROFILE_BASE64: ${{ secrets.IOS_PROFILE_BASE64 }}
+        run: |
+          echo "$PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/DreamPlayer.mobileprovision"
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp "$RUNNER_TEMP/DreamPlayer.mobileprovision" \
+             "$HOME/Library/MobileDevice/Provisioning Profiles/"
+
+      - name: Build signed IPA
+        if: ${{ secrets.IOS_CERT_BASE64 != '' && secrets.IOS_PROFILE_BASE64 != '' }}
+        run: flutter build ipa --release
+
+      - name: Upload signed IPA
+        if: ${{ secrets.IOS_CERT_BASE64 != '' && secrets.IOS_PROFILE_BASE64 != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: DreamPlayer.ipa
+          path: build/ios/ipa/*.ipa
+
+      - name: Upload to TestFlight
+        if: ${{ inputs.upload_testflight == true && secrets.APPSTORE_API_KEY != '' }}
+        uses: apple-actions/upload-testflight-build@v1
+        with:
+          app-path: build/ios/ipa/*.ipa
+          issuer-id: ${{ secrets.APPSTORE_ISSUER_ID }}
+          api-key-id: ${{ secrets.APPSTORE_API_KEY_ID }}
+          api-private-key: ${{ secrets.APPSTORE_API_KEY }}
