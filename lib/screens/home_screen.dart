@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/video_item.dart';
 import '../widgets/video_card.dart';
+import 'file_browser_screen.dart';
 import 'player_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -126,6 +127,17 @@ class _HomeScreenState extends State<HomeScreen> {
           title: const Text('DreamPlayer'),
           floating: true,
           actions: [
+            IconButton(
+              tooltip: 'Browse files',
+              icon: const Icon(Icons.folder_open),
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const FileBrowserScreen(),
+                  ),
+                );
+              },
+            ),
             IconButton(
               tooltip: 'Scan for videos',
               icon: const Icon(Icons.refresh),
