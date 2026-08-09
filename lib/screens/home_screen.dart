@@ -127,26 +127,11 @@ class _HomeScreenState extends State<HomeScreen> {
           floating: true,
           actions: [
             IconButton(
-              tooltip: 'Search',
-              icon: const Icon(Icons.search),
-              onPressed: () {},
-            ),
-            IconButton(
               tooltip: 'Scan for videos',
               icon: const Icon(Icons.refresh),
               onPressed: () {},
             ),
           ],
-        ),
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-          sliver: SliverToBoxAdapter(
-            child: SearchBar(
-              hintText: 'Search your library',
-              leading: const Icon(Icons.search),
-              onChanged: (_) {},
-            ),
-          ),
         ),
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),

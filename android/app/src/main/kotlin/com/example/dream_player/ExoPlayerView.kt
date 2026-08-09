@@ -7,12 +7,14 @@ import android.view.View
 import androidx.media3.common.C
 import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.ui.PlayerView
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
@@ -45,12 +47,30 @@ class ExoPlayerView(
         setShutterBackgroundColor(android.graphics.Color.BLACK)
     }
 
+    /// Some devices allocate only 32 KiB input buffers for the MediaCodec FLAC
+    /// decoder, which is too small for large FLAC frames (e.g. 24-bit
+    /// multi-channel blocks ~54 KiB) and kills playback with
+    /// `InsufficientCapacityException`. Route FLAC through the FFmpeg renderer,
+    /// which sizes its buffers dynamically.
+    private val mediaCodecSelector = MediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
+        if (mimeType == MimeTypes.AUDIO_FLAC) {
+            emptyList()
+        } else {
+            MediaCodecSelector.DEFAULT.getDecoderInfos(
+                mimeType,
+                requiresSecureDecoder,
+                requiresTunnelingDecoder,
+            )
+        }
+    }
+
     private val player: ExoPlayer = ExoPlayer.Builder(context)
         .setRenderersFactory(
             NextRenderersFactory(context)
                 .apply {
                     setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
                     setEnableDecoderFallback(true)
+                    setMediaCodecSelector(mediaCodecSelector)
                 }
         )
         .build()
