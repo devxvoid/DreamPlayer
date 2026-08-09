@@ -53,6 +53,13 @@ flutter build apk        # release APK (use --split-per-abi)
 flutter build appbundle  # for Play Store
 ```
 
+## Display & smoothness (native refresh rate)
+
+- **Android**: `flutter_displaymode` selects the display's highest refresh rate at app startup (`lib/services/display_refresh_rate.dart`). Many Android devices default apps to 60 Hz even on 90/120/144 Hz panels.
+- **iOS/iPad Pro**: ProMotion 120 Hz is unlocked via `CADisableMinimumFrameDurationOnPhone = true` in `ios/Runner/Info.plist` (already set).
+- **Playback cadence** (when media_kit is wired up): libmpv renders at the video's FPS by default. For perfect frame pacing on high-refresh panels, tune mpv options (`video-sync=display-resample`, `override-display-fps`) — revisit during playback implementation. `Player`/`VideoController` should be created with hardware acceleration enabled.
+- Debug builds are noticeably jankier than release builds; test smoothness with `flutter run --release`.
+
 ## Project layout (planned)
 
 ```
