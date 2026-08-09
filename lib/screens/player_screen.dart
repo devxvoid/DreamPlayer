@@ -29,7 +29,6 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   StreamSubscription<ExoPlayerEvent>? _exoSub;
 
   bool _controlsVisible = true;
-  bool _muted = false;
   bool _fullscreen = false;
 
   Timer? _hideTimer;
@@ -52,6 +51,8 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   int? _liveAudioChannelCount;
   String? _liveResolution;
   HdrFormat _liveHdr = HdrFormat.sdr;
+  List<ExoAudioTrack> _audioTracks = const [];
+  int _selectedAudioTrackIndex = -1;
 
   bool get _backendReady => _exo != null;
 
@@ -120,6 +121,8 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       _liveAudioCodec = formatMedia3Audio(e.audioMime, e.audioCodecs);
       if (e.audioChannels > 0) _liveAudioChannelCount = e.audioChannels;
     }
+    _audioTracks = e.audioTracks;
+    _selectedAudioTrackIndex = e.selectedAudioTrack;
     if (wasPlaying != _playing || wasBuffering != _buffering) {
       _syncControlsForPlaybackState();
     }
@@ -212,10 +215,82 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     _showControls();
   }
 
-  void _toggleMute() {
-    _muted = !_muted;
-    _exo?.setMuted(_muted);
+  String _audioTrackLabel(ExoAudioTrack t) {
+    final lang = t.language?.trim();
+    final codec = formatMedia3Audio(t.mime, t.codecs);
+    final channels = t.channels > 0 ? channelsLabel(t.channels) : null;
+    return [
+      if (lang != null && lang.isNotEmpty) lang,
+      if (codec != 'Unknown') codec,
+      ?channels,
+    ].join(' · ');
+  }
+
+  Future<void> _openAudioTrackSheet() async {
     _showControls();
+    final tracks = _audioTracks;
+    if (tracks.isEmpty) return;
+    final selected = _selectedAudioTrackIndex;
+    final choice = await showModalBottomSheet<int>(
+      context: context,
+      backgroundColor: const Color(0xFF1C1C1E),
+      builder: (sheetContext) => SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.6,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 16, 20, 4),
+                child: Text(
+                  'Audio tracks',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: tracks.length,
+                  itemBuilder: (context, i) {
+                    final t = tracks[i];
+                    final isSelected = t.index == selected;
+                    return ListTile(
+                      leading: Icon(
+                        isSelected ? Icons.check_circle : Icons.graphic_eq,
+                        color: isSelected ? Colors.white : Colors.white54,
+                      ),
+                      title: Text(
+                        _audioTrackLabel(t),
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      subtitle: t.bitrate > 0
+                          ? Text(
+                              '${(t.bitrate / 1000).round()} kbps',
+                              style: const TextStyle(color: Colors.white54),
+                            )
+                          : null,
+                      onTap: () => Navigator.of(context).pop(t.index),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (choice != null && choice != selected) {
+      // Native side switches the track; onTracksChanged re-emits with the new
+      // codec/channels, which updates the top-bar audio chip automatically.
+      _exo?.selectAudioTrack(choice);
+    }
   }
 
   void _seekBy(Duration delta) {
@@ -602,12 +677,8 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
                                 IconButton(
-                                  onPressed: _toggleMute,
-                                  icon: Icon(
-                                    _muted
-                                        ? Icons.volume_off
-                                        : Icons.volume_up,
-                                  ),
+                                  onPressed: _openAudioTrackSheet,
+                                  icon: const Icon(Icons.graphic_eq),
                                   color: Colors.white,
                                 ),
                                 IconButton(

@@ -9,6 +9,7 @@ import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
@@ -146,6 +147,14 @@ class ExoPlayerView(
                     player.volume = if (muted) 0f else 1f
                     result.success(null)
                 }
+                "getAudioTracks" -> {
+                    result.success(buildAudioTracks())
+                }
+                "setAudioTrack" -> {
+                    val index = call.argument<Number>("index")?.toInt() ?: -1
+                    selectAudioTrack(index)
+                    result.success(null)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -186,6 +195,56 @@ class ExoPlayerView(
         positionTicker = null
     }
 
+    /// Flat list of the current audio tracks (one entry per format), for the
+    /// audio-track picker. `index` is the flat index used by `setAudioTrack`.
+    private fun buildAudioTracks(): List<Map<String, Any?>> {
+        val out = mutableListOf<Map<String, Any?>>()
+        var flat = 0
+        val playingAudio = player.audioFormat
+        for (group in player.currentTracks.groups) {
+            if (group.type != C.TRACK_TYPE_AUDIO || !group.isSupported) continue
+            val trackGroup = group.mediaTrackGroup
+            for (i in 0 until trackGroup.length) {
+                val f = trackGroup.getFormat(i)
+                val map = HashMap<String, Any?>()
+                map["index"] = flat
+                map["language"] = f.language
+                map["codecs"] = f.codecs
+                map["mime"] = f.sampleMimeType
+                map["channels"] = f.channelCount
+                map["bitrate"] = f.bitrate
+                map["label"] = f.label
+                map["selected"] = group.isSelected &&
+                    (trackGroup.length == 1 || playingAudio === f)
+                out.add(map)
+                flat++
+            }
+        }
+        return out
+    }
+
+    private fun selectAudioTrack(flatIndex: Int) {
+        var flat = 0
+        var override: TrackSelectionOverride? = null
+        for (group in player.currentTracks.groups) {
+            if (group.type != C.TRACK_TYPE_AUDIO || !group.isSupported) continue
+            val trackGroup = group.mediaTrackGroup
+            for (i in 0 until trackGroup.length) {
+                if (flat == flatIndex) {
+                    override = TrackSelectionOverride(trackGroup, i)
+                }
+                flat++
+            }
+        }
+        if (override == null) return
+        val params = player.trackSelectionParameters
+            .buildUpon()
+            .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+            .setOverrideForType(override)
+            .build()
+        player.setTrackSelectionParameters(params)
+    }
+
     private fun emit(errorCodeName: String? = null) {
         val s = sink ?: return
         val videoFormat = player.videoFormat
@@ -208,6 +267,10 @@ class ExoPlayerView(
         map["audioCodecs"] = audioFormat?.codecs
         map["audioMime"] = audioFormat?.sampleMimeType
         map["audioChannels"] = audioFormat?.channelCount
+        val audioTracks = buildAudioTracks()
+        map["audioTracks"] = audioTracks
+        map["selectedAudioTrack"] =
+            audioTracks.indexOfFirst { it["selected"] == true }
         map["error"] = errorCodeName
         s.success(map)
     }

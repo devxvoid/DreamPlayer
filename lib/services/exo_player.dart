@@ -5,6 +5,42 @@ import 'package:flutter/widgets.dart';
 
 const String exoPlayerViewType = 'dreamplayer/exo_player';
 
+/// A single audio track exposed by the native ExoPlayer, for the track picker.
+@immutable
+class ExoAudioTrack {
+  const ExoAudioTrack({
+    required this.index,
+    this.language,
+    this.codecs,
+    this.mime,
+    this.channels = 0,
+    this.bitrate = 0,
+    this.selected = false,
+  });
+
+  /// Flat index; the value to pass to [ExoPlayerController.selectAudioTrack].
+  final int index;
+  final String? language;
+  final String? codecs;
+  final String? mime;
+  final int channels;
+  final int bitrate;
+  final bool selected;
+
+  factory ExoAudioTrack.fromMap(Map<dynamic, dynamic> m) {
+    int asInt(dynamic v) => v is num ? v.toInt() : 0;
+    return ExoAudioTrack(
+      index: asInt(m['index']),
+      language: m['language'] as String?,
+      codecs: m['codecs'] as String?,
+      mime: m['mime'] as String?,
+      channels: asInt(m['channels']),
+      bitrate: asInt(m['bitrate']),
+      selected: m['selected'] == true,
+    );
+  }
+}
+
 /// Snapshot of playback state pushed from the native ExoPlayer platform view.
 @immutable
 class ExoPlayerEvent {
@@ -23,6 +59,8 @@ class ExoPlayerEvent {
     this.audioCodecs,
     this.audioMime,
     this.audioChannels = 0,
+    this.audioTracks = const [],
+    this.selectedAudioTrack = -1,
     this.error,
   });
 
@@ -40,6 +78,8 @@ class ExoPlayerEvent {
   final String? audioCodecs;
   final String? audioMime;
   final int audioChannels;
+  final List<ExoAudioTrack> audioTracks;
+  final int selectedAudioTrack;
   final String? error;
 
   Duration get position => Duration(milliseconds: positionMs);
@@ -64,6 +104,10 @@ class ExoPlayerEvent {
       audioCodecs: m['audioCodecs'] as String?,
       audioMime: m['audioMime'] as String?,
       audioChannels: asInt(m['audioChannels']),
+      audioTracks: (m['audioTracks'] as List? ?? const [])
+          .map((e) => ExoAudioTrack.fromMap(e as Map<dynamic, dynamic>))
+          .toList(),
+      selectedAudioTrack: asInt(m['selectedAudioTrack'], -1),
       error: m['error'] as String?,
     );
   }
@@ -117,6 +161,9 @@ class ExoPlayerController {
   Future<void> setVolume(double volume) => _send('setVolume', {'volume': volume});
 
   Future<void> setMuted(bool muted) => _send('setMuted', {'muted': muted});
+
+  Future<void> selectAudioTrack(int index) =>
+      _send('setAudioTrack', {'index': index});
 
   Future<void> disposeNative() => _send('dispose');
 
