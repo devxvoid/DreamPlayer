@@ -298,6 +298,8 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final video = widget.video;
+    final isLandscape =
+        MediaQuery.sizeOf(context).width > MediaQuery.sizeOf(context).height;
 
     final total = _duration;
     final maxMs = total.inMilliseconds > 0
@@ -311,11 +313,15 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       label: _effectiveHdr.label,
       color: _hdrColor,
     );
-    final videoChip = _liveVideoCodec != null
-        ? FormatChip(label: _liveVideoCodec!, color: _videoColor)
-        : video.videoCodecLabel != null
-            ? FormatChip(label: video.videoCodecLabel!, color: _videoColor)
-            : null;
+    // For Dolby Vision the HDR chip already says "Dolby Vision" (purple); skip
+    // the video codec chip so it isn't shown twice.
+    final videoCodecLabel = _liveVideoCodec ?? video.videoCodecLabel;
+    final videoChip =
+        videoCodecLabel != null &&
+            !(_effectiveHdr == HdrFormat.dolbyVision &&
+                videoCodecLabel == 'Dolby Vision')
+        ? FormatChip(label: videoCodecLabel, color: _videoColor)
+        : null;
     final audioChipLabel = _liveAudioCodec != null
         ? formatLiveAudioLabel(
             liveCodec: _liveAudioCodec,
@@ -333,6 +339,12 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
             color: _infoColor,
           )
         : null;
+    final chips = [
+      hdrChip,
+      ?videoChip,
+      ?audioChip,
+      ?resolutionChip,
+    ];
 
     final videoLayer = _exo != null && _error == null
         ? ExoPlayerView(controller: _exo!)
@@ -385,50 +397,148 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
           AnimatedSlide(
             duration: const Duration(milliseconds: 200),
             offset: _controlsVisible ? Offset.zero : const Offset(0, -1),
-            child: SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.all(8),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        IconButton(
-                          onPressed: () => Navigator.of(context).pop(),
-                          icon: const Icon(Icons.arrow_back),
-                          color: Colors.white,
-                        ),
-                        const SizedBox(width: 4),
-                        Expanded(
-                          child: Text(
-                            video.title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
+            child: Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.black.withValues(alpha: 0.72),
+                    Colors.black.withValues(alpha: 0.35),
+                    Colors.transparent,
+                  ],
+                ),
+              ),
+              child: SafeArea(
+                bottom: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(4, 4, 4, 16),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (isLandscape)
+                        Row(
+                          children: [
+                            IconButton(
+                              onPressed: () => Navigator.of(context).pop(),
+                              icon: const Icon(Icons.arrow_back),
                               color: Colors.white,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
                             ),
+                            const SizedBox(width: 4),
+                            Expanded(
+                              child: Wrap(
+                                spacing: 8,
+                                runSpacing: 6,
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                children: [
+                                  Text(
+                                    video.title,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  ...chips,
+                                ],
+                              ),
+                            ),
+                          ],
+                        )
+                      else ...[
+                        Row(
+                          children: [
+                            IconButton(
+                              onPressed: () => Navigator.of(context).pop(),
+                              icon: const Icon(Icons.arrow_back),
+                              color: Colors.white,
+                            ),
+                            const SizedBox(width: 4),
+                            Expanded(
+                              child: Text(
+                                video.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          child: Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: chips,
                           ),
                         ),
                       ],
-                    ),
-                    const SizedBox(height: 4),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                      child: Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          hdrChip,
-                          ?videoChip,
-                          ?audioChip,
-                          ?resolutionChip,
-                        ],
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          AnimatedOpacity(
+            duration: const Duration(milliseconds: 200),
+            opacity: _controlsVisible ? 1 : 0,
+            child: IgnorePointer(
+              ignoring: !_controlsVisible,
+              child: Center(
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.4),
+                    borderRadius: BorderRadius.circular(36),
+                  ),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        onPressed: !_backendReady
+                            ? null
+                            : () =>
+                                _seekBy(const Duration(seconds: -10)),
+                        iconSize: 40,
+                        icon: const Icon(Icons.replay_10),
+                        color: Colors.white,
                       ),
-                    ),
-                  ],
+                      const SizedBox(width: 8),
+                      IconButton(
+                        onPressed: !_backendReady ? null : _togglePlayPause,
+                        iconSize: 72,
+                        icon: Icon(
+                          _completed
+                              ? Icons.replay
+                              : _playing
+                                  ? Icons.pause_circle_filled
+                                  : Icons.play_circle_fill,
+                        ),
+                        color: Colors.white,
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton(
+                        onPressed: !_backendReady
+                            ? null
+                            : () =>
+                                _seekBy(const Duration(seconds: 10)),
+                        iconSize: 40,
+                        icon: const Icon(Icons.forward_10),
+                        color: Colors.white,
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -441,7 +551,15 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
               child: Container(
                 width: double.infinity,
                 decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.75),
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.transparent,
+                      Colors.black.withValues(alpha: 0.35),
+                      Colors.black.withValues(alpha: 0.72),
+                    ],
+                  ),
                 ),
                 child: SafeArea(
                   top: false,
@@ -452,7 +570,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                     child: SingleChildScrollView(
                       reverse: true,
                       child: Padding(
-                        padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+                        padding: const EdgeInsets.fromLTRB(8, 2, 8, 2),
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -479,43 +597,6 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                               onChangeStart: _onSeekStart,
                               onChanged: _onSeekUpdate,
                               onChangeEnd: _onSeekEnd,
-                            ),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                IconButton(
-                                  onPressed: !_backendReady
-                                      ? null
-                                      : () =>
-                                          _seekBy(const Duration(seconds: -10)),
-                                  icon: const Icon(Icons.replay_10),
-                                  color: Colors.white,
-                                ),
-                                const SizedBox(width: 12),
-                                IconButton(
-                                  onPressed: !_backendReady
-                                      ? null
-                                      : _togglePlayPause,
-                                  icon: Icon(
-                                    _completed
-                                        ? Icons.replay
-                                        : _playing
-                                            ? Icons.pause_circle_filled
-                                            : Icons.play_circle_fill,
-                                    size: 48,
-                                  ),
-                                  color: Colors.white,
-                                ),
-                                const SizedBox(width: 12),
-                                IconButton(
-                                  onPressed: !_backendReady
-                                      ? null
-                                      : () =>
-                                          _seekBy(const Duration(seconds: 10)),
-                                  icon: const Icon(Icons.forward_10),
-                                  color: Colors.white,
-                                ),
-                              ],
                             ),
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
