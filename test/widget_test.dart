@@ -31,7 +31,7 @@ void main() {
   ) async {
     await tester.pumpWidget(const DreamPlayerApp());
 
-    await tester.tap(find.text('Interstellar (2014) 1080p'));
+    await tester.tap(find.text('Sonic Anthem (IMAX)'));
     await tester.pumpAndSettle();
 
     expect(find.byType(PlayerScreen), findsOneWidget);

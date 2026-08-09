@@ -98,7 +98,7 @@ class SettingsScreen extends StatelessWidget {
           const ListTile(
             leading: Icon(Icons.memory),
             title: Text('Engine'),
-            subtitle: Text('FFmpeg (via media_kit)'),
+            subtitle: Text('ExoPlayer (Media3) + FFmpeg'),
           ),
           const ListTile(
             leading: Icon(Icons.info_outline),

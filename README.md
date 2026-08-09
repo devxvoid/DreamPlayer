@@ -1,17 +1,87 @@
-# dream_player
+# DreamPlayer
 
-A new Flutter project.
+A cross-platform video player built with **Flutter**, designed for high-end playback on Android and iOS/iPad — including **Dolby Vision**, HDR10/HDR10+, and lossless audio formats like DTS-HD and TrueHD.
 
-## Getting Started
+> **Android (primary):** playback runs on the native **ExoPlayer / Media3** engine inside a Flutter platform view, so the display receives a real HDR / Dolby Vision signal (no tone-mapped preview).
+> **iOS/iPad:** coming soon (native AVPlayer path).
 
-This project is a starting point for a Flutter application.
+## Features
 
-A few resources to get you started if this is your first Flutter project:
+- **Dolby Vision playback** — DV P8 verified on-device: decoded by the Qualcomm hardware `c2.qti.dv.decoder` at 4K 3840×2160@60 fps with zero dropped frames and correct colors.
+- **HDR on-screen display** — live chips for Dolby Vision, HDR10+, HDR10, HLG, SDR.
+- **All major audio codecs** — DTS, DTS-HD, E-AC3, AC3, TrueHD, AAC, and more via Media3 `FFmpegAudioRenderer`.
+- **Live codec / resolution overlay** — video codec, audio codec + channel count, resolution, HDR format as the file plays.
+- **Transport controls** — play/pause, seek bar, ±10s, mute, fullscreen, buffering spinner.
+- **Responsive library grid** — adaptive columns; no overflow on phones, tablets, landscape, or large text.
+- **Native refresh rate** — selects the display's highest refresh rate (e.g. 120 Hz) at startup.
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+## Tech stack
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+| Concern | Choice |
+|---|---|
+| Framework | Flutter (stable 3.44.x) |
+| Playback engine (Android) | ExoPlayer / Media3 in a native `SurfaceView` PlatformView |
+| Video decode | Android MediaCodec (hardware DV/HEVC/AVC; `c2.qti.dv.decoder` on device) |
+| Audio decode | Media3 `FFmpegAudioRenderer` extension (`libmedia3ext.so`) |
+| HDR output | Hybrid-composition PlatformView keeps its own SurfaceFlinger layer → real HDR to the display |
+| Reference architecture | [Nova Video Player](https://github.com/nova-video-player/aos-AVP) |
+| Permissions | `permission_handler` (runtime `READ_MEDIA_VIDEO`) |
+| Refresh rate | `flutter_displaymode` |
+
+## Getting started
+
+```bash
+flutter pub get
+flutter run                          # run on a connected Android phone
+flutter test                         # run tests
+flutter analyze                      # static analysis
+```
+
+Build a debug APK for your phone:
+
+```bash
+flutter build apk --debug --target-platform android-arm64
+flutter install --debug -d <device-id>
+```
+
+## Project layout
+
+```
+lib/
+  main.dart                     # entry point (native refresh rate)
+  app.dart                      # root MaterialApp, dark theme, nav shell
+  theme/app_theme.dart          # dark theme
+  models/
+    video_item.dart             # library item model + codec labels
+    hdr_format.dart             # HDR format enum
+  utils/codec_info.dart         # HDR detection + codec → label mapping
+  services/
+    display_refresh_rate.dart   # high refresh rate selection
+    exo_player.dart             # ExoPlayerController + ExoPlayerView platform view
+  screens/
+    home_screen.dart            # library grid
+    player_screen.dart          # ExoPlayer playback + live chips + controls
+    settings_screen.dart        # settings
+  widgets/
+    video_card.dart             # library card with HDR/audio badges
+    format_chip.dart            # colored codec/HDR chip
+android/app/src/main/kotlin/com/example/dream_player/
+  ExoPlayerView.kt              # native PlayerView platform view + channels
+  MainActivity.kt               # registers the platform view factory
+test/
+  widget_test.dart              # shell/navigation/overflow tests
+  codec_info_test.dart          # HDR + codec formatting tests
+```
+
+## Roadmap
+
+- [x] Android playback via ExoPlayer/Media3 PlatformView
+- [x] Dolby Vision + lossless audio on-device (DV P8, E-AC3)
+- [x] Remove mpv/media_kit (cannot output Dolby Vision)
+- [ ] iOS/iPad playback (AVPlayer)
+- [ ] MediaStore scanning for the library
+- [ ] Release build + Play Store / TestFlight distribution
+
+## License
+
+This project is for personal use. Media3 is licensed under the Apache 2.0 license; the bundled FFmpeg extension (`nextlib-media3ext`) is GPLv3.

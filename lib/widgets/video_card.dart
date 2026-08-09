@@ -144,6 +144,8 @@ String _hdrShortLabel(HdrFormat format) {
       return 'HDR10+';
     case HdrFormat.hdr10:
       return 'HDR10';
+    case HdrFormat.hlg:
+      return 'HLG';
     case HdrFormat.sdr:
       return 'SDR';
   }
@@ -157,6 +159,8 @@ Color _hdrColor(HdrFormat format) {
       return const Color(0xFFF9A825);
     case HdrFormat.hdr10:
       return const Color(0xFFF57C00);
+    case HdrFormat.hlg:
+      return const Color(0xFFEF6C00);
     case HdrFormat.sdr:
       return const Color(0xFF616161);
   }
