@@ -8,7 +8,8 @@
     <application
         android:label="DreamPlayer"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -30,47 +31,42 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
-            <!-- Open video files from file explorers / "Open with" menus. -->
+            <!-- Open video files from file explorers / "Open with" menus.
+                 Two broad filters (content + file) with every common video/
+                 audio container MIME. File managers assign container MIMEs that
+                 differ by vendor (CX uses video/x-matroska, application/mpeg,
+                 application/octet-stream, ...), so we cover the whole matrix. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme=""/>
                 <data android:scheme="content"/>
+                <data android:scheme="file"/>
+                <data android:scheme="http"/>
+                <data android:scheme="https"/>
                 <data android:mimeType="video/*"/>
-            </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW"/>
-                <category android:name="android.intent.category.DEFAULT"/>
-                <category android:name="android.intent.category.BROWSABLE"/>
-                <data android:scheme="content"/>
+                <data android:mimeType="audio/*"/>
                 <data android:mimeType="application/x-matroska"/>
                 <data android:mimeType="application/matroska"/>
+                <data android:mimeType="video/x-matroska"/>
                 <data android:mimeType="audio/x-matroska"/>
                 <data android:mimeType="application/mpeg"/>
+                <data android:mimeType="video/mpeg"/>
                 <data android:mimeType="video/mp2t"/>
+                <data android:mimeType="video/x-mp2t"/>
                 <data android:mimeType="video/x-msvideo"/>
                 <data android:mimeType="video/x-ms-wmv"/>
-            </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW"/>
-                <category android:name="android.intent.category.DEFAULT"/>
-                <category android:name="android.intent.category.BROWSABLE"/>
-                <data android:scheme="content"/>
+                <data android:mimeType="video/x-ms-asf"/>
+                <data android:mimeType="video/quicktime"/>
+                <data android:mimeType="video/x-m4v"/>
+                <data android:mimeType="video/x-flv"/>
+                <data android:mimeType="application/vnd.apple.mpegurl"/>
+                <data android:mimeType="application/x-mpegurl"/>
+                <data android:mimeType="application/vnd.rn-realmedia"/>
+                <data android:mimeType="application/x-shockwave-flash"/>
+                <data android:mimeType="audio/octet-stream"/>
                 <data android:mimeType="application/octet-stream"/>
-            </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW"/>
-                <category android:name="android.intent.category.DEFAULT"/>
-                <category android:name="android.intent.category.BROWSABLE"/>
-                <data android:scheme="file"/>
-                <data android:mimeType="video/*"/>
-                <data android:mimeType="application/x-matroska"/>
-                <data android:mimeType="application/matroska"/>
-                <data android:mimeType="audio/x-matroska"/>
-                <data android:mimeType="application/octet-stream"/>
-                <data android:mimeType="video/mp2t"/>
-                <data android:mimeType="video/x-msvideo"/>
-                <data android:mimeType="video/x-ms-wmv"/>
             </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.

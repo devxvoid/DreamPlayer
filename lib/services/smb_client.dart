@@ -53,6 +53,7 @@ class SmbEntry {
     required this.isDirectory,
     required this.size,
     required this.modified,
+    this.subtitlePath,
   });
 
   final String name;
@@ -61,6 +62,10 @@ class SmbEntry {
   final int size;
   final int modified;
 
+  /// For video entries: the relative path of an auto-paired subtitle file
+  /// (`.srt`/`.ass`/...) sitting next to the video in the same folder.
+  final String? subtitlePath;
+
   factory SmbEntry.fromMap(Map<dynamic, dynamic> m) {
     return SmbEntry(
       name: (m['name'] as String?) ?? '',
@@ -68,6 +73,22 @@ class SmbEntry {
       isDirectory: (m['isDirectory'] as bool?) ?? false,
       size: (m['size'] as num?)?.toInt() ?? 0,
       modified: (m['modified'] as num?)?.toInt() ?? 0,
+      subtitlePath: m['subtitlePath'] as String?,
+    );
+  }
+}
+
+/// A host found on the LAN by the native subnet scan.
+class SmbDiscovered {
+  const SmbDiscovered({required this.host, required this.hostname});
+
+  final String host;
+  final String hostname;
+
+  factory SmbDiscovered.fromMap(Map<dynamic, dynamic> m) {
+    return SmbDiscovered(
+      host: (m['host'] as String?) ?? '',
+      hostname: (m['hostname'] as String?) ?? '',
     );
   }
 }
@@ -186,5 +207,24 @@ class SmbClient {
   static String smbUri(String serverId, String share, String path) {
     final relative = path.isEmpty ? '' : '/$path';
     return 'smb://$serverId/$share$relative';
+  }
+
+  /// LAN scan for reachable SMB hosts (native subnet 445 probe + name
+  /// resolution). Returns empty when off-Wi-Fi or nothing responds.
+  Future<List<SmbDiscovered>> discoverServers() async {
+    final result = await _channel.invokeListMethod<dynamic>('discoverServers');
+    if (result == null) return const [];
+    return result
+        .map((e) => SmbDiscovered.fromMap(e as Map<dynamic, dynamic>))
+        .toList();
+  }
+
+  /// Quick reachability probe used for the saved-server online/offline dot.
+  Future<bool> checkServer(String host, int port) async {
+    final result = await _channel.invokeMethod<bool>('checkServer', {
+      'host': host,
+      'port': port,
+    });
+    return result ?? false;
   }
 }

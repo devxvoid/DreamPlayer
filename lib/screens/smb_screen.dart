@@ -24,6 +24,13 @@ class _SmbScreenState extends State<SmbScreen> {
   bool _loading = true;
   String? _error;
 
+  /// Saved-server reachability dots (`id` -> online?); probed asynchronously.
+  final Map<String, bool> _statuses = {};
+
+  /// LAN discovery results shown above the saved-server list.
+  List<SmbDiscovered> _discovered = const [];
+  bool _scanning = false;
+
   bool get _atBrowseRoot => _browsing == null || (_share.isEmpty && _path.isEmpty);
 
   @override
@@ -36,6 +43,7 @@ class _SmbScreenState extends State<SmbScreen> {
     setState(() {
       _loading = true;
       _error = null;
+      _statuses.clear();
     });
     try {
       final servers = await _smb.listServers();
@@ -44,6 +52,7 @@ class _SmbScreenState extends State<SmbScreen> {
         _servers = servers;
         _loading = false;
       });
+      _probeStatuses(servers);
     } on PlatformException catch (e) {
       if (mounted) {
         setState(() {
@@ -51,6 +60,40 @@ class _SmbScreenState extends State<SmbScreen> {
           _loading = false;
         });
       }
+    }
+  }
+
+  /// Fires a quick TCP-445 probe per saved server (in parallel) to paint the
+  /// online/offline dots.
+  Future<void> _probeStatuses(List<SmbServer> servers) async {
+    if (servers.isEmpty) return;
+    final results = await Future.wait([
+      for (final s in servers) _smb.checkServer(s.host, s.port).then((ok) => (s.id, ok)),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      for (final (id, ok) in results) {
+        _statuses[id] = ok;
+      }
+    });
+  }
+
+  /// LAN scan for reachable SMB hosts (native subnet 445 probe).
+  Future<void> _discover() async {
+    setState(() {
+      _scanning = true;
+      _discovered = const [];
+    });
+    try {
+      final found = await _smb.discoverServers();
+      if (!mounted) return;
+      setState(() {
+        _discovered = found;
+        _scanning = false;
+      });
+    } on PlatformException {
+      if (!mounted) return;
+      setState(() => _scanning = false);
     }
   }
 
@@ -106,20 +149,43 @@ class _SmbScreenState extends State<SmbScreen> {
 
   Future<void> _openEntry(SmbEntry entry) async {
     if (entry.isDirectory) {
-      await _loadDirectory(entry.path);
+      if (_share.isEmpty) {
+        // Tapping a share in the shares list: this entry IS the share. The
+        // share name lives in `_share` (a folder path is relative to it), so
+        // set it before listing the share's root — otherwise connectShare("")
+        // fails with STATUS_BAD_NETWORK_NAME.
+        setState(() {
+          _share = entry.path;
+          _path = '';
+        });
+        await _loadDirectory('');
+      } else {
+        await _loadDirectory(entry.path);
+      }
     } else {
       final server = _browsing;
       if (server == null) return;
+      // Playlist = every video in this folder, so playback auto-advances to
+      // the next episode when one ends (play-next-episode).
+      final videos = _entries.where((e) => !e.isDirectory).toList();
+      final index = videos.indexWhere((e) => e.path == entry.path);
+      VideoItem item(SmbEntry v) => VideoItem(
+            id: 'smb_${v.path}_${DateTime.now().microsecondsSinceEpoch}',
+            title: v.name,
+            uri: SmbClient.smbUri(server.id, _share, v.path),
+            subtitleUri: v.subtitlePath == null
+                ? null
+                : SmbClient.smbUri(server.id, _share, v.subtitlePath!),
+            duration: Duration.zero,
+            sizeBytes: v.size,
+          );
+      final playlist = [for (final v in videos) item(v)];
       Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => PlayerScreen(
-            video: VideoItem(
-              id: 'smb_${DateTime.now().microsecondsSinceEpoch}',
-              title: entry.name,
-              uri: SmbClient.smbUri(server.id, _share, entry.path),
-              duration: Duration.zero,
-              sizeBytes: entry.size,
-            ),
+            video: playlist[index.clamp(0, playlist.length - 1)],
+            playlist: playlist,
+            playlistIndex: index.clamp(0, playlist.length - 1),
           ),
         ),
       );
@@ -205,6 +271,11 @@ class _SmbScreenState extends State<SmbScreen> {
 
   void _editServer(SmbServer server) => _showServerDialog(existing: server);
 
+  void _addDiscoveredServer(SmbDiscovered d) => _showServerDialog(
+        initialHost: d.host,
+        initialName: d.hostname != d.host ? d.hostname : null,
+      );
+
   Future<void> _deleteServer(SmbServer server) async {
     await _smb.deleteServer(server.id);
     if (!mounted) return;
@@ -213,11 +284,17 @@ class _SmbScreenState extends State<SmbScreen> {
     _loadServers();
   }
 
-  void _showServerDialog({SmbServer? existing}) {
+  void _showServerDialog({
+    SmbServer? existing,
+    String? initialHost,
+    String? initialName,
+  }) {
     showDialog<void>(
       context: context,
       builder: (_) => _ServerFormDialog(
         existing: existing,
+        initialHost: initialHost,
+        initialName: initialName,
         onSave: () => _loadServers(),
       ),
     );
@@ -249,7 +326,25 @@ class _SmbScreenState extends State<SmbScreen> {
                 _path = '';
                 _loading = false;
               }),
+            )
+          else ...[
+            IconButton(
+              tooltip: 'Scan for servers',
+              icon: _scanning
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.wifi_find),
+              onPressed: _scanning ? null : _discover,
             ),
+            IconButton(
+              tooltip: 'Refresh',
+              icon: const Icon(Icons.refresh),
+              onPressed: _loadServers,
+            ),
+          ],
         ],
       ),
       floatingActionButton: browsing == null
@@ -329,7 +424,7 @@ class _SmbScreenState extends State<SmbScreen> {
   }
 
   Widget _serverList(BuildContext context) {
-    if (_servers.isEmpty) {
+    if (_servers.isEmpty && _discovered.isEmpty && !_scanning) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -339,7 +434,8 @@ class _SmbScreenState extends State<SmbScreen> {
               const Icon(Icons.dns_outlined, size: 64),
               const SizedBox(height: 16),
               Text(
-                'Add your NAS or LAN share to play videos from it',
+                'Add your NAS or LAN share to play videos from it, or scan '
+                'the network to find one',
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.titleMedium,
               ),
@@ -349,43 +445,132 @@ class _SmbScreenState extends State<SmbScreen> {
                 icon: const Icon(Icons.add),
                 label: const Text('Add server'),
               ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: _discover,
+                icon: const Icon(Icons.wifi_find),
+                label: const Text('Scan network'),
+              ),
             ],
           ),
         ),
       );
     }
-    return ListView.builder(
-      itemCount: _servers.length,
-      itemBuilder: (context, index) {
-        final server = _servers[index];
-        return ListTile(
-          leading: const Icon(Icons.dns),
-          title: Text(
-            server.name,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          subtitle: Text(
-            server.subtitle,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          trailing: PopupMenuButton<String>(
-            onSelected: (action) {
-              if (action == 'edit') {
-                _editServer(server);
-              } else if (action == 'delete') {
-                _deleteServer(server);
-              }
-            },
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'edit', child: Text('Edit')),
-              PopupMenuItem(value: 'delete', child: Text('Delete')),
-            ],
-          ),
-          onTap: () => _openServer(server),
-        );
-      },
+    return RefreshIndicator(
+      onRefresh: _loadServers,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          if (_scanning)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  SizedBox(width: 12),
+                  Text('Scanning your network…'),
+                ],
+              ),
+            ),
+          if (!_scanning && _discovered.isNotEmpty) ...[
+            const _SectionHeader('Detected on this network'),
+            for (final d in _discovered)
+              ListTile(
+                leading: const Icon(Icons.lan_outlined),
+                title: Text(
+                  d.hostname,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                subtitle: Text(
+                  d.host,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: const Icon(Icons.add_circle_outline),
+                onTap: () => _addDiscoveredServer(d),
+              ),
+          ],
+          if (_servers.isNotEmpty) ...[
+            const _SectionHeader('Saved servers'),
+            for (final server in _servers) _serverTile(server),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _serverTile(SmbServer server) {
+    final status = _statuses[server.id];
+    final dot = Container(
+      width: 12,
+      height: 12,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: status == null
+            ? Colors.grey.shade600
+            : status
+                ? Colors.lightGreenAccent
+                : Colors.redAccent,
+        border: Border.all(color: Colors.black, width: 1.5),
+      ),
+    );
+    return ListTile(
+      leading: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          const Icon(Icons.dns),
+          Positioned(right: -3, bottom: -3, child: dot),
+        ],
+      ),
+      title: Text(
+        server.name,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      subtitle: Text(
+        server.subtitle,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      trailing: PopupMenuButton<String>(
+        onSelected: (action) {
+          if (action == 'edit') {
+            _editServer(server);
+          } else if (action == 'delete') {
+            _deleteServer(server);
+          }
+        },
+        itemBuilder: (_) => const [
+          PopupMenuItem(value: 'edit', child: Text('Edit')),
+          PopupMenuItem(value: 'delete', child: Text('Delete')),
+        ],
+      ),
+      onTap: () => _openServer(server),
+    );
+  }
+}
+
+class _SectionHeader extends StatelessWidget {
+  const _SectionHeader(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+              color: Theme.of(context).colorScheme.primary,
+              fontWeight: FontWeight.w600,
+            ),
+      ),
     );
   }
 }
@@ -431,9 +616,16 @@ class _SmbTile extends StatelessWidget {
 }
 
 class _ServerFormDialog extends StatefulWidget {
-  const _ServerFormDialog({this.existing, this.onSave});
+  const _ServerFormDialog({
+    this.existing,
+    this.initialHost,
+    this.initialName,
+    this.onSave,
+  });
 
   final SmbServer? existing;
+  final String? initialHost;
+  final String? initialName;
   final VoidCallback? onSave;
 
   @override
@@ -456,8 +648,8 @@ class _ServerFormDialogState extends State<_ServerFormDialog> {
   void initState() {
     super.initState();
     final s = widget.existing;
-    _name = TextEditingController(text: s?.name ?? '');
-    _host = TextEditingController(text: s?.host ?? '');
+    _name = TextEditingController(text: s?.name ?? widget.initialName ?? '');
+    _host = TextEditingController(text: s?.host ?? widget.initialHost ?? '');
     _port = TextEditingController(
         text: (s?.port ?? 445).toString());
     _username = TextEditingController(text: s?.username ?? '');

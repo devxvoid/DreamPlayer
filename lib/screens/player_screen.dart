@@ -15,9 +15,19 @@ import '../widgets/format_chip.dart';
 const bool _inTests = bool.fromEnvironment('FLUTTER_TEST');
 
 class PlayerScreen extends StatefulWidget {
-  const PlayerScreen({super.key, required this.video});
+  const PlayerScreen({
+    super.key,
+    required this.video,
+    this.playlist = const [],
+    this.playlistIndex = 0,
+  });
 
   final VideoItem video;
+
+  /// Optional ordered list of videos (e.g. the other videos in the same SMB
+  /// folder) for auto-advance to the next episode when one ends.
+  final List<VideoItem> playlist;
+  final int playlistIndex;
 
   @override
   State<PlayerScreen> createState() => _PlayerScreenState();
@@ -27,6 +37,11 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   /// Native ExoPlayer (Media3) backend hosted in a platform view.
   ExoPlayerController? _exo;
   StreamSubscription<ExoPlayerEvent>? _exoSub;
+
+  /// The video currently on screen; follows [PlayerScreen.video] on first load
+  /// and advances through [PlayerScreen.playlist] on end.
+  late VideoItem _current = widget.video;
+  late int _playlistIndex = widget.playlistIndex;
 
   bool _controlsVisible = true;
   bool _fullscreen = false;
@@ -53,6 +68,9 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   HdrFormat _liveHdr = HdrFormat.sdr;
   List<ExoAudioTrack> _audioTracks = const [];
   int _selectedAudioTrackIndex = -1;
+
+  String? _subtitleLabel;
+  bool _subtitleOn = false;
 
   bool get _backendReady => _exo != null;
 
@@ -89,18 +107,55 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       _exo = exo;
       _exoSub = exo.events.listen(_onExoEvent);
       if (mounted) setState(() {});
-      if (widget.video.path == null && widget.video.uri == null) {
-        if (mounted) {
-          setState(() => _error = 'No video source provided.');
-        }
-        return;
-      }
-      await exo.open(widget.video.path ?? '', uri: widget.video.uri);
+      await _openCurrent();
     } catch (e) {
       if (mounted) {
         setState(() => _error = 'Playback unavailable: $e');
       }
     }
+  }
+
+  Future<void> _openCurrent() async {
+    final video = _current;
+    if (video.path == null && video.uri == null) {
+      if (mounted) {
+        setState(() => _error = 'No video source provided.');
+      }
+      return;
+    }
+    try {
+      await _exo?.open(video.path ?? '',
+          uri: video.uri, subtitleUri: video.subtitleUri);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _error = 'Playback unavailable: $e');
+      }
+    }
+  }
+
+  /// Advances to the next video in the playlist when the current one ends
+  /// (play-next-episode in a folder).
+  Future<void> _playNext() async {
+    final playlist = widget.playlist;
+    if (playlist.isEmpty || _playlistIndex >= playlist.length - 1) return;
+    final next = playlist[++_playlistIndex];
+    setState(() {
+      _current = next;
+      _position = Duration.zero;
+      _duration = Duration.zero;
+      _completed = false;
+      _error = null;
+      _liveVideoCodec = null;
+      _liveVideoCodecRaw = null;
+      _liveAudioCodec = null;
+      _liveAudioChannelCount = null;
+      _liveResolution = null;
+      _liveHdr = HdrFormat.sdr;
+      _subtitleLabel = null;
+      _subtitleOn = false;
+    });
+    _showControls();
+    await _openCurrent();
   }
 
   void _onExoEvent(ExoPlayerEvent e) {
@@ -112,6 +167,8 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     _buffering = e.buffering;
     _completed = e.ended;
     if (e.error != null && e.error!.isNotEmpty) _error = e.error;
+    _subtitleLabel = e.subtitleLabel;
+    _subtitleOn = e.subtitleOn;
     if (e.videoCodecs != null && e.videoCodecs!.isNotEmpty) {
       _liveVideoCodecRaw = e.videoCodecs;
       _liveVideoCodec = formatVideoCodec(e.videoCodecs);
@@ -133,6 +190,9 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       _syncControlsForPlaybackState();
     }
     if (mounted) setState(() {});
+    if (e.ended && widget.playlist.isNotEmpty) {
+      _playNext();
+    }
   }
 
   /// Keeps the controls visible while paused or buffering, and starts the
@@ -222,11 +282,21 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   }
 
   String _audioTrackLabel(ExoAudioTrack t) {
-    final lang = t.language?.trim();
-    final codec = formatMedia3Audio(t.mime, t.codecs);
+    final label = t.label?.trim();
     final channels = t.channels > 0 ? channelsLabel(t.channels) : null;
+    // Prefer the container-provided track name (e.g. "DTS-HD MA 5.1",
+    // "English", "Commentary") when the file names its tracks; append the
+    // channel count unless the name already carries it.
+    if (label != null && label.isNotEmpty) {
+      if (channels == null) return label;
+      final hasChannels = label.contains(channels) ||
+          label.contains(t.channels.toString());
+      return hasChannels ? label : '$label · $channels';
+    }
+    final lang = languageName(t.language);
+    final codec = formatMedia3Audio(t.mime, t.codecs);
     return [
-      if (lang != null && lang.isNotEmpty) lang,
+      if (lang.isNotEmpty) lang,
       if (codec != 'Unknown') codec,
       ?channels,
     ].join(' · ');
@@ -299,6 +369,75 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     }
   }
 
+  /// Subtitle on/off sheet for the auto-paired subtitle (v1 pairs a single
+  /// `.srt`/`.ass` from the same folder, so it's a simple toggle).
+  Future<void> _openSubtitleSheet() async {
+    _showControls();
+    final label = _subtitleLabel;
+    if (label == null || label.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No subtitles found next to this video')),
+      );
+      return;
+    }
+    final choice = await showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: const Color(0xFF1C1C1E),
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 16, 20, 4),
+              child: Text(
+                'Subtitles',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            ListTile(
+              leading: Icon(
+                _subtitleOn
+                    ? Icons.radio_button_checked
+                    : Icons.radio_button_off,
+                color: _subtitleOn ? Colors.white : Colors.white54,
+              ),
+              title: const Text(
+                'Off',
+                style: TextStyle(color: Colors.white),
+              ),
+              onTap: () => Navigator.of(context).pop(false),
+            ),
+            ListTile(
+              leading: Icon(
+                _subtitleOn
+                    ? Icons.radio_button_checked
+                    : Icons.radio_button_off,
+                color: _subtitleOn ? Colors.white : Colors.white54,
+              ),
+              title: Text(
+                label,
+                style: const TextStyle(color: Colors.white),
+              ),
+              subtitle: const Text(
+                'Paired from the same folder',
+                style: TextStyle(color: Colors.white54),
+              ),
+              onTap: () => Navigator.of(context).pop(true),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (choice != null && choice != _subtitleOn) {
+      _exo?.setSubtitles(choice);
+    }
+  }
+
   void _seekBy(Duration delta) {
     _exo?.seekTo(_position + delta);
     _showControls();
@@ -349,7 +488,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   /// HDR shown on the chip: prefer the metadata hint (authoritative for
   /// Dolby Vision), falling back to live detection when metadata is silent.
   HdrFormat get _effectiveHdr {
-    if (widget.video.hdrFormat != HdrFormat.sdr) return widget.video.hdrFormat;
+    if (_current.hdrFormat != HdrFormat.sdr) return _current.hdrFormat;
     if (_liveHdr != HdrFormat.sdr) return _liveHdr;
     return HdrFormat.sdr;
   }
@@ -378,7 +517,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final video = widget.video;
+    final video = _current;
     final isLandscape =
         MediaQuery.sizeOf(context).width > MediaQuery.sizeOf(context).height;
 
@@ -688,9 +827,13 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                                   color: Colors.white,
                                 ),
                                 IconButton(
-                                  onPressed: () {},
-                                  icon: const Icon(Icons.closed_caption),
-                                  color: Colors.white,
+                                  onPressed: _openSubtitleSheet,
+                                  icon: Icon(
+                                    _subtitleOn
+                                        ? Icons.closed_caption
+                                        : Icons.closed_caption_off,
+                                  ),
+                                  color: _subtitleOn ? Colors.white : Colors.white54,
                                 ),
                                 IconButton(
                                   onPressed: () {},

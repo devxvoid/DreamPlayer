@@ -182,6 +182,81 @@ String formatLiveAudioCodec(String? codec, String? decoder) {
   return formatAudioCodec(codec);
 }
 
+/// Maps an ISO-639 language code to its full English name (e.g. `eng` ->
+/// `English`). Falls back to the raw code when unknown.
+String languageName(String? code) {
+  if (code == null || code.isEmpty) return code ?? '';
+  final c = code.trim().toLowerCase();
+  const map = {
+    'en': 'English',
+    'eng': 'English',
+    'de': 'German',
+    'deu': 'German',
+    'ger': 'German',
+    'fr': 'French',
+    'fre': 'French',
+    'fra': 'French',
+    'es': 'Spanish',
+    'spa': 'Spanish',
+    'it': 'Italian',
+    'ita': 'Italian',
+    'ja': 'Japanese',
+    'jpn': 'Japanese',
+    'ko': 'Korean',
+    'kor': 'Korean',
+    'zh': 'Chinese',
+    'chi': 'Chinese',
+    'zho': 'Chinese',
+    'hi': 'Hindi',
+    'hin': 'Hindi',
+    'ta': 'Tamil',
+    'tam': 'Tamil',
+    'te': 'Telugu',
+    'tel': 'Telugu',
+    'pt': 'Portuguese',
+    'por': 'Portuguese',
+    'ru': 'Russian',
+    'rus': 'Russian',
+    'ar': 'Arabic',
+    'ara': 'Arabic',
+    'tr': 'Turkish',
+    'tur': 'Turkish',
+    'pl': 'Polish',
+    'pol': 'Polish',
+    'nl': 'Dutch',
+    'nld': 'Dutch',
+    'dut': 'Dutch',
+    'sv': 'Swedish',
+    'swe': 'Swedish',
+    'da': 'Danish',
+    'dan': 'Danish',
+    'no': 'Norwegian',
+    'nor': 'Norwegian',
+    'fi': 'Finnish',
+    'fin': 'Finnish',
+    'el': 'Greek',
+    'gre': 'Greek',
+    'ell': 'Greek',
+    'cs': 'Czech',
+    'ces': 'Czech',
+    'cze': 'Czech',
+    'hu': 'Hungarian',
+    'hun': 'Hungarian',
+    'th': 'Thai',
+    'tha': 'Thai',
+    'vi': 'Vietnamese',
+    'vie': 'Vietnamese',
+    'id': 'Indonesian',
+    'ind': 'Indonesian',
+    'ms': 'Malay',
+    'msa': 'Malay',
+    'may': 'Malay',
+    'uk': 'Ukrainian',
+    'ukr': 'Ukrainian',
+  };
+  return map[c] ?? c;
+}
+
 /// Converts a channel count to a display label (e.g. `6` -> `5.1`).
 String channelsLabel(int? channels) {
   if (channels == null || channels <= 0) return '?';

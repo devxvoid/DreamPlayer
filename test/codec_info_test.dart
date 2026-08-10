@@ -152,6 +152,45 @@ void main() {
     });
   });
 
+  group('channelsLabel', () {
+    test('maps common counts to surround labels', () {
+      expect(channelsLabel(1), 'Mono');
+      expect(channelsLabel(2), '2.0');
+      expect(channelsLabel(6), '5.1');
+      expect(channelsLabel(8), '7.1');
+    });
+
+    test('falls back to N.0', () {
+      expect(channelsLabel(4), '4.0');
+      expect(channelsLabel(7), '7.0');
+    });
+
+    test('unknown count', () {
+      expect(channelsLabel(null), '?');
+      expect(channelsLabel(0), '?');
+    });
+  });
+
+  group('languageName', () {
+    test('maps ISO codes to full English names', () {
+      expect(languageName('eng'), 'English');
+      expect(languageName('deu'), 'German');
+      expect(languageName('fra'), 'French');
+      expect(languageName('jpn'), 'Japanese');
+    });
+
+    test('handles 2-letter and case variations', () {
+      expect(languageName('EN'), 'English');
+      expect(languageName('hi'), 'Hindi');
+    });
+
+    test('falls back to the raw code', () {
+      expect(languageName('zzz'), 'zzz');
+      expect(languageName(null), '');
+      expect(languageName(''), '');
+    });
+  });
+
   group('formatLiveAudioLabel', () {
     test('uses metadata profile when codec families match', () {
       expect(

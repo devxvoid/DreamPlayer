@@ -11,6 +11,7 @@ class ExoAudioTrack {
   const ExoAudioTrack({
     required this.index,
     this.language,
+    this.label,
     this.codecs,
     this.mime,
     this.channels = 0,
@@ -20,7 +21,13 @@ class ExoAudioTrack {
 
   /// Flat index; the value to pass to [ExoPlayerController.selectAudioTrack].
   final int index;
+
+  /// ISO-639 language code (e.g. `eng`).
   final String? language;
+
+  /// Container-provided track name (e.g. `DTS-HD MA 5.1`, `Commentary`).
+  /// Empty when the file has no named tracks.
+  final String? label;
   final String? codecs;
   final String? mime;
   final int channels;
@@ -32,6 +39,7 @@ class ExoAudioTrack {
     return ExoAudioTrack(
       index: asInt(m['index']),
       language: m['language'] as String?,
+      label: m['label'] as String?,
       codecs: m['codecs'] as String?,
       mime: m['mime'] as String?,
       channels: asInt(m['channels']),
@@ -61,6 +69,8 @@ class ExoPlayerEvent {
     this.audioChannels = 0,
     this.audioTracks = const [],
     this.selectedAudioTrack = -1,
+    this.subtitleLabel,
+    this.subtitleOn = false,
     this.error,
   });
 
@@ -80,6 +90,11 @@ class ExoPlayerEvent {
   final int audioChannels;
   final List<ExoAudioTrack> audioTracks;
   final int selectedAudioTrack;
+
+  /// Auto-paired sideloaded subtitle, e.g. `Show.S01E01.eng` (null when the
+  /// video has no paired subtitle file).
+  final String? subtitleLabel;
+  final bool subtitleOn;
   final String? error;
 
   Duration get position => Duration(milliseconds: positionMs);
@@ -108,6 +123,8 @@ class ExoPlayerEvent {
           .map((e) => ExoAudioTrack.fromMap(e as Map<dynamic, dynamic>))
           .toList(),
       selectedAudioTrack: asInt(m['selectedAudioTrack'], -1),
+      subtitleLabel: m['subtitleLabel'] as String?,
+      subtitleOn: m['subtitleOn'] == true,
       error: m['error'] as String?,
     );
   }
@@ -149,8 +166,16 @@ class ExoPlayerController {
     _pending.clear();
   }
 
-  Future<void> open(String path, {String? uri}) =>
-      _send('open', uri != null && uri.isNotEmpty ? {'uri': uri} : {'path': path});
+  Future<void> open(
+    String path, {
+    String? uri,
+    String? subtitleUri,
+  }) =>
+      _send('open', {
+        if (uri != null && uri.isNotEmpty) 'uri': uri else 'path': path,
+        if (subtitleUri != null && subtitleUri.isNotEmpty)
+          'subtitleUri': subtitleUri,
+      });
 
   Future<void> play() => _send('play');
 
@@ -165,6 +190,8 @@ class ExoPlayerController {
 
   Future<void> selectAudioTrack(int index) =>
       _send('setAudioTrack', {'index': index});
+
+  Future<void> setSubtitles(bool on) => _send('setSubtitles', {'on': on});
 
   Future<void> disposeNative() => _send('dispose');
 

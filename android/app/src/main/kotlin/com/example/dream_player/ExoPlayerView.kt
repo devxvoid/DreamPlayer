@@ -14,8 +14,10 @@ import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.LoadControl
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
@@ -28,6 +30,7 @@ import io.flutter.plugin.platform.PlatformView
 import io.flutter.plugin.platform.PlatformViewFactory
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
 import java.io.File
+import java.util.Locale
 
 @UnstableApi
 class ExoPlayerViewFactory(private val messenger: BinaryMessenger) :
@@ -98,6 +101,7 @@ class ExoPlayerView(
                     setMediaCodecSelector(mediaCodecSelector)
                 }
         )
+        .setLoadControl(loadControl)
         .build()
         .also { p ->
             p.repeatMode = Player.REPEAT_MODE_OFF
@@ -106,6 +110,10 @@ class ExoPlayerView(
 
     private val handler = Handler(Looper.getMainLooper())
     private var positionTicker: Runnable? = null
+
+    /// Auto-paired sideloaded subtitle: `(smb:// uri, display label)`.
+    private var currentSubtitle: Pair<String, String>? = null
+    private var subtitleOn = false
 
     private var sink: EventChannel.EventSink? = null
 
@@ -161,17 +169,40 @@ class ExoPlayerView(
                 "open" -> {
                     val path = call.argument<String>("path")
                     val uri = call.argument<String>("uri")
-                    val mediaItem = when {
-                        !uri.isNullOrEmpty() -> MediaItem.fromUri(android.net.Uri.parse(uri))
-                        path != null -> MediaItem.fromUri(android.net.Uri.fromFile(File(path)))
-                        else -> {
-                            result.error("bad_args", "Missing path or uri", null)
-                            return@setMethodCallHandler
+                    val subtitleUri = call.argument<String>("subtitleUri")
+                    val mediaItem = MediaItem.Builder()
+                        .apply {
+                            when {
+                                !uri.isNullOrEmpty() -> setUri(android.net.Uri.parse(uri))
+                                path != null -> setUri(android.net.Uri.fromFile(File(path)))
+                                else -> {
+                                    result.error("bad_args", "Missing path or uri", null)
+                                    return@setMethodCallHandler
+                                }
+                            }
                         }
-                    }
+                        .apply {
+                            if (!subtitleUri.isNullOrEmpty()) {
+                                currentSubtitle = subtitleUri to subtitleLabel(subtitleUri)
+                                setSubtitleConfigurations(
+                                    listOf(
+                                        MediaItem.SubtitleConfiguration.Builder(
+                                            android.net.Uri.parse(subtitleUri),
+                                        )
+                                            .setMimeType(subtitleMimeType(subtitleUri))
+                                            .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                                            .build(),
+                                    ),
+                                )
+                            } else {
+                                currentSubtitle = null
+                            }
+                        }
+                        .build()
                     player.setMediaItem(mediaItem)
                     player.prepare()
                     player.play()
+                    subtitleOn = currentSubtitle != null
                     result.success(null)
                 }
                 "play" -> {
@@ -203,6 +234,11 @@ class ExoPlayerView(
                 "setAudioTrack" -> {
                     val index = call.argument<Number>("index")?.toInt() ?: -1
                     selectAudioTrack(index)
+                    result.success(null)
+                }
+                "setSubtitles" -> {
+                    val on = call.argument<Boolean>("on") ?: true
+                    setSubtitles(on)
                     result.success(null)
                 }
                 else -> result.notImplemented()
@@ -295,6 +331,43 @@ class ExoPlayerView(
         player.setTrackSelectionParameters(params)
     }
 
+    /// Turns the sideloaded subtitle track on/off. Media3 sideloaded subtitles
+    /// surface as a text track group; off disables all text, on selects the
+    /// first text group (v1 pairs a single subtitle per video).
+    private fun setSubtitles(on: Boolean) {
+        if (currentSubtitle == null) return
+        subtitleOn = on
+        val builder = player.trackSelectionParameters.buildUpon()
+        if (on) {
+            builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+            val textGroup = player.currentTracks.groups
+                .firstOrNull { it.type == C.TRACK_TYPE_TEXT && it.isSupported }
+            if (textGroup != null) {
+                builder
+                    .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                    .setOverrideForType(TrackSelectionOverride(textGroup.mediaTrackGroup, 0))
+            }
+        } else {
+            builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+        }
+        player.setTrackSelectionParameters(builder.build())
+    }
+
+    /// `srt`/`sub`/`smi` -> subrip MIME (ExoPlayer's SRT parser handles it);
+    /// `ass`/`ssa` -> SSA; `vtt` -> WebVTT.
+    private fun subtitleMimeType(uri: String): String {
+        val ext = uri.substringAfterLast('.').lowercase(Locale.ROOT)
+        return when (ext) {
+            "ass", "ssa" -> "text/x-ssa"
+            "vtt" -> "text/vtt"
+            else -> MimeTypes.APPLICATION_SUBRIP
+        }
+    }
+
+    /// e.g. `Show.S01E01.eng.srt` -> `Show.S01E01.eng`.
+    private fun subtitleLabel(uri: String): String =
+        uri.substringAfterLast('/').substringBeforeLast('.').ifEmpty { uri }
+
     private fun emit(errorCodeName: String? = null) {
         val s = sink ?: return
         val videoFormat = player.videoFormat
@@ -321,6 +394,8 @@ class ExoPlayerView(
         map["audioTracks"] = audioTracks
         map["selectedAudioTrack"] =
             audioTracks.indexOfFirst { it["selected"] == true }
+        map["subtitleLabel"] = currentSubtitle?.second
+        map["subtitleOn"] = subtitleOn
         map["error"] = errorCodeName
         s.success(map)
     }
@@ -334,5 +409,22 @@ class ExoPlayerView(
         eventChannel.setStreamHandler(null)
         player.release()
         playerView.player = null
+    }
+
+    companion object {
+        /// Start playback almost immediately (2s of media buffered is enough),
+        /// resume quickly after a stall (5s), but keep topping the buffer up to
+        /// a big byte budget so the 96MB SMB read-ahead ring is fully usable.
+        /// Defaults are 2.5s/5s and an 8MB byte cap, which is too tight for 4K
+        /// REMUX over SMB.
+        private val loadControl: LoadControl =
+            DefaultLoadControl.Builder()
+                .setBufferDurationsMs(60_000, 120_000, BUFFER_FOR_PLAYBACK_MS, BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS)
+                .setTargetBufferBytes(TARGET_BUFFER_BYTES)
+                .build()
+
+        private const val BUFFER_FOR_PLAYBACK_MS = 2_000
+        private const val BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 5_000
+        private const val TARGET_BUFFER_BYTES = 96 * 1024 * 1024
     }
 }

@@ -16,6 +16,7 @@ class VideoItem {
     this.audioProfile,
     this.audioChannels,
     this.thumbnailPath,
+    this.subtitleUri,
   });
 
   final String id;
@@ -26,6 +27,10 @@ class VideoItem {
 
   /// e.g. a `content://` URI handed over from an "Open with" intent.
   final String? uri;
+
+  /// Sideloaded subtitle source (e.g. an `smb://` URI of a paired `.srt`/`.ass`
+  /// file sitting next to the video in the same folder).
+  final String? subtitleUri;
   final Duration duration;
   final int? sizeBytes;
   final String? resolution;

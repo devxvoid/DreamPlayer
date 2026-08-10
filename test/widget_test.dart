@@ -1,10 +1,10 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:flutter/widgets.dart';
 
 import 'package:dream_player/app.dart';
+import 'package:dream_player/models/video_item.dart';
 import 'package:dream_player/screens/player_screen.dart';
 import 'package:dream_player/widgets/format_chip.dart';
-import 'package:dream_player/widgets/video_card.dart';
 
 void main() {
   testWidgets('App shows library and settings shell', (tester) async {
@@ -12,6 +12,7 @@ void main() {
 
     expect(find.text('DreamPlayer'), findsOneWidget);
     expect(find.text('Your library'), findsOneWidget);
+    expect(find.text('Your library is empty'), findsOneWidget);
     expect(find.text('Library'), findsOneWidget);
     expect(find.text('Settings'), findsOneWidget);
   });
@@ -29,10 +30,19 @@ void main() {
   testWidgets('Tapping a video opens the player with codec chips', (
     tester,
   ) async {
-    await tester.pumpWidget(const DreamPlayerApp());
-
-    await tester.tap(find.text('Sonic Anthem (IMAX)'));
-    await tester.pumpAndSettle();
+    const video = VideoItem(
+      id: '1',
+      title: 'Sonic Anthem (IMAX)',
+      path: '/storage/emulated/0/Download/video/test.mkv',
+      duration: Duration(seconds: 50),
+      videoCodec: 'h264',
+      audioCodec: 'dts_hd',
+      audioProfile: 'MA',
+      audioChannels: '5.1',
+    );
+    await tester.pumpWidget(
+      const MaterialApp(home: PlayerScreen(video: video)),
+    );
 
     expect(find.byType(PlayerScreen), findsOneWidget);
     expect(find.byType(FormatChip), findsWidgets);
@@ -69,13 +79,6 @@ void main() {
     await tester.pumpWidget(const DreamPlayerApp());
     await tester.pumpAndSettle();
 
-    final card = find.byType(VideoCard).first;
-    await tester.ensureVisible(card);
-    await tester.pumpAndSettle();
-    await tester.tap(card);
-    await tester.pumpAndSettle();
-
-    expect(find.byType(PlayerScreen), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

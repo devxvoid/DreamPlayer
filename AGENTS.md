@@ -77,6 +77,28 @@ A video player app supporting:
       codecs. Building: `cd Video && ./gradlew -Puniversal assembleNoamazonRelease`
   - Android audio codecs map to Media3 `FFmpegAudioRenderer` extension modules;
     `dts`, `truehd`, `eac3`, `ac3` etc. are FFmpeg decoders.
+- **Nova buffering / read-ahead (how Nova smooths slow SMB/Wi-Fi; source = `aos-avos`)**:
+  - **48 MB ring buffer for network streams** — `Source/avos_mp_video.c:256`
+    `stream_set_buffer_size(video->s, 48)`. Wiki "Buffering" history: 12→24 MB
+    (2015, high-bitrate 4K) → 48 MB (2022, 2× speed). "Used as cache before the
+    parser to tackle buffering issues." Local default is `STREAM_DEFAULT_BUFFER_SIZE`
+    64 MB / `STREAM_LARGE_BUFFER_SIZE` 128 MB (`Include/stream.h:41-42`).
+  - **Ring buffer + dedicated background pthread** — `Source/stream_buffer.c:162`
+    `_buffer_thread` loops `pthread_mutex_trylock` → `buffer->buffer(buffer,1)`,
+    sleeps 500 ms when full (`BUFFER_SLEEP`). It refills when the parsed-ahead
+    media drops below `stream_drive_wake_sleep = 5000` (5 s, `stream_buffer.c:37`);
+    when actively playing it uses `stream_drive_wake_no_sleep = 2000` (s) — i.e.
+    keep the ring essentially **always full**.
+  - **Rate-aware refill threshold** — `_calc_buffer_threshold` (`stream_buffer.c:55`)
+    predicts seconds-ahead from the measured `vcurrent_rate`/`acurrent_rate`
+    (min rate floor 250 kbit/s), not just free space. Matches our
+    `SmbDataSource` design intent (see below).
+  - **Debugging**: `av.sh smb` prints the current max buffer size; `av.sh dbgv 2`
+    shows fill rate.
+  - **SMB library**: Nova's SMBv2/3 support is via **jcifs-ng** (wiki "SMBv2 3",
+    Apr 2020; earlier jcifs 1.3.19 was SMBv1-only) — **NOT smbj** (see Libraries
+    table correction). Nova's C core has no SMB IO module (`stream_io_*.c` are all
+    local); network files are opened by the Android app layer and fed to the engine.
   - iOS/iPad DV is restricted by Apple APIs — ExoPlayer/Media3 is Android-only;
     iOS will need a separate native path (AVPlayer). For now focus Android.
 
@@ -90,18 +112,28 @@ A video player app supporting:
   - **Chip layout**: landscape puts back button + title + chips in one `Wrap` on the same row; portrait shows title row, then chips `Wrap` below.
 - **Player controls**: top bar (back + title) and a slim bottom bar (time + seekbar + audio/CC/tune/fullscreen) auto-hide after 3 s of playback (tap toggles them; kept visible while paused/buffering/dragging). **Center transport**: `replay_10` / big play-pause / `forward_10` float in a dark rounded pill in the middle of the screen, fading with the other controls. The bottom bar's background is a gradient mirroring the top bar (transparent → `black` 0.72), so both bars read at the same opacity. The player screen is **always immersive** (no system UI toggling during rotation — that fights the rotation animation and makes the video jitter); the bottom fullscreen button just forces landscape/portrait. Top-bar fullscreen button removed.
 - **Audio track selection** (mute button replaced): the bottom bar's first button opens an "Audio tracks" bottom sheet listing every audio track from the native Media3 `currentTracks` (language · codec · channels · bitrate), with the active track check-marked. Picking a track calls `setAudioTrack` → native `TrackSelectionParameters` override → `onTracksChanged` re-emits → the top-bar audio chip (live codec + channel count) updates automatically. Native plumbing in `android/.../ExoPlayerView.kt` (`buildAudioTracks`, `selectAudioTrack`), pushed on every event as `audioTracks`/`selectedAudioTrack`; Dart model `ExoAudioTrack` in `lib/services/exo_player.dart`. Verified on-device: Sonic (DTS-HD MA + FLAC) switches DTS-HD → FLAC and the chip follows.
+  - **Full track names**: the sheet prefers the container-provided track `label` (e.g. `DTS-HD MA 5.1`, `Commentary`) and appends the channel count unless the name already carries it; otherwise it composes `languageName(lang) · codec · channels`. `ExoAudioTrack` gained a `label` field; ISO-639 codes map to full English names via `languageName()` in `codec_info.dart`.
 - **FLAC via FFmpeg + E-AC3 decoder workaround**: a custom `MediaCodecSelector` in `ExoPlayerView.kt` does two things: (1) returns no decoder for `audio/flac` so FLAC falls through to the bundled FFmpeg renderer — the platform MediaCodec FLAC decoder on some devices (incl. this OnePlus) allocates fixed 32 KiB input buffers and large FLAC frames (24-bit multichannel ~54 KiB) die with `DecoderInputBuffer$InsufficientCapacityException: Buffer too small`; (2) skips any `c2.dolby.eac3.decoder` for `audio/eac3`/`audio/eac3-joc` — on this OnePlus the codec2 resource manager repeatedly releases that hardware decoder as soon as it starts, so Media3's audio renderer spins in an endless re-init loop and **no AudioTrack is ever created (silent playback)**. With the Dolby component excluded, the AOSP software E-AC3 decoder is used and the renderer is stable. Verified on-device: Sonic FLAC plays continuously; an E-AC3 (Dolby Atmos, 5.1) track plays with an active AudioTrack (48 kHz, channelMask `0x3f`, no churn, no errors).
 - **File browser (CX-Explorer style)** (`lib/screens/file_browser_screen.dart`): browse the whole device storage in-app and play any video without importing. Folder icon in the home app bar opens it. Android side (`android/.../FileBrowser.kt`, channel `dreamplayer/files`): `hasAllFilesAccess` / `openAllFilesAccessSettings` / `getStorageRoots` (internal + SD card) / `listDirectory` (folders then video files, sorted, with sizes). Requires **`MANAGE_EXTERNAL_STORAGE`** (All Files Access) on Android 11+ — the screen shows a "Grant access" button that opens the system settings and re-checks on app resume. Tapping a video builds a `VideoItem` and pushes `PlayerScreen`. Verified on-device: Internal storage → Download → video → Dolby Vision People plays with live HDR/codec chips.
 - **"Open with" / file-explorer integration** (`AndroidManifest.xml` `ACTION_VIEW` intent-filters for `content`/`file` schemes + video MIME types incl. `video/*`, matroska, mpeg, ts, avi, wmv, octet-stream): tapping a video anywhere on the device now offers DreamPlayer. `MainActivity` resolves the intent (file path or `content://` URI + display name via `OpenableColumns`) and forwards it over the `dreamplayer/intent` channel (`getInitialIntent` on launch / `open` on `onNewIntent`); `lib/services/open_intent.dart` turns it into a `VideoItem` and pushes `PlayerScreen` via a global `appNavigatorKey` in `lib/app.dart`. `VideoItem` gained an optional `uri` (content URIs) with `path` now nullable; `ExoPlayerView` opens a raw URI when no path is available. Verified on-device: "Open with" chooser lists DreamPlayer and launches Dolby Vision playback.
+  - **CX Explorer network-stream handoff**: CX hands SMB videos to players as `http://127.0.0.1:<port>/SMB/...` (its own local HTTP proxy), so the intent filter additionally declares `http`/`https`/empty schemes (`<data android:scheme=""/>`) + the full container-MIME matrix (`video/x-matroska`, `application/octet-stream`, `application/mpeg`, ... — a single filter, since per-vendor MIMEs differ), and `android:usesCleartextTraffic="true"`. `SmbDataSource`'s `open()` detects the non-`smb` scheme and delegates to a lazily-created `DefaultHttpDataSource` (`read()`/`getUri()`/`close()` all route through http mode). Media3's `DefaultDataSource` sends every non-file/content scheme to its base factory with no fallback, so the base had to handle http(s) itself. Verified on-device via logcat: 4K HEVC lossless (3840×2176@60) streamed through CX's proxy decoded at a steady 60 fps / **0 discarded frames** for a full session (`c2.qti.hevc.decoder` telemetry), only jank = the app's cold start.
 - **Home/settings status bar**: `RootShell` maps `MediaQuery.viewPadding.top` into `padding` (Android edge-to-edge reports `padding.top == 0`), so `SliverAppBar` never overlaps the status bar.
+- **Library emptied of sample data**: the home library no longer shows hardcoded demo videos — it starts empty with a "Your library is empty" empty-state (file browser + network shares are the way in) until a real MediaStore scan lands. The dead "Scan for videos" button was removed.
 - **Responsive grid** (`lib/screens/home_screen.dart`): column count and card height computed from screen width; card text is `Expanded`/`Flexible`. Text scaling clamped to 1.3x app-wide.
 - **Native refresh rate** (`lib/services/display_refresh_rate.dart`): calls `FlutterDisplayMode.setHighRefreshRate()` on Android at startup.
-- **SMB / LAN playback (v1 core)** (`lib/screens/smb_screen.dart`, `lib/services/smb_client.dart`, `android/.../SMBClient.kt`, `SmbDataSource.kt`, channel `dreamplayer/smb`, smbj 0.14.0):
+- **SMB / LAN playback (v1 core)** (`lib/screens/smb_screen.dart`, `lib/services/smb_client.dart`, `android/.../SMBClient.kt`, `SmbDataSource.kt`, channel `dreamplayer/smb`, **jcifs-ng 2.1.10**):
   - Saved servers with **Android Keystore AES-GCM encrypted passwords** in SharedPreferences (never plaintext); add/edit/delete/test connection.
-  - **Share enumeration caveat**: SMB2 has no NetShareEnum, so smbj can't list a server's shares — `listShares` probes ~22 well-known names (videos/movies/media/downloads/home/...) and the user can add unusual share names manually (stored per-server, `addShare`).
-  - **Direct streaming, no download**: custom ExoPlayer `SmbDataSource` (BaseDataSource, positioned `smbj File.read(offset)`) wired into `ExoPlayerView.kt` via `DefaultMediaSourceFactory(...).setDataSourceFactory(...)` (note: Media3 removed `ExoPlayer.Builder.setDataSourceFactory` — use `setMediaSourceFactory`). URIs are `smb://<serverId>/<share>/<path>`; credentials resolved natively in `SmbStore`, so passwords never reach Dart or the URI. Full seek (SMB2 read at offset), reconnect-per-open.
-  - Home app bar `Icons.dns` entry. **Built + installed on CPH2573 but NOT yet verified against a real NAS.**
-- Tests: 31 (`flutter test`) incl. no-overflow checks on small phone, tablet, landscape, and 2.0x text scale.
+  - **Share enumeration caveat**: SMB2 has no NetShareEnum, so we can't list a server's shares — `listShares` probes ~22 well-known names (videos/movies/media/downloads/home/...) and the user can add unusual share names manually (stored per-server, `addShare`).
+  - **Direct streaming, no download**: custom ExoPlayer `SmbDataSource` (BaseDataSource, positioned `SmbRandomAccessFile.read(offset)`) wired into `ExoPlayerView.kt` via `DefaultMediaSourceFactory(...).setDataSourceFactory(...)` (note: Media3 removed `ExoPlayer.Builder.setDataSourceFactory` — use `setMediaSourceFactory`). URIs are `smb://<serverId>/<share>/<path>`; credentials resolved natively in `SmbStore`, so passwords never reach Dart or the URI. Full seek (SMB2 read at offset).
+  - **jcifs-ng over smbj** (`SmbEngine` singleton, `SMBClient.kt`): Nova's and CX File Explorer's SMB library. SMB2.02–3.1.1 only (no SMB1), tuned streaming props (15 s connect / 20 s socket / 30 s response timeouts, `disableIdleTimeout`, `tcpNoDelay`, `useBatching`), and it decodes each read straight into our buffer with no per-read allocation. On the NAS it measured ~75 MB/s vs ~4–6 MB/s for smbj, so 4K/REMUX streaming is comfortable. Shared `CIFSContext` pools the transport, so equal credentials across calls reuse the same connection (no reconnect per open).
+  - **Read-ahead ring buffer (Nova-style)** in `SmbDataSource.kt`: a **96 MB ring buffer** (Nova uses 48 MB; `stream.h` 64/128 MB local) fed by a dedicated `smb-prefetch` daemon thread. The MKV extractor's byte-by-byte header reads come straight out of memory (no SMB2 round-trip per byte), and a large async prefetch absorbs transient Wi-Fi jitter. SMB reads are batched into **4 MiB chunks**; the reader `wait()`s when the ring is empty, and the prefetcher extends the window once the playhead consumes data. On `open()` (seek / next-episode) the window is reset for the new position. The connection+handle are **reused across open() calls for the same URI** (only reconnect when server/share/path changes) so the MKV extractor's index seeks at the end of the file don't re-trigger SMB connects. A read error drops the handle and the prefetch thread **auto-reconnects** and resumes (NAS drop / server sleep).
+  - **LAN auto-discovery**: `discoverServers` scans the local Wi-Fi subnet's TCP 445 (window capped at /24, 32 threads, 500 ms per-host timeout) and resolves each open host's name from the **SMB negotiate handshake** (`Connection.getRemoteHostname()`, authoritative) falling back to reverse DNS. No NetBIOS/SMB1 discovery (SMB2/3 only). UI: "Scan network" button + "Detected on this network" section (tap → prefill add-server dialog). Discovery/status probes run on a separate cached thread pool so they never stall browsing.
+  - **Saved-server status dots**: async `checkServer` TCP-445 probe per saved server on load (parallel), green/red/grey dot on each server tile; pull-to-refresh + refresh action.
+  - **Subtitles auto-pair**: `listDirectory` returns `subtitlePath` per video (best match: exact base name first, then language-tagged prefix `Show.mkv` → `Show.eng.srt`; extensions srt/ass/ssa/vtt/sub/smi). The matched file streams over the same `smb://` data source via Media3 `MediaItem.SubtitleConfiguration` (SELECTION_FLAG_DEFAULT auto-selects); CC button toggles off/on (`setSubtitles`, track-type-disabled + text-group override).
+  - **Play-next-episode**: tapping a video pushes `PlayerScreen` with the whole folder's video list as `playlist` + index; on end the next episode auto-opens (same native surface, `_openCurrent`).
+  - **Verified against a real NAS (CPH2573)**: discovery, auth, share listing all work. **Bug fixed on-device**: tapping a share threw `STATUS_BAD_NETWORK_NAME` because the browse state never stored the share name (`_share` stayed `''` → `connectShare("")`) — entering a share now sets `_share` before listing the root.
+  - Home app bar `Icons.dns` entry.
+- Tests: 37 (`flutter test`) incl. no-overflow checks on small phone, tablet, landscape, and 2.0x text scale.
 
 ## Roadmap
 
@@ -119,18 +151,18 @@ Play files from LAN/NAS SMB shares in-app, mirroring the existing file-browser p
 **Libraries**
 | Platform | Choice | Why |
 |---|---|---|
-| Android | **smbj** (SMB2/3 only) | ~2× faster than jcifs-ng, handles 4K/REMUX bitrates; what Nova switched to for playback |
-| Android (optional) | jcifs-ng | SMB1 legacy devices + LAN server auto-discovery only |
-| iPad | **AMSMB2** / **SwiftSMB** (Swift wrapper over **libsmb2**, C) | Only mature SMB2/3 path on iOS; libsmb2 is what Nova is evaluating |
+| Android | **jcifs-ng** (SMB2/3 only) | Nova's and CX File Explorer's SMB library; measured ~75 MB/s vs ~4–6 MB/s for smbj on the NAS. |
+| Android (optional) | jcifs-ng SMB1 | SMB1 legacy devices only (disabled by default; SMB1 support is behind a config flag) |
+| iPad | **AMSMB2** / **SwiftSMB** (Swift wrapper over **libsmb2**, C) | Only mature SMB2/3 path on iOS; libsmb2 is a serious candidate (Nova has discussed it) |
 - **Licensing**: libsmb2 is LGPL-2.1 (constrains App Store distribution — needs relinkable/replaceable lib); app already ships GPLv3 FFmpeg extension so not a new concern for Android.
 
 **Features**
 1. *Servers*: add/edit/delete saved servers (name, host/IP, port 445, user, password, or Guest); credentials in Keychain (iOS) / Android Keystore (EncryptedSharedPreferences), never plaintext; LAN auto-discovery (broadcast/workgroup) + manual IP fallback; test connection + quick connect; saved-server status dot (online/offline).
 2. *Browsing* (CX-Explorer style): server → shares → folders → files; breadcrumbs + up-nav; folders first, sorted by name/size/date; show size + modified date; player back returns to same folder.
-3. *Playback*: direct streaming (no download) — Android = custom ExoPlayer `DataSource` over smbj seekable reads; iPad = `AVAssetResourceLoaderDelegate` serving bytes from the SMB stream; full seek; existing live HDR/codec chips unchanged; play-next-episode in folder; optional prefetch/cache-ahead setting + reconnect-on-drop/resume for high-bitrate files.
+3. *Playback*: direct streaming (no download) — Android = custom ExoPlayer `DataSource` over jcifs-ng seekable reads; iPad = `AVAssetResourceLoaderDelegate` serving bytes from the SMB stream; full seek; existing live HDR/codec chips unchanged; play-next-episode in folder; optional prefetch/cache-ahead setting + reconnect-on-drop/resume for high-bitrate files.
 4. *Extras*: auto-pair subtitles from same folder (`.srt`/`.ass`); pin recently-used servers on home screen; DNS/WINS hostname resolution for NAS names.
 - **Scope (v1)**: manual server add + Guest/basic auth + browse + stream + play-next. Add discovery + subtitles after.
-- **Status**: v1 core landed (Android). Remaining: **on-device NAS verification**, LAN auto-discovery, saved-server status dots, play-next-episode, subtitles, reconnect/cache-ahead for high bitrates, and the iPad path (needs AVPlayer first).
+- **Status**: v1 core landed (Android): discovery, status dots, play-next-episode and subtitle auto-pair are implemented and the app is running on-device; the Nova-style read-ahead ring buffer is implemented but **not yet verified against a real NAS**. Remaining: **full NAS verify of streaming/seek + subtitles + play-next** (share browsing is verified), reconnect-on-drop/resume for high bitrates, and the iPad path (needs AVPlayer first).
 - **Note**: iPad playback requires the AVPlayer path first (non-Android currently shows "not yet supported") — SMB-on-iPad lands with it.
 
 ## CI / Deployment
@@ -183,7 +215,7 @@ lib/
   services/display_refresh_rate.dart  # high refresh rate selection (Android)
   services/exo_player.dart        # ExoPlayerController + ExoPlayerView platform view
   screens/
-    home_screen.dart            # library grid (adaptive columns, sample data pointing at real files)
+    home_screen.dart            # library grid (adaptive columns, empty state until scanning lands)
     player_screen.dart          # ExoPlayer/Media3 playback + live codec/HDR chips + controls
     settings_screen.dart        # settings list
   widgets/
