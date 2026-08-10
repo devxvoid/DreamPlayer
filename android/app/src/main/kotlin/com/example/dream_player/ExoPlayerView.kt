@@ -52,11 +52,22 @@ class ExoPlayerView(
     /// multi-channel blocks ~54 KiB) and kills playback with
     /// `InsufficientCapacityException`. Route FLAC through the FFmpeg renderer,
     /// which sizes its buffers dynamically.
+    ///
+    /// On this OnePlus (OxygenOS), the codec2 resource manager repeatedly
+    /// releases the Dolby hardware E-AC3 decoder (`c2.dolby.eac3.decoder`) as
+    /// soon as it starts, so Media3's audio renderer spins in an endless
+    /// re-init loop and no AudioTrack is ever created (silent playback). Skip
+    /// the Dolby component for E-AC3/E-AC3-JOC so the AOSP decoder is used.
     private val mediaCodecSelector = MediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
-        if (mimeType == MimeTypes.AUDIO_FLAC) {
-            emptyList()
-        } else {
-            MediaCodecSelector.DEFAULT.getDecoderInfos(
+        when {
+            mimeType == MimeTypes.AUDIO_FLAC -> emptyList()
+            mimeType == MimeTypes.AUDIO_E_AC3 || mimeType == MimeTypes.AUDIO_E_AC3_JOC ->
+                MediaCodecSelector.DEFAULT.getDecoderInfos(
+                    mimeType,
+                    requiresSecureDecoder,
+                    requiresTunnelingDecoder,
+                ).filterNot { it.name.contains("dolby", ignoreCase = true) }
+            else -> MediaCodecSelector.DEFAULT.getDecoderInfos(
                 mimeType,
                 requiresSecureDecoder,
                 requiresTunnelingDecoder,
