@@ -51,4 +51,6 @@ dependencies {
     // Prebuilt Media3 FFmpeg extension (GPLv3): software decode for
     // DTS/DTS-HD, TrueHD/MLP, E-AC3, AC3 where MediaCodec has no decoder.
     implementation("io.github.anilbeesetti:nextlib-media3ext:1.10.1-0.13.0")
+    // SMB2/3 client for LAN/NAS streaming (browse + playback data source).
+    implementation("com.hierynomus:smbj:0.14.0")
 }

@@ -96,7 +96,42 @@ A video player app supporting:
 - **Home/settings status bar**: `RootShell` maps `MediaQuery.viewPadding.top` into `padding` (Android edge-to-edge reports `padding.top == 0`), so `SliverAppBar` never overlaps the status bar.
 - **Responsive grid** (`lib/screens/home_screen.dart`): column count and card height computed from screen width; card text is `Expanded`/`Flexible`. Text scaling clamped to 1.3x app-wide.
 - **Native refresh rate** (`lib/services/display_refresh_rate.dart`): calls `FlutterDisplayMode.setHighRefreshRate()` on Android at startup.
+- **SMB / LAN playback (v1 core)** (`lib/screens/smb_screen.dart`, `lib/services/smb_client.dart`, `android/.../SMBClient.kt`, `SmbDataSource.kt`, channel `dreamplayer/smb`, smbj 0.14.0):
+  - Saved servers with **Android Keystore AES-GCM encrypted passwords** in SharedPreferences (never plaintext); add/edit/delete/test connection.
+  - **Share enumeration caveat**: SMB2 has no NetShareEnum, so smbj can't list a server's shares — `listShares` probes ~22 well-known names (videos/movies/media/downloads/home/...) and the user can add unusual share names manually (stored per-server, `addShare`).
+  - **Direct streaming, no download**: custom ExoPlayer `SmbDataSource` (BaseDataSource, positioned `smbj File.read(offset)`) wired into `ExoPlayerView.kt` via `DefaultMediaSourceFactory(...).setDataSourceFactory(...)` (note: Media3 removed `ExoPlayer.Builder.setDataSourceFactory` — use `setMediaSourceFactory`). URIs are `smb://<serverId>/<share>/<path>`; credentials resolved natively in `SmbStore`, so passwords never reach Dart or the URI. Full seek (SMB2 read at offset), reconnect-per-open.
+  - Home app bar `Icons.dns` entry. **Built + installed on CPH2573 but NOT yet verified against a real NAS.**
 - Tests: 31 (`flutter test`) incl. no-overflow checks on small phone, tablet, landscape, and 2.0x text scale.
+
+## Roadmap
+
+### SMB / network shares (Android + iPad)
+
+Play files from LAN/NAS SMB shares in-app, mirroring the existing file-browser pattern.
+
+**Architecture**
+- New native module per platform exposing a MethodChannel (same shape as `FileBrowser.kt` / `dreamplayer/files`):
+  - Android: `SMBClient.kt` — channel `dreamplayer/smb`
+  - iOS/iPad: `SMBClient.swift` — same channel
+- Dart: `lib/services/smb_client.dart` (models + channel wrapper) + `lib/screens/smb_screen.dart` (server list → shares → folders → tap video → `PlayerScreen`).
+- Playback passes an `smb://` URI through the existing `uri` path in `VideoItem` (like the "Open with" flow).
+
+**Libraries**
+| Platform | Choice | Why |
+|---|---|---|
+| Android | **smbj** (SMB2/3 only) | ~2× faster than jcifs-ng, handles 4K/REMUX bitrates; what Nova switched to for playback |
+| Android (optional) | jcifs-ng | SMB1 legacy devices + LAN server auto-discovery only |
+| iPad | **AMSMB2** / **SwiftSMB** (Swift wrapper over **libsmb2**, C) | Only mature SMB2/3 path on iOS; libsmb2 is what Nova is evaluating |
+- **Licensing**: libsmb2 is LGPL-2.1 (constrains App Store distribution — needs relinkable/replaceable lib); app already ships GPLv3 FFmpeg extension so not a new concern for Android.
+
+**Features**
+1. *Servers*: add/edit/delete saved servers (name, host/IP, port 445, user, password, or Guest); credentials in Keychain (iOS) / Android Keystore (EncryptedSharedPreferences), never plaintext; LAN auto-discovery (broadcast/workgroup) + manual IP fallback; test connection + quick connect; saved-server status dot (online/offline).
+2. *Browsing* (CX-Explorer style): server → shares → folders → files; breadcrumbs + up-nav; folders first, sorted by name/size/date; show size + modified date; player back returns to same folder.
+3. *Playback*: direct streaming (no download) — Android = custom ExoPlayer `DataSource` over smbj seekable reads; iPad = `AVAssetResourceLoaderDelegate` serving bytes from the SMB stream; full seek; existing live HDR/codec chips unchanged; play-next-episode in folder; optional prefetch/cache-ahead setting + reconnect-on-drop/resume for high-bitrate files.
+4. *Extras*: auto-pair subtitles from same folder (`.srt`/`.ass`); pin recently-used servers on home screen; DNS/WINS hostname resolution for NAS names.
+- **Scope (v1)**: manual server add + Guest/basic auth + browse + stream + play-next. Add discovery + subtitles after.
+- **Status**: v1 core landed (Android). Remaining: **on-device NAS verification**, LAN auto-discovery, saved-server status dots, play-next-episode, subtitles, reconnect/cache-ahead for high bitrates, and the iPad path (needs AVPlayer first).
+- **Note**: iPad playback requires the AVPlayer path first (non-Android currently shows "not yet supported") — SMB-on-iPad lands with it.
 
 ## CI / Deployment
 

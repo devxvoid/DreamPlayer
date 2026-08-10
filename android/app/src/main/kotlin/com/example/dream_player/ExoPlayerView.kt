@@ -12,9 +12,12 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
@@ -75,7 +78,18 @@ class ExoPlayerView(
         }
     }
 
+    /// `smb://<serverId>/...` URIs stream through the SMB data source; every
+    /// other scheme (file, content, http) falls through to the default sources.
+    private val dataSourceFactory = DefaultDataSource.Factory(
+        context,
+        SmbDataSourceFactory(context),
+    )
+
+    private val mediaSourceFactory = DefaultMediaSourceFactory(context)
+        .setDataSourceFactory(dataSourceFactory)
+
     private val player: ExoPlayer = ExoPlayer.Builder(context)
+        .setMediaSourceFactory(mediaSourceFactory)
         .setRenderersFactory(
             NextRenderersFactory(context)
                 .apply {

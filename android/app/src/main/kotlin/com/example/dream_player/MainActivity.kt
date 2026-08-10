@@ -20,6 +20,9 @@ class MainActivity : FlutterActivity() {
         FileBrowser(this).configure(
             MethodChannel(flutterEngine.dartExecutor.binaryMessenger, FileBrowser.CHANNEL),
         )
+        SMBClient(this).configure(
+            MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SMBClient.CHANNEL),
+        )
         intentChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "dreamplayer/intent",
