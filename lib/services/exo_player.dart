@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
@@ -284,10 +285,15 @@ class ExoPlayerController {
   }
 }
 
-/// Embeds the native ExoPlayer [SurfaceView] platform view.
+/// Embeds the native playback engine platform view.
 ///
-/// Rendered through Flutter's hybrid composition fallback so the video keeps
-/// its own SurfaceFlinger layer — required for real HDR / Dolby Vision output.
+/// Android: ExoPlayer/Media3 [SurfaceView], rendered through Flutter's hybrid
+/// composition fallback so the video keeps its own SurfaceFlinger layer —
+/// required for real HDR / Dolby Vision output.
+///
+/// iOS: AVPlayer-backed `AVPlayerLayer` (see `AvPlayerView.swift`), which also
+/// renders on its own Core Animation layer so the display receives the native
+/// HDR signal.
 class ExoPlayerView extends StatelessWidget {
   const ExoPlayerView({super.key, required this.controller});
 
@@ -295,6 +301,13 @@ class ExoPlayerView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (Platform.isIOS) {
+      return UiKitView(
+        viewType: exoPlayerViewType,
+        onPlatformViewCreated: controller._attach,
+        creationParamsCodec: const StandardMessageCodec(),
+      );
+    }
     return AndroidView(
       viewType: exoPlayerViewType,
       onPlatformViewCreated: controller._attach,

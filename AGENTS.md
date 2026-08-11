@@ -27,10 +27,29 @@ A video player app supporting:
   before the platform view attaches is queued and flushed in `_attach`.
   **Gotcha fixed:** the backend must `setState` after creating the controller,
   or the buttons/video layer stay frozen in the pre-init state.
+- **iOS/iPad playback LANDS (2026-08)** via a native **AVPlayer** platform view
+  (`ios/Runner/AvPlayerView.swift`, `UiKitView` on the Dart side), mirroring the
+  Android ExoPlayer channel contract exactly — same `dreamplayer/exo_<id>`
+  method/event channels, same event map keys, so `ExoPlayerController` works
+  unchanged. AVPlayer renders onto its own Core Animation `AVPlayerLayer` (real
+  HDR/DV output where the panel supports it; iPad Pro M2 does). **Embedded**
+  audio/subtitle tracks are selectable via `AVMediaSelectionGroup`
+  (audible/legible) — the Audio tracks and CC pickers work. Sideloaded sidecar
+  subtitle files are Android-only for now. A Documents-folder file browser
+  (`ios/Runner/FileBrowser.swift`, same `dreamplayer/files` contract) plus
+  `UIFileSharingEnabled`/`LSSupportsOpeningDocumentsInPlace` mean videos are
+  dropped into the app via the Files app ("On My iPad → DreamPlayer") and
+  played in-app. **iOS "Open with" works too** — `CFBundleDocumentTypes`
+  (video UTIs) puts DreamPlayer in the Files/share sheet, and
+  `ios/Runner/IntentBridge.swift` mirrors the Android `dreamplayer/intent`
+  contract (`getInitialIntent` on launch via scene connection options /
+  launch options; `open` from `application(_:open:options:)` +
+  `scene(_:openURLContexts:)`, deduped). Security-scoped file URLs from the
+  Files app keep their access scope for the playback session. Not yet verified
+  on-device (no Mac locally; CI builds it).
 - **media_kit / libmpv fully REMOVED** from `pubspec.yaml`, `main.dart`,
   `player_screen.dart`, and the APK (no more `libmpv.so`/mediakit libs; only
-  `libflutter.so` + `libmedia3ext.so` remain). Non-Android screens show a
-  "not yet supported" message until the iOS AVPlayer path lands.
+  `libflutter.so` + `libmedia3ext.so` remain).
 - **Subtitles done (embedded + sideloaded)**: every sibling subtitle file in
   the video's folder auto-attaches (SRT, SSA/ASS, WebVTT, TTML, SAMI, MicroDVD,
   MPL2, SubViewer via custom parsers), the best match auto-selects, and the CC
@@ -46,6 +65,7 @@ A video player app supporting:
 |---|---|---|
 | Framework | Flutter (stable, 3.44.x) | Cross-platform, single codebase |
 | Playback engine (Android) | **ExoPlayer / Media3** (native, in PlatformView) | HDR/DV passthrough-capable; working (`c2.qti.dv.decoder`). |
+| Playback engine (iOS/iPad) | **AVPlayer** (native, in PlatformView) | `AvPlayerView.swift`, AVPlayerLayer (own Core Animation layer → HDR); embedded audio/subtitle track selection via media selection groups. Sidecar subtitle files are Android-only for now (AVPlayer has no sidecar-text API). |
 | Android audio decode | Media3 `FFmpegAudioRenderer` (ffmpeg extension) | DTS, DTS-HD, E-AC3, AC3, TrueHD — same bundled-FFmpeg approach Nova uses. |
 | Reference architecture | **Nova Video Player** (`nova-video-player/aos-AVP`) | See "Playback research notes". |
 | ~~media_kit / libmpv~~ | **retired** | Cannot do Dolby Vision (no passthrough, no RPU). |
@@ -171,7 +191,7 @@ is the complete blueprint; the v1 was essentially done and only needed polish.
 4. *Extras*: auto-pair subtitles from same folder (`.srt`/`.ass`); pin recently-used servers on home screen; DNS/WINS hostname resolution for NAS names.
 - **Scope (v1)**: manual server add + Guest/basic auth + browse + stream + play-next. Add discovery + subtitles after.
 - **Status**: v1 core landed (Android): discovery, status dots, play-next-episode and subtitle auto-pair are implemented and the app is running on-device; the Nova-style read-ahead ring buffer is implemented but **not yet verified against a real NAS**. Remaining: **full NAS verify of streaming/seek + subtitles + play-next** (share browsing is verified), reconnect-on-drop/resume for high bitrates, and the iPad path (needs AVPlayer first).
-- **Note**: iPad playback requires the AVPlayer path first (non-Android currently shows "not yet supported") — SMB-on-iPad lands with it.
+- **Note**: the AVPlayer path has landed (iPad plays local/Documents files); SMB-on-iPad still needs an SMB2 client on the Swift side (AMSMB2 / libsmb2).
 
 ## CI / Deployment
 
@@ -235,6 +255,12 @@ android/app/src/main/kotlin/com/dreamplayer/app/
   DreamSubtitleParserFactory.kt # SAMI/MicroDVD/MPL2/SubViewer parsers + default delegate
   FileBrowser.kt                # device storage browsing channel
   MainActivity.kt               # registers platform views + "Open with" intent handling
+ios/Runner/
+  AvPlayerView.swift            # AVPlayer platform view + channels (same contract as ExoPlayerView.kt)
+  FileBrowser.swift             # Documents-folder browsing channel (same contract as FileBrowser.kt)
+  IntentBridge.swift            # "Open with" intent channel (same contract as MainActivity.kt)
+  AppDelegate.swift             # registers the AVPlayer view factory + files/intent channels
+  SceneDelegate.swift           # forwards scene-opened URLs to IntentBridge
 test/
   widget_test.dart              # shell/navigation/overflow tests
   codec_info_test.dart          # HDR + codec formatting unit tests

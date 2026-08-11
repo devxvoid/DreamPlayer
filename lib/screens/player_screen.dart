@@ -92,7 +92,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   }
 
   Future<void> _init() async {
-    if (!Platform.isAndroid) {
+    if (!Platform.isAndroid && !Platform.isIOS) {
       if (mounted) {
         setState(() {
           _error = 'Playback is not yet supported on this platform.';
