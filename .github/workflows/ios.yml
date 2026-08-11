@@ -58,7 +58,7 @@ jobs:
 
       # --- Code signing (only runs once secrets are configured) ---
       - name: Import signing certificate
-        if: ${{ secrets.IOS_CERT_BASE64 != '' }}
+        if: ${{ env.CERT_BASE64 != '' }}
         env:
           CERT_BASE64: ${{ secrets.IOS_CERT_BASE64 }}
           CERT_PASSWORD: ${{ secrets.IOS_CERT_PASSWORD }}
@@ -73,7 +73,7 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN"
 
       - name: Install provisioning profile
-        if: ${{ secrets.IOS_PROFILE_BASE64 != '' }}
+        if: ${{ env.PROFILE_BASE64 != '' }}
         env:
           PROFILE_BASE64: ${{ secrets.IOS_PROFILE_BASE64 }}
         run: |
@@ -83,18 +83,26 @@ jobs:
              "$HOME/Library/MobileDevice/Provisioning Profiles/"
 
       - name: Build signed IPA
-        if: ${{ secrets.IOS_CERT_BASE64 != '' && secrets.IOS_PROFILE_BASE64 != '' }}
+        if: ${{ env.HAVE_CERT != '' && env.HAVE_PROFILE != '' }}
+        env:
+          HAVE_CERT: ${{ secrets.IOS_CERT_BASE64 }}
+          HAVE_PROFILE: ${{ secrets.IOS_PROFILE_BASE64 }}
         run: flutter build ipa --release
 
       - name: Upload signed IPA
-        if: ${{ secrets.IOS_CERT_BASE64 != '' && secrets.IOS_PROFILE_BASE64 != '' }}
+        if: ${{ env.HAVE_CERT != '' && env.HAVE_PROFILE != '' }}
+        env:
+          HAVE_CERT: ${{ secrets.IOS_CERT_BASE64 }}
+          HAVE_PROFILE: ${{ secrets.IOS_PROFILE_BASE64 }}
         uses: actions/upload-artifact@v4
         with:
           name: DreamPlayer.ipa
           path: build/ios/ipa/*.ipa
 
       - name: Upload to TestFlight
-        if: ${{ inputs.upload_testflight == true && secrets.APPSTORE_API_KEY != '' }}
+        if: ${{ inputs.upload_testflight == true && env.APPSTORE_KEY != '' }}
+        env:
+          APPSTORE_KEY: ${{ secrets.APPSTORE_API_KEY }}
         uses: apple-actions/upload-testflight-build@v1
         with:
           app-path: build/ios/ipa/*.ipa
