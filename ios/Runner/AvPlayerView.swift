@@ -68,7 +68,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         let mime: String?
         let channels: Int
         let bitrate: Int
-        let locale: Locale?
+        let languageTag: String?
     }
 
     init(messenger: FlutterBinaryMessenger, viewId: Int64) {
@@ -267,7 +267,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                     mime: codec.flatMap { Self.audioMime(forCodec: $0) },
                     channels: channels,
                     bitrate: Int(track.estimatedDataRate),
-                    locale: track.locale
+                    languageTag: track.extendedLanguageTag
                 ))
             }
             DispatchQueue.main.async {
@@ -329,8 +329,8 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     }
 
     private func audioInfo(for option: AVMediaSelectionOption) -> AudioTrackInfo? {
-        if let locale = option.locale,
-           let match = audioTrackInfos.first(where: { $0.locale == locale }) {
+        if let tag = option.extendedLanguageTag,
+           let match = audioTrackInfos.first(where: { $0.languageTag == tag }) {
             return match
         }
         return audioTrackInfos.first
