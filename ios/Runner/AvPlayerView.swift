@@ -138,7 +138,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
 
     // MARK: - FlutterPlatformView
 
-    var view: UIView { container }
+    func view() -> UIView { container }
 
     func dispose() {
         teardownAll()
@@ -238,7 +238,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         asset.loadTracks(withMediaType: .video) { [weak self] tracks, _ in
             DispatchQueue.main.async {
                 guard let self, let track = tracks?.first,
-                      let desc = track.formatDescriptions.first as? CMFormatDescription else { return }
+                      let desc = track.formatDescriptions.first as! CMFormatDescription? else { return }
                 self.videoCodecs = Self.fourCC(desc)
                 self.videoMime = "video/mp4"
                 if let transfer = CMFormatDescriptionGetExtension(
@@ -255,9 +255,9 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.audioTrackInfos = (tracks ?? []).map { track in
-                    let codec = (track.formatDescriptions.first as? CMFormatDescription).map(Self.fourCC)
-                    let channels = (track.formatDescriptions.first as? CMFormatDescription)
-                        .flatMap { desc in
+                    let codec = (track.formatDescriptions.first as! CMFormatDescription?).map(Self.fourCC)
+                    let channels = (track.formatDescriptions.first as! CMFormatDescription?)
+                        .flatMap { desc -> Int? in
                             guard let audio = desc as? CMAudioFormatDescription,
                                   let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(audio) else { return nil }
                             return Int(asbd.pointee.mChannelsPerFrame)
@@ -305,7 +305,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             let info = audioInfo(for: option)
             let isSelected = selectedOption === option
             if isSelected { selected = i }
-            tracks.append(trackMap(index: i, language: option.languageCode,
+            tracks.append(trackMap(index: i, language: primaryLanguageCode(for: option),
                                    label: option.displayName, info: info, selected: isSelected))
         }
         return (tracks, selected)
@@ -332,6 +332,13 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             return match
         }
         return audioTrackInfos.first
+    }
+
+    /// Primary ISO-639 code from the selection option's language tag, e.g.
+    /// "en-US" -> "en", so the Dart language-name map can look it up.
+    private func primaryLanguageCode(for option: AVMediaSelectionOption) -> String? {
+        let tag = option.extendedLanguageTag ?? option.locale?.identifier
+        return tag?.split(separator: "-").first.map(String.init)
     }
 
     private func selectedAudioInfo() -> AudioTrackInfo? {
@@ -364,7 +371,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             if isSelected { selected = i }
             tracks.append([
                 "index": i,
-                "language": option.languageCode ?? "",
+                "language": primaryLanguageCode(for: option) ?? "",
                 "label": option.displayName,
                 "codecs": "",
                 "mime": "",
@@ -544,7 +551,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         observers.forEach { $0.invalidate() }
         observers.removeAll()
         if let playerItem {
-            NotificationCenter.default.removeObserver(self, object: playerItem)
+            NotificationCenter.default.removeObserver(self, name: nil, object: playerItem)
         }
         playerItem = nil
     }
