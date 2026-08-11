@@ -57,12 +57,17 @@ A video player app supporting:
     `UIFileSharingEnabled`/`LSSupportsOpeningDocumentsInPlace` mean videos are
     dropped into the app via the Files app ("On My iPad → DreamPlayer") and
     played in-app. **iOS "Open with" works too** — `CFBundleDocumentTypes`
-    (video UTIs) puts DreamPlayer in the Files/share sheet, and
+    (system video UTIs) + **`UTImportedTypeDeclarations`** (custom UTIs mapping
+    `mkv`/`ts`/`m2ts`/`webm`/`wmv`/`flv`/`ogv`/`rmvb`/`mpg`/`vob`… to
+    `public.movie`, since iOS has no system UTI for those containers) put
+    DreamPlayer in the Files/share sheet for every container, and
     `ios/Runner/IntentBridge.swift` mirrors the Android `dreamplayer/intent`
     contract (`getInitialIntent` on launch via scene connection options /
     launch options; `open` from `application(_:open:options:)` +
     `scene(_:openURLContexts:)`, deduped). Security-scoped file URLs from the
-    Files app keep their access scope for the playback session.
+    Files app keep their access scope for the playback session. Opening a file
+    auto-plays it: the intent pushes `PlayerScreen`, whose `open()` runs with
+    `autoplay: true`.
 - **media_kit / libmpv fully REMOVED** from `pubspec.yaml`, `main.dart`,
   `player_screen.dart`, and the APK (no more `libmpv.so`/mediakit libs; only
   `libflutter.so` + `libmedia3ext.so` remain).
