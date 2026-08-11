@@ -27,26 +27,42 @@ A video player app supporting:
   before the platform view attaches is queued and flushed in `_attach`.
   **Gotcha fixed:** the backend must `setState` after creating the controller,
   or the buttons/video layer stay frozen in the pre-init state.
-- **iOS/iPad playback LANDS (2026-08)** via a native **AVPlayer** platform view
-  (`ios/Runner/AvPlayerView.swift`, `UiKitView` on the Dart side), mirroring the
-  Android ExoPlayer channel contract exactly — same `dreamplayer/exo_<id>`
-  method/event channels, same event map keys, so `ExoPlayerController` works
-  unchanged. AVPlayer renders onto its own Core Animation `AVPlayerLayer` (real
-  HDR/DV output where the panel supports it; iPad Pro M2 does). **Embedded**
-  audio/subtitle tracks are selectable via `AVMediaSelectionGroup`
-  (audible/legible) — the Audio tracks and CC pickers work. Sideloaded sidecar
-  subtitle files are Android-only for now. A Documents-folder file browser
-  (`ios/Runner/FileBrowser.swift`, same `dreamplayer/files` contract) plus
-  `UIFileSharingEnabled`/`LSSupportsOpeningDocumentsInPlace` mean videos are
-  dropped into the app via the Files app ("On My iPad → DreamPlayer") and
-  played in-app. **iOS "Open with" works too** — `CFBundleDocumentTypes`
-  (video UTIs) puts DreamPlayer in the Files/share sheet, and
-  `ios/Runner/IntentBridge.swift` mirrors the Android `dreamplayer/intent`
-  contract (`getInitialIntent` on launch via scene connection options /
-  launch options; `open` from `application(_:open:options:)` +
-  `scene(_:openURLContexts:)`, deduped). Security-scoped file URLs from the
-  Files app keep their access scope for the playback session. Not yet verified
-  on-device (no Mac locally; CI builds it).
+- **iOS/iPad playback via AetherEngine (2026-08)** — the raw **AVPlayer**
+  platform view was swapped for an **AetherEngine**-backed one
+  (`ios/Runner/AvPlayerView.swift`, `UiKitView` on the Dart side) behind the
+  exact same `dreamplayer/exo_<id>` method/event channel contract, so the Dart
+  `ExoPlayerController` is unchanged. AetherEngine adds what AVPlayer alone
+  cannot: **FFmpeg demux of MKV/TS/AVI/WebM**, **DTS/DTS-HD/TrueHD/E-AC3 audio**
+  (AudioToolbox + libavcodec), **Dolby Vision / HDR10(+) via the native AVPlayer
+  path** for Apple containers. `engine.bind(view:)` mounts `AetherPlayerView`
+  (own `AVPlayerLayer` → real HDR where the panel supports it; iPad Pro M2
+  does). Engine added as an SPM dependency (`project.pbxproj`, pinned
+  `upToNextMajorVersion` from 6.21.0) — Xcode auto-resolves FFmpegBuild's
+  dynamic FFmpeg xcframeworks into the app bundle. **CI-green** (run on commit
+  `82b3dd9`); **not yet verified on-device** (no Mac locally; CI builds it).
+  - Channel mapping: state 1/2/3/4 (idle/buffering/ready/ended); DV surfaces as
+    `dvhe.<profile>.06` so Dart's `dv`-prefix detection fires; `colorTransfer`
+    6 for HDR10/10+/DV, 7 for HLG. Audio/subtitle tracks pushed via
+    `currentTracks`; `selectAudioTrack`/`selectSubtitleTrack`/`clearSubtitle`
+    mapped 1:1 to engine calls.
+  - **Subtitles render host-side**: AetherEngine decodes cues into
+    `engine.$subtitleCues` and its `AetherPlayerView` does NOT paint them, so
+    `AvPlayerView` draws its own `SubtitleOverlayView` (text + PGS/DVB bitmap
+    cues positioned against the aspect-fit video rect; `zPosition = 1000` above
+    the re-attached video layer). Sibling sidecar files (SRT/ASS/VTT) auto-pair
+    as `ExternalSubtitleTrack`s (best filename match `isDefault`, id =
+    `externalSubtitleTrackIDBase` + ordinal) — like Android.
+  - A Documents-folder file browser (`ios/Runner/FileBrowser.swift`, same
+    `dreamplayer/files` contract) plus
+    `UIFileSharingEnabled`/`LSSupportsOpeningDocumentsInPlace` mean videos are
+    dropped into the app via the Files app ("On My iPad → DreamPlayer") and
+    played in-app. **iOS "Open with" works too** — `CFBundleDocumentTypes`
+    (video UTIs) puts DreamPlayer in the Files/share sheet, and
+    `ios/Runner/IntentBridge.swift` mirrors the Android `dreamplayer/intent`
+    contract (`getInitialIntent` on launch via scene connection options /
+    launch options; `open` from `application(_:open:options:)` +
+    `scene(_:openURLContexts:)`, deduped). Security-scoped file URLs from the
+    Files app keep their access scope for the playback session.
 - **media_kit / libmpv fully REMOVED** from `pubspec.yaml`, `main.dart`,
   `player_screen.dart`, and the APK (no more `libmpv.so`/mediakit libs; only
   `libflutter.so` + `libmedia3ext.so` remain).
@@ -65,7 +81,7 @@ A video player app supporting:
 |---|---|---|
 | Framework | Flutter (stable, 3.44.x) | Cross-platform, single codebase |
 | Playback engine (Android) | **ExoPlayer / Media3** (native, in PlatformView) | HDR/DV passthrough-capable; working (`c2.qti.dv.decoder`). |
-| Playback engine (iOS/iPad) | **AVPlayer** (native, in PlatformView) | `AvPlayerView.swift`, AVPlayerLayer (own Core Animation layer → HDR); embedded audio/subtitle track selection via media selection groups. Sidecar subtitle files are Android-only for now (AVPlayer has no sidecar-text API). |
+| Playback engine (iOS/iPad) | **AetherEngine** (native, in PlatformView) | `AvPlayerView.swift` + `AetherEngine` SPM dep; FFmpeg demux/decode + native AVPlayer path for DV/HDR; cues drawn by host `SubtitleOverlayView`. |
 | Android audio decode | Media3 `FFmpegAudioRenderer` (ffmpeg extension) | DTS, DTS-HD, E-AC3, AC3, TrueHD — same bundled-FFmpeg approach Nova uses. |
 | Reference architecture | **Nova Video Player** (`nova-video-player/aos-AVP`) | See "Playback research notes". |
 | ~~media_kit / libmpv~~ | **retired** | Cannot do Dolby Vision (no passthrough, no RPU). |
@@ -190,8 +206,8 @@ is the complete blueprint; the v1 was essentially done and only needed polish.
 3. *Playback*: direct streaming (no download) — Android = custom ExoPlayer `DataSource` over jcifs-ng seekable reads; iPad = `AVAssetResourceLoaderDelegate` serving bytes from the SMB stream; full seek; existing live HDR/codec chips unchanged; play-next-episode in folder; optional prefetch/cache-ahead setting + reconnect-on-drop/resume for high-bitrate files.
 4. *Extras*: auto-pair subtitles from same folder (`.srt`/`.ass`); pin recently-used servers on home screen; DNS/WINS hostname resolution for NAS names.
 - **Scope (v1)**: manual server add + Guest/basic auth + browse + stream + play-next. Add discovery + subtitles after.
-- **Status**: v1 core landed (Android): discovery, status dots, play-next-episode and subtitle auto-pair are implemented and the app is running on-device; the Nova-style read-ahead ring buffer is implemented but **not yet verified against a real NAS**. Remaining: **full NAS verify of streaming/seek + subtitles + play-next** (share browsing is verified), reconnect-on-drop/resume for high bitrates, and the iPad path (needs AVPlayer first).
-- **Note**: the AVPlayer path has landed (iPad plays local/Documents files); SMB-on-iPad still needs an SMB2 client on the Swift side (AMSMB2 / libsmb2).
+- **Status**: v1 core landed (Android): discovery, status dots, play-next-episode and subtitle auto-pair are implemented and the app is running on-device; the Nova-style read-ahead ring buffer is implemented but **not yet verified against a real NAS**. Remaining: **full NAS verify of streaming/seek + subtitles + play-next** (share browsing is verified), Reconnect-on-drop/resume for high bitrates, and the iPad path (needs an SMB2 client on the Swift side).
+- **Note**: the AetherEngine path has landed (iPad plays local/Documents files; CI-built); SMB-on-iPad still needs an SMB2 client on the Swift side (AMSMB2 / libsmb2).
 
 ## CI / Deployment
 
@@ -256,10 +272,10 @@ android/app/src/main/kotlin/com/dreamplayer/app/
   FileBrowser.kt                # device storage browsing channel
   MainActivity.kt               # registers platform views + "Open with" intent handling
 ios/Runner/
-  AvPlayerView.swift            # AVPlayer platform view + channels (same contract as ExoPlayerView.kt)
+  AvPlayerView.swift            # AetherEngine platform view + channels (same contract as ExoPlayerView.kt); host SubtitleOverlayView
   FileBrowser.swift             # Documents-folder browsing channel (same contract as FileBrowser.kt)
   IntentBridge.swift            # "Open with" intent channel (same contract as MainActivity.kt)
-  AppDelegate.swift             # registers the AVPlayer view factory + files/intent channels
+  AppDelegate.swift             # registers the AvPlayerView factory + files/intent channels
   SceneDelegate.swift           # forwards scene-opened URLs to IntentBridge
 test/
   widget_test.dart              # shell/navigation/overflow tests
