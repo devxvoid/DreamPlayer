@@ -1,4 +1,4 @@
-package com.example.dream_player
+package com.dreamplayer.app
 
 import android.content.Context
 import android.os.Handler
@@ -14,6 +14,7 @@ import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
@@ -81,11 +82,14 @@ class ExoPlayerView(
         }
     }
 
-    /// `smb://<serverId>/...` URIs stream through the SMB data source; every
-    /// other scheme (file, content, http) falls through to the default sources.
+    /// Base source for non-file/content schemes. `DefaultDataSource` handles
+    /// file/content/asset itself and delegates everything else (http, https,
+    /// rtsp, ...) here — e.g. file managers that stream SMB files to players
+    /// through a local HTTP proxy (CX Explorer hands out
+    /// `http://127.0.0.1:<port>/SMB/...`, verified 4K HEVC at 60 fps).
     private val dataSourceFactory = DefaultDataSource.Factory(
         context,
-        SmbDataSourceFactory(context),
+        DefaultHttpDataSource.Factory(),
     )
 
     private val mediaSourceFactory = DefaultMediaSourceFactory(context)
@@ -111,7 +115,7 @@ class ExoPlayerView(
     private val handler = Handler(Looper.getMainLooper())
     private var positionTicker: Runnable? = null
 
-    /// Auto-paired sideloaded subtitle: `(smb:// uri, display label)`.
+    /// Auto-paired sideloaded subtitle: `(uri, display label)`.
     private var currentSubtitle: Pair<String, String>? = null
     private var subtitleOn = false
 
@@ -239,6 +243,10 @@ class ExoPlayerView(
                 "setSubtitles" -> {
                     val on = call.argument<Boolean>("on") ?: true
                     setSubtitles(on)
+                    result.success(null)
+                }
+                "dispose" -> {
+                    stopPositionTicker()
                     result.success(null)
                 }
                 else -> result.notImplemented()
@@ -414,9 +422,9 @@ class ExoPlayerView(
     companion object {
         /// Start playback almost immediately (2s of media buffered is enough),
         /// resume quickly after a stall (5s), but keep topping the buffer up to
-        /// a big byte budget so the 96MB SMB read-ahead ring is fully usable.
-        /// Defaults are 2.5s/5s and an 8MB byte cap, which is too tight for 4K
-        /// REMUX over SMB.
+        /// a big byte budget so network streams (e.g. the CX HTTP proxy) stay
+        /// smooth. Defaults are 2.5s/5s and an 8MB byte cap, which is too tight
+        /// for 4K REMUX.
         private val loadControl: LoadControl =
             DefaultLoadControl.Builder()
                 .setBufferDurationsMs(60_000, 120_000, BUFFER_FOR_PLAYBACK_MS, BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS)

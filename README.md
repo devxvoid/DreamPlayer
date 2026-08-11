@@ -62,22 +62,18 @@ lib/
   services/
     display_refresh_rate.dart   # high refresh rate selection
     exo_player.dart             # ExoPlayerController + ExoPlayerView platform view
-    smb_client.dart             # SMB server/share models + channel wrapper
     file_browser.dart           # file-browser channel wrapper
     open_intent.dart            # "Open with" intent bridge
   screens/
     home_screen.dart            # library (empty state until scanning lands)
     player_screen.dart          # ExoPlayer playback + live chips + controls
-    smb_screen.dart             # SMB server list → shares → folders
     file_browser_screen.dart    # in-app device file browser
     settings_screen.dart        # settings
   widgets/
     video_card.dart             # library card with HDR/audio badges
     format_chip.dart            # colored codec/HDR chip
-android/app/src/main/kotlin/com/example/dream_player/
+android/app/src/main/kotlin/com/dreamplayer/app/
   ExoPlayerView.kt              # native PlayerView platform view + channels
-  SmbDataSource.kt              # ExoPlayer DataSource (SMB streaming + http proxy)
-  SMBClient.kt                  # SMB browsing/discovery/status + encrypted store
   FileBrowser.kt                # device storage browsing channel
   MainActivity.kt               # registers platform views + intent handling
 test/
@@ -90,7 +86,8 @@ test/
 - [x] Android playback via ExoPlayer/Media3 PlatformView
 - [x] Dolby Vision + lossless audio on-device (DV P8, E-AC3)
 - [x] Remove mpv/media_kit (cannot output Dolby Vision)
-- [x] SMB/LAN playback v1 (browse, stream, discovery, subtitles, play-next)
+- [x] SMB/LAN playback v1 (browse, stream, discovery, subtitles, play-next) — *removed from app; NAS files play via CX Explorer → "Open with"*
+- [ ] Re-add in-app SMB/LAN playback (deferred; blueprint in AGENTS.md)
 - [ ] iOS/iPad playback (AVPlayer)
 - [ ] MediaStore scanning for the library
 - [ ] Release build + Play Store / TestFlight distribution

@@ -197,16 +197,20 @@ class ExoPlayerController {
 
   Future<void> _send(String method, [Map<String, dynamic>? args]) {
     final channel = _method;
-    if (channel != null) {
-      try {
-        return channel.invokeMethod(method, args);
-      } catch (_) {
-        // Channel may be torn down during dispose; ignore.
-      }
+    if (channel == null) {
+      _pending.add((method, args));
       return Future<void>.value();
     }
-    _pending.add((method, args));
-    return Future<void>.value();
+    try {
+      // `MissingPluginException` is thrown on the returned future (not
+      // synchronously) when the platform view is torn down during dispose.
+      return channel.invokeMethod(method, args).catchError((Object _) {
+        // Channel may be torn down during dispose; ignore.
+      });
+    } catch (_) {
+      // Channel may be torn down during dispose; ignore.
+      return Future<void>.value();
+    }
   }
 
   Future<void> dispose() async {

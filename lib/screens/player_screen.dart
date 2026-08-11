@@ -24,8 +24,8 @@ class PlayerScreen extends StatefulWidget {
 
   final VideoItem video;
 
-  /// Optional ordered list of videos (e.g. the other videos in the same SMB
-  /// folder) for auto-advance to the next episode when one ends.
+  /// Optional ordered list of videos (e.g. the other videos in the same folder)
+  /// for auto-advance to the next episode when one ends.
   final List<VideoItem> playlist;
   final int playlistIndex;
 

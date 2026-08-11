@@ -1,4 +1,4 @@
-package com.example.dream_player
+package com.dreamplayer.app
 
 import android.content.Intent
 import android.net.Uri

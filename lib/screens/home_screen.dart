@@ -4,7 +4,6 @@ import '../models/video_item.dart';
 import '../widgets/video_card.dart';
 import 'file_browser_screen.dart';
 import 'player_screen.dart';
-import 'smb_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -33,17 +32,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 Navigator.of(context).push(
                   MaterialPageRoute<void>(
                     builder: (_) => const FileBrowserScreen(),
-                  ),
-                );
-              },
-            ),
-            IconButton(
-              tooltip: 'Network shares',
-              icon: const Icon(Icons.dns),
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const SmbScreen(),
                   ),
                 );
               },
@@ -144,8 +132,7 @@ class _EmptyLibrary extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'Browse files or connect to a network share '
-              'to play videos.',
+              'Browse files to play videos.',
               textAlign: TextAlign.center,
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: colorScheme.onSurfaceVariant,

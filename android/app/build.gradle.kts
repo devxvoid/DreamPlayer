@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.dream_player"
+    namespace = "com.dreamplayer.app"
     compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
@@ -15,8 +15,7 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.dream_player"
+        applicationId = "com.dreamplayer.app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
@@ -51,11 +50,4 @@ dependencies {
     // Prebuilt Media3 FFmpeg extension (GPLv3): software decode for
     // DTS/DTS-HD, TrueHD/MLP, E-AC3, AC3 where MediaCodec has no decoder.
     implementation("io.github.anilbeesetti:nextlib-media3ext:1.10.1-0.13.0")
-    // SMB2/3 client for LAN/NAS streaming (browse + playback data source).
-    // jcifs-ng: Nova's choice, SMB2/3 credit-based pipelining + configurable
-    // large reads — measurably faster than smbj on NAS (CX File Explorer,
-    // which also uses jcifs-ng, hits ~75 MB/s where smbj gave us ~4-6 MB/s).
-    implementation("eu.agno3.jcifs:jcifs-ng:2.1.10")
-    // jcifs-ng logs through slf4j; a NOP binding keeps logcat clean.
-    implementation("org.slf4j:slf4j-nop:1.7.36")
 }

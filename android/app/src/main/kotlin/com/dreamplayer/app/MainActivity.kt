@@ -1,4 +1,4 @@
-package com.example.dream_player
+package com.dreamplayer.app
 
 import android.content.Intent
 import android.net.Uri
@@ -19,9 +19,6 @@ class MainActivity : FlutterActivity() {
         )
         FileBrowser(this).configure(
             MethodChannel(flutterEngine.dartExecutor.binaryMessenger, FileBrowser.CHANNEL),
-        )
-        SMBClient(this).configure(
-            MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SMBClient.CHANNEL),
         )
         intentChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
