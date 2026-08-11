@@ -252,25 +252,27 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         }
 
         asset.loadTracks(withMediaType: .audio) { [weak self] tracks, _ in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.audioTrackInfos = (tracks ?? []).map { track in
-                    let codec = (track.formatDescriptions.first as! CMFormatDescription?).map(Self.fourCC)
-                    let channels = (track.formatDescriptions.first as! CMFormatDescription?)
-                        .flatMap { desc -> Int? in
-                            guard let audio = desc as? CMAudioFormatDescription,
-                                  let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(audio) else { return nil }
-                            return Int(asbd.pointee.mChannelsPerFrame)
-                        } ?? 0
-                    return AudioTrackInfo(
-                        codecs: codec,
-                        mime: codec.flatMap(Self.audioMime(forCodec:)),
-                        channels: channels,
-                        bitrate: Int(track.estimatedDataRate),
-                        locale: track.locale
-                    )
+            var infos: [AudioTrackInfo] = []
+            for track in tracks ?? [] {
+                let desc = track.formatDescriptions.first as! CMFormatDescription?
+                let codec = desc.map { Self.fourCC($0) }
+                var channels = 0
+                if let desc,
+                   let audio = desc as? CMAudioFormatDescription,
+                   let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(audio) {
+                    channels = Int(asbd.pointee.mChannelsPerFrame)
                 }
-                self.emit()
+                infos.append(AudioTrackInfo(
+                    codecs: codec,
+                    mime: codec.flatMap { Self.audioMime(forCodec: $0) },
+                    channels: channels,
+                    bitrate: Int(track.estimatedDataRate),
+                    locale: track.locale
+                ))
+            }
+            DispatchQueue.main.async {
+                self?.audioTrackInfos = infos
+                self?.emit()
             }
         }
 
@@ -298,7 +300,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             }
             return ([], -1)
         }
-        let selectedOption = selection.selectedOption(in: group)
+        let selectedOption = selection.selectedMediaOption(in: group)
         var tracks: [[String: Any]] = []
         var selected = -1
         for (i, option) in group.options.enumerated() {
@@ -344,7 +346,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     private func selectedAudioInfo() -> AudioTrackInfo? {
         guard let group = audibleGroup,
               let selection = player.currentItem?.currentMediaSelection,
-              let option = selection.selectedOption(in: group) else {
+              let option = selection.selectedMediaOption(in: group) else {
             return audioTrackInfos.first
         }
         return audioInfo(for: option)
@@ -353,9 +355,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     private func selectAudioTrack(_ index: Int) {
         guard let group = audibleGroup, let item = player.currentItem,
               index >= 0, index < group.options.count else { return }
-        let params = AVMutableMediaSelection()
-        params.select(group.options[index], in: group)
-        item.select(params)
+        item.select(group.options[index], in: group)
         emit()
     }
 
@@ -363,7 +363,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         guard let group = legibleGroup, let selection = player.currentItem?.currentMediaSelection else {
             return ([], -1)
         }
-        let selectedOption = selection.selectedOption(in: group)
+        let selectedOption = selection.selectedMediaOption(in: group)
         var tracks: [[String: Any]] = []
         var selected = -1
         for (i, option) in group.options.enumerated() {
@@ -384,30 +384,26 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
 
     private func setSubtitles(_ on: Bool) {
         guard let group = legibleGroup, let item = player.currentItem else { return }
-        let params = AVMutableMediaSelection()
         if on {
-            if let current = item.currentMediaSelection.selectedOption(in: group) {
-                params.select(current, in: group)
+            if let current = item.currentMediaSelection.selectedMediaOption(in: group) {
+                item.select(current, in: group)
             } else if let first = group.options.first {
-                params.select(first, in: group)
+                item.select(first, in: group)
             }
         } else {
-            params.select(nil, in: group)
+            item.select(nil, in: group)
         }
-        item.select(params)
         subtitleOn = on
         emit()
     }
 
     private func selectSubtitleTrack(_ index: Int) {
         guard let group = legibleGroup, let item = player.currentItem else { return }
-        let params = AVMutableMediaSelection()
         if index >= 0, index < group.options.count {
-            params.select(group.options[index], in: group)
+            item.select(group.options[index], in: group)
         } else {
-            params.select(nil, in: group)
+            item.select(nil, in: group)
         }
-        item.select(params)
         subtitleOn = index >= 0
         emit()
     }
