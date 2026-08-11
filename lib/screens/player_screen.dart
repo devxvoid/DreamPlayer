@@ -69,8 +69,9 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   List<ExoAudioTrack> _audioTracks = const [];
   int _selectedAudioTrackIndex = -1;
 
-  String? _subtitleLabel;
   bool _subtitleOn = false;
+  List<ExoSubtitleTrack> _subtitleTracks = const [];
+  int _selectedSubtitleTrack = -1;
 
   bool get _backendReady => _exo != null;
 
@@ -151,8 +152,9 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       _liveAudioChannelCount = null;
       _liveResolution = null;
       _liveHdr = HdrFormat.sdr;
-      _subtitleLabel = null;
       _subtitleOn = false;
+      _subtitleTracks = const [];
+      _selectedSubtitleTrack = -1;
     });
     _showControls();
     await _openCurrent();
@@ -167,8 +169,9 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     _buffering = e.buffering;
     _completed = e.ended;
     if (e.error != null && e.error!.isNotEmpty) _error = e.error;
-    _subtitleLabel = e.subtitleLabel;
     _subtitleOn = e.subtitleOn;
+    _subtitleTracks = e.subtitleTracks;
+    _selectedSubtitleTrack = e.selectedSubtitleTrack;
     if (e.videoCodecs != null && e.videoCodecs!.isNotEmpty) {
       _liveVideoCodecRaw = e.videoCodecs;
       _liveVideoCodec = formatVideoCodec(e.videoCodecs);
@@ -369,72 +372,95 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     }
   }
 
-  /// Subtitle on/off sheet for the auto-paired subtitle (v1 pairs a single
-  /// `.srt`/`.ass` from the same folder, so it's a simple toggle).
+  String _subtitleTrackLabel(ExoSubtitleTrack t) {
+    final label = t.label?.trim();
+    final format = formatSubtitle(t.mime, t.codecs);
+    if (label != null && label.isNotEmpty) {
+      // Embedded tracks may share a container label (`English / 4kHdHub.com`);
+      // sideloaded siblings share a filename base (`House.S02E04`) across
+      // formats. Append the format so every track reads uniquely.
+      return '$label · $format';
+    }
+    final lang = languageName(t.language);
+    return lang.isNotEmpty ? '$lang · $format' : format;
+  }
+
+  /// Subtitle picker: lists every subtitle track (embedded container tracks
+  /// plus auto-paired sidecar files) plus an Off option.
   Future<void> _openSubtitleSheet() async {
     _showControls();
-    final label = _subtitleLabel;
-    if (label == null || label.isEmpty) {
+    final tracks = _subtitleTracks;
+    if (tracks.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No subtitles found next to this video')),
+        const SnackBar(content: Text('No subtitles found in this video')),
       );
       return;
     }
-    final choice = await showModalBottomSheet<bool>(
+    final selected = _selectedSubtitleTrack;
+    final choice = await showModalBottomSheet<int>(
       context: context,
       backgroundColor: const Color(0xFF1C1C1E),
       builder: (sheetContext) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(20, 16, 20, 4),
-              child: Text(
-                'Subtitles',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.6,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 16, 20, 4),
+                child: Text(
+                  'Subtitles',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
-            ),
-            ListTile(
-              leading: Icon(
-                _subtitleOn
-                    ? Icons.radio_button_checked
-                    : Icons.radio_button_off,
-                color: _subtitleOn ? Colors.white : Colors.white54,
+              ListTile(
+                leading: Icon(
+                  selected < 0 ? Icons.radio_button_checked : Icons.radio_button_off,
+                  color: selected < 0 ? Colors.white : Colors.white54,
+                ),
+                title: const Text(
+                  'Off',
+                  style: TextStyle(color: Colors.white),
+                ),
+                onTap: () => Navigator.of(context).pop(-1),
               ),
-              title: const Text(
-                'Off',
-                style: TextStyle(color: Colors.white),
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: tracks.length,
+                  itemBuilder: (context, i) {
+                    final t = tracks[i];
+                    final isSelected = t.index == selected;
+                    return ListTile(
+                      leading: Icon(
+                        isSelected
+                            ? Icons.radio_button_checked
+                            : Icons.radio_button_off,
+                        color: isSelected ? Colors.white : Colors.white54,
+                      ),
+                      title: Text(
+                        _subtitleTrackLabel(t),
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      onTap: () => Navigator.of(context).pop(t.index),
+                    );
+                  },
+                ),
               ),
-              onTap: () => Navigator.of(context).pop(false),
-            ),
-            ListTile(
-              leading: Icon(
-                _subtitleOn
-                    ? Icons.radio_button_checked
-                    : Icons.radio_button_off,
-                color: _subtitleOn ? Colors.white : Colors.white54,
-              ),
-              title: Text(
-                label,
-                style: const TextStyle(color: Colors.white),
-              ),
-              subtitle: const Text(
-                'Paired from the same folder',
-                style: TextStyle(color: Colors.white54),
-              ),
-              onTap: () => Navigator.of(context).pop(true),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
-    if (choice != null && choice != _subtitleOn) {
-      _exo?.setSubtitles(choice);
+    if (choice != null && choice != selected) {
+      _exo?.selectSubtitleTrack(choice);
     }
   }
 

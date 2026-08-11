@@ -49,6 +49,52 @@ class ExoAudioTrack {
   }
 }
 
+/// A single subtitle track exposed by the native ExoPlayer, for the subtitle
+/// picker. Covers both embedded container tracks (PGS, SRT-in-MKV, ...) and
+/// sideloaded sidecar files.
+@immutable
+class ExoSubtitleTrack {
+  const ExoSubtitleTrack({
+    required this.index,
+    this.language,
+    this.label,
+    this.codecs,
+    this.mime,
+    this.sideloaded = false,
+    this.selected = false,
+  });
+
+  /// Flat index; the value to pass to [ExoPlayerController.selectSubtitleTrack].
+  final int index;
+
+  /// ISO-639 language code (e.g. `eng`).
+  final String? language;
+
+  /// Track name: the container-provided label, or the sidecar file's base
+  /// name (e.g. `Show.S01E01.eng`). Empty when unnamed.
+  final String? label;
+
+  /// Codec string (e.g. `application/x-subrip`, `hdmv.pgs`). For sideloaded
+  /// tracks this is the sidecar's original MIME type.
+  final String? codecs;
+  final String? mime;
+  final bool sideloaded;
+  final bool selected;
+
+  factory ExoSubtitleTrack.fromMap(Map<dynamic, dynamic> m) {
+    int asInt(dynamic v) => v is num ? v.toInt() : 0;
+    return ExoSubtitleTrack(
+      index: asInt(m['index']),
+      language: m['language'] as String?,
+      label: m['label'] as String?,
+      codecs: m['codecs'] as String?,
+      mime: m['mime'] as String?,
+      sideloaded: m['sideloaded'] == true,
+      selected: m['selected'] == true,
+    );
+  }
+}
+
 /// Snapshot of playback state pushed from the native ExoPlayer platform view.
 @immutable
 class ExoPlayerEvent {
@@ -70,7 +116,10 @@ class ExoPlayerEvent {
     this.audioTracks = const [],
     this.selectedAudioTrack = -1,
     this.subtitleLabel,
+    this.subtitleFormat,
     this.subtitleOn = false,
+    this.subtitleTracks = const [],
+    this.selectedSubtitleTrack = -1,
     this.error,
   });
 
@@ -94,7 +143,14 @@ class ExoPlayerEvent {
   /// Auto-paired sideloaded subtitle, e.g. `Show.S01E01.eng` (null when the
   /// video has no paired subtitle file).
   final String? subtitleLabel;
+
+  /// Subtitle file format name (e.g. `SRT`, `SSA/ASS`, `SAMI`, `MicroDVD`).
+  final String? subtitleFormat;
   final bool subtitleOn;
+
+  /// All subtitle tracks (embedded + sideloaded) exposed by the player.
+  final List<ExoSubtitleTrack> subtitleTracks;
+  final int selectedSubtitleTrack;
   final String? error;
 
   Duration get position => Duration(milliseconds: positionMs);
@@ -124,7 +180,12 @@ class ExoPlayerEvent {
           .toList(),
       selectedAudioTrack: asInt(m['selectedAudioTrack'], -1),
       subtitleLabel: m['subtitleLabel'] as String?,
+      subtitleFormat: m['subtitleFormat'] as String?,
       subtitleOn: m['subtitleOn'] == true,
+      subtitleTracks: (m['subtitleTracks'] as List? ?? const [])
+          .map((e) => ExoSubtitleTrack.fromMap(e as Map<dynamic, dynamic>))
+          .toList(),
+      selectedSubtitleTrack: asInt(m['selectedSubtitleTrack'], -1),
       error: m['error'] as String?,
     );
   }
@@ -173,6 +234,7 @@ class ExoPlayerController {
   }) =>
       _send('open', {
         if (uri != null && uri.isNotEmpty) 'uri': uri else 'path': path,
+        if (path.isNotEmpty) 'path': path,
         if (subtitleUri != null && subtitleUri.isNotEmpty)
           'subtitleUri': subtitleUri,
       });
@@ -192,6 +254,9 @@ class ExoPlayerController {
       _send('setAudioTrack', {'index': index});
 
   Future<void> setSubtitles(bool on) => _send('setSubtitles', {'on': on});
+
+  Future<void> selectSubtitleTrack(int index) =>
+      _send('setSubtitleTrack', {'index': index});
 
   Future<void> disposeNative() => _send('dispose');
 

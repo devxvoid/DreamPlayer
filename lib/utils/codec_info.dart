@@ -143,6 +143,41 @@ String formatMedia3Audio(String? mime, String? codecs) {
   return 'Unknown';
 }
 
+/// Maps a subtitle track's MIME / codecs string to a display label.
+///
+/// Sideloaded sidecar tracks carry their original MIME in the codecs field
+/// (Media3 repackages them as `application/x-media3-cues` samples); embedded
+/// container tracks use the raw subtitle MIME (`application/pgs`, ...).
+String formatSubtitle(String? mime, String? codecs) {
+  final m = (mime ?? '').toLowerCase();
+  final c = (codecs ?? '').toLowerCase();
+  const map = {
+    'application/x-subrip': 'SRT',
+    'text/x-ssa': 'SSA/ASS',
+    'text/vtt': 'WebVTT',
+    'application/x-mp4vtt': 'WebVTT',
+    'application/ttml+xml': 'TTML',
+    'application/x-sami': 'SAMI',
+    'application/x-microdvd': 'MicroDVD',
+    'application/x-mpl2': 'MPL2',
+    'application/pgs': 'PGS',
+    'application/vobsub': 'VobSub',
+    'application/dvb': 'DVB',
+    'application/x-quicktime-tx3g': 'TX3G',
+    'application/cea-608': 'CEA-608',
+    'application/cea-708': 'CEA-708',
+  };
+  final viaCodecs = map[c];
+  if (viaCodecs != null) return viaCodecs;
+  final viaMime = map[m];
+  if (viaMime != null) return viaMime;
+
+  if (c.startsWith('application/x-media3-cues')) return 'Subtitle';
+  if (c.contains('pgs')) return 'PGS';
+  if (c.isNotEmpty) return c.toUpperCase();
+  return 'Subtitle';
+}
+
 /// Live HDR detection from Media3 track info.
 ///
 /// Dolby Vision is signaled by the codec prefix (`dvhe`/`dvh1`); otherwise the

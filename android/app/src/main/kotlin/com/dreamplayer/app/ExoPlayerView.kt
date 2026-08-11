@@ -21,6 +21,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.LoadControl
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.ui.PlayerView
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
@@ -31,7 +32,6 @@ import io.flutter.plugin.platform.PlatformView
 import io.flutter.plugin.platform.PlatformViewFactory
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
 import java.io.File
-import java.util.Locale
 
 @UnstableApi
 class ExoPlayerViewFactory(private val messenger: BinaryMessenger) :
@@ -92,8 +92,13 @@ class ExoPlayerView(
         DefaultHttpDataSource.Factory(),
     )
 
-    private val mediaSourceFactory = DefaultMediaSourceFactory(context)
-        .setDataSourceFactory(dataSourceFactory)
+    private val subtitleParserFactory = DreamSubtitleParserFactory()
+
+    private val mediaSourceFactory = DefaultMediaSourceFactory(
+        dataSourceFactory,
+        DefaultExtractorsFactory().setSubtitleParserFactory(subtitleParserFactory),
+        subtitleParserFactory,
+    )
 
     private val player: ExoPlayer = ExoPlayer.Builder(context)
         .setMediaSourceFactory(mediaSourceFactory)
@@ -186,17 +191,43 @@ class ExoPlayerView(
                             }
                         }
                         .apply {
-                            if (!subtitleUri.isNullOrEmpty()) {
-                                currentSubtitle = subtitleUri to subtitleLabel(subtitleUri)
+                            // Auto-pair sibling subtitles next to the video
+                            // (Just Player's `findSubtitle` rule, keeping every
+                            // candidate so the picker can choose a language /
+                            // format). An explicitly passed subtitle is still
+                            // preferred over sibling pairing.
+                            val paired: List<File> = if (subtitleUri.isNullOrEmpty() && path != null) {
+                                SubtitleFormats.findSiblingSubtitles(path)
+                            } else {
+                                emptyList()
+                            }
+                            val candidates = if (subtitleUri.isNullOrEmpty()) {
+                                paired
+                            } else {
+                                listOf(File(subtitleUri))
+                            }
+                            if (candidates.isNotEmpty()) {
+                                currentSubtitle = candidates.first().absolutePath to
+                                    SubtitleFormats.labelFromFileName(candidates.first().name)
                                 setSubtitleConfigurations(
-                                    listOf(
-                                        MediaItem.SubtitleConfiguration.Builder(
-                                            android.net.Uri.parse(subtitleUri),
-                                        )
-                                            .setMimeType(subtitleMimeType(subtitleUri))
-                                            .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
-                                            .build(),
-                                    ),
+                                    candidates.mapIndexed { i, sub ->
+                                        val originalUri = android.net.Uri.fromFile(sub)
+                                        // Media3's parsers decode UTF-8 only;
+                                        // re-encode CP1252/CP1251 etc. to UTF-8.
+                                        val utf8Uri = SubtitleFormats.toUtf8(context, originalUri)
+                                        val name = sub.name
+                                        val language = SubtitleFormats.languageFromFileName(name)
+                                        MediaItem.SubtitleConfiguration.Builder(utf8Uri)
+                                            .setMimeType(SubtitleFormats.mimeTypeFor(name))
+                                            .setLanguage(language)
+                                            .setRoleFlags(C.ROLE_FLAG_SUBTITLE)
+                                            .setLabel(SubtitleFormats.labelFromFileName(name))
+                                            // First (best) match is default-selected.
+                                            .setSelectionFlags(
+                                                if (i == 0) C.SELECTION_FLAG_DEFAULT else 0,
+                                            )
+                                            .build()
+                                    },
                                 )
                             } else {
                                 currentSubtitle = null
@@ -243,6 +274,14 @@ class ExoPlayerView(
                 "setSubtitles" -> {
                     val on = call.argument<Boolean>("on") ?: true
                     setSubtitles(on)
+                    result.success(null)
+                }
+                "getSubtitleTracks" -> {
+                    result.success(buildSubtitleTracks())
+                }
+                "setSubtitleTrack" -> {
+                    val index = call.argument<Number>("index")?.toInt() ?: -1
+                    selectSubtitleTrack(index)
                     result.success(null)
                 }
                 "dispose" -> {
@@ -339,11 +378,10 @@ class ExoPlayerView(
         player.setTrackSelectionParameters(params)
     }
 
-    /// Turns the sideloaded subtitle track on/off. Media3 sideloaded subtitles
-    /// surface as a text track group; off disables all text, on selects the
-    /// first text group (v1 pairs a single subtitle per video).
+    /// Turns text (subtitle) rendering on/off. Works for both embedded
+    /// container tracks (PGS/DVB/CEA/SRT in MKV/MP4) and sideloaded sidecar
+    /// subtitles — Media3 surfaces both as text track groups.
     private fun setSubtitles(on: Boolean) {
-        if (currentSubtitle == null) return
         subtitleOn = on
         val builder = player.trackSelectionParameters.buildUpon()
         if (on) {
@@ -361,20 +399,74 @@ class ExoPlayerView(
         player.setTrackSelectionParameters(builder.build())
     }
 
-    /// `srt`/`sub`/`smi` -> subrip MIME (ExoPlayer's SRT parser handles it);
-    /// `ass`/`ssa` -> SSA; `vtt` -> WebVTT.
-    private fun subtitleMimeType(uri: String): String {
-        val ext = uri.substringAfterLast('.').lowercase(Locale.ROOT)
-        return when (ext) {
-            "ass", "ssa" -> "text/x-ssa"
-            "vtt" -> "text/vtt"
-            else -> MimeTypes.APPLICATION_SUBRIP
+    /// Flat list of the current subtitle tracks (embedded + sideloaded), one
+    /// entry per format, for the subtitle picker. `index` is the flat index
+    /// used by [selectSubtitleTrack].
+    private fun buildSubtitleTracks(): List<Map<String, Any?>> {
+        val out = mutableListOf<Map<String, Any?>>()
+        var flat = 0
+        for (group in player.currentTracks.groups) {
+            if (group.type != C.TRACK_TYPE_TEXT || !group.isSupported) continue
+            val trackGroup = group.mediaTrackGroup
+            for (i in 0 until trackGroup.length) {
+                val f = trackGroup.getFormat(i)
+                val map = HashMap<String, Any?>()
+                map["index"] = flat
+                map["language"] = f.language
+                map["label"] = f.label
+                map["codecs"] = f.codecs
+                map["mime"] = f.sampleMimeType
+                map["sideloaded"] = MimeTypes.APPLICATION_MEDIA3_CUES == f.sampleMimeType
+                map["selected"] = group.isSelected
+                out.add(map)
+                flat++
+            }
         }
+        return out
     }
 
-    /// e.g. `Show.S01E01.eng.srt` -> `Show.S01E01.eng`.
-    private fun subtitleLabel(uri: String): String =
-        uri.substringAfterLast('/').substringBeforeLast('.').ifEmpty { uri }
+    /// Selects the subtitle track at [flatIndex]; -1 turns subtitles off.
+    private fun selectSubtitleTrack(flatIndex: Int) {
+        val builder = player.trackSelectionParameters.buildUpon()
+        if (flatIndex < 0) {
+            builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+            subtitleOn = false
+            player.setTrackSelectionParameters(builder.build())
+            return
+        }
+        var flat = 0
+        var override: TrackSelectionOverride? = null
+        for (group in player.currentTracks.groups) {
+            if (group.type != C.TRACK_TYPE_TEXT || !group.isSupported) continue
+            val trackGroup = group.mediaTrackGroup
+            for (i in 0 until trackGroup.length) {
+                if (flat == flatIndex) {
+                    override = TrackSelectionOverride(trackGroup, i)
+                }
+                flat++
+            }
+        }
+        if (override == null) return
+        builder
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+            .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+            .setOverrideForType(override)
+        subtitleOn = true
+        player.setTrackSelectionParameters(builder.build())
+    }
+
+    /// Display name of the sideloaded subtitle format, for the chip / sheet.
+    private fun subtitleFormat(uri: String): String {
+        return when (SubtitleFormats.mimeTypeFor(uri)) {
+            MimeTypes.TEXT_SSA -> "SSA/ASS"
+            MimeTypes.TEXT_VTT -> "WebVTT"
+            MimeTypes.APPLICATION_TTML -> "TTML"
+            SubtitleFormats.MIME_SAMI -> "SAMI"
+            SubtitleFormats.MIME_MICRODVD -> "MicroDVD"
+            SubtitleFormats.MIME_MPL2 -> "MPL2"
+            else -> "SRT"
+        }
+    }
 
     private fun emit(errorCodeName: String? = null) {
         val s = sink ?: return
@@ -403,7 +495,15 @@ class ExoPlayerView(
         map["selectedAudioTrack"] =
             audioTracks.indexOfFirst { it["selected"] == true }
         map["subtitleLabel"] = currentSubtitle?.second
+        map["subtitleFormat"] = currentSubtitle?.let { subtitleFormat(it.first) }
+        val subtitleTracks = buildSubtitleTracks()
+        val selectedSubtitle = subtitleTracks.indexOfFirst { it["selected"] == true }
+        // Keep the manual toggle and the real selection in sync: the CC button
+        // reflects whether a text track is actually selected.
+        subtitleOn = selectedSubtitle >= 0
         map["subtitleOn"] = subtitleOn
+        map["subtitleTracks"] = subtitleTracks
+        map["selectedSubtitleTrack"] = selectedSubtitle
         map["error"] = errorCodeName
         s.success(map)
     }
