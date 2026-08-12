@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:dream_player/app.dart';
 import 'package:dream_player/models/video_item.dart';
+import 'package:dream_player/screens/file_browser_screen.dart';
 import 'package:dream_player/screens/player_screen.dart';
 import 'package:dream_player/widgets/format_chip.dart';
 
@@ -90,5 +92,90 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('File browser back button goes up one folder at a time', (
+    tester,
+  ) async {
+    const channel = MethodChannel('dreamplayer/files');
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      channel,
+      (call) async {
+        switch (call.method) {
+          case 'hasAllFilesAccess':
+            return true;
+          case 'getStorageRoots':
+            return [
+              {
+                'name': 'Internal storage',
+                'path': '/storage/emulated/0',
+                'isDirectory': true,
+                'size': 0,
+              },
+            ];
+          case 'listDirectory':
+            Map<String, dynamic> dir(String name, String path) => {
+                  'name': name,
+                  'path': path,
+                  'isDirectory': true,
+                  'size': 0,
+                };
+            return switch (call.arguments['path'] as String) {
+              '/storage/emulated/0' =>
+                [dir('Download', '/storage/emulated/0/Download')],
+              '/storage/emulated/0/Download' =>
+                [dir('Movies', '/storage/emulated/0/Download/Movies')],
+              _ => <Map<String, dynamic>>[],
+            };
+          default:
+            return null;
+        }
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        channel,
+        null,
+      ),
+    );
+
+    await tester.pumpWidget(const MaterialApp(home: FileBrowserScreen()));
+    await tester.pumpAndSettle();
+
+    // Roots list.
+    expect(find.text('Browse files'), findsOneWidget);
+    expect(find.text('Internal storage'), findsOneWidget);
+
+    // Enter internal storage -> Download listing.
+    await tester.tap(find.text('Internal storage'));
+    await tester.pumpAndSettle();
+    expect(find.text('Download'), findsOneWidget);
+
+    // Enter Download -> Movies listing.
+    await tester.tap(find.text('Download'));
+    await tester.pumpAndSettle();
+    expect(find.text('Movies'), findsOneWidget);
+
+    // Enter Movies -> empty folder.
+    await tester.tap(find.text('Movies'));
+    await tester.pumpAndSettle();
+
+    // Back -> Download listing (parent of Movies is a plain folder).
+    await tester.tap(find.byTooltip('Up'));
+    await tester.pumpAndSettle();
+    expect(find.text('Movies'), findsOneWidget);
+
+    // Back -> internal storage contents (parent of Download IS the root):
+    // must NOT skip to the 'Browse files' roots list.
+    await tester.tap(find.byTooltip('Up'));
+    await tester.pumpAndSettle();
+    expect(find.text('Browse files'), findsNothing);
+    expect(find.text('Download'), findsOneWidget);
+    expect(find.text('Internal storage'), findsNothing);
+
+    // Back -> roots list.
+    await tester.tap(find.byTooltip('Up'));
+    await tester.pumpAndSettle();
+    expect(find.text('Browse files'), findsOneWidget);
   });
 }

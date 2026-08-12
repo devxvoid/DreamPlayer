@@ -127,9 +127,8 @@ class _FileBrowserScreenState extends State<FileBrowserScreen>
     }
     final rootPaths = _roots.map((r) => r.path).toSet();
     final parent = _parentOf(_currentPath);
-    if (rootPaths.contains(_currentPath) ||
-        parent == null ||
-        rootPaths.contains(parent)) {
+    // Currently viewing a root's contents: back to the roots list.
+    if (rootPaths.contains(_currentPath) || parent == null) {
       setState(() {
         _currentPath = null;
         _entries = _roots;
@@ -137,6 +136,8 @@ class _FileBrowserScreenState extends State<FileBrowserScreen>
       });
       return;
     }
+    // One level up. When the parent is itself a root, still show its contents
+    // (the page you came from) rather than skipping to the roots list.
     setState(() => _loading = true);
     await _load(parent);
   }
