@@ -90,7 +90,7 @@ final class BufferedSMBReader: IOReader, @unchecked Sendable {
             _ = serveIfResident(into: buffer, max: Int(size))
         }
         cond.unlock()
-        return lastServed
+        return Int32(lastServed)
     }
 
     private var lastServed = 0
