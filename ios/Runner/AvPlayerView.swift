@@ -1,5 +1,6 @@
 import AVFoundation
 import AetherEngine
+import AetherEngineSMB
 import Combine
 import Flutter
 import UIKit
@@ -126,7 +127,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     private var isMuted = false
 
     // ---- Last-opened source (needed to reload when the engine parks in .ended). ----
-    private var lastURL: URL?
+    private var lastSource: MediaSource?
     private var lastLoadOptions = LoadOptions()
 
     init(messenger: FlutterBinaryMessenger, viewId: Int64, frame: CGRect) {
@@ -288,11 +289,28 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         let subtitleUri = args?["subtitleUri"] as? String
         let startMs = (args?["startPositionMs"] as? NSNumber)?.int64Value ?? 0
 
-        let url: URL
+        // SMB streams arrive as `dreamplayersmb://<token>.<ext>` (see
+        // SMBClient.openShare): resolve the token to the live SMBConnection
+        // and load it as a custom IOReader source. AetherEngine's FFmpeg has no
+        // network stack, so a loopback HTTP bridge is the wrong shape — this is
+        // the engine's native SMB path (AetherEngineSMB).
+        var source: MediaSource?
+        var localURL: URL?
         if let path, !path.isEmpty {
-            url = URL(fileURLWithPath: path)
+            localURL = URL(fileURLWithPath: path)
+            source = .url(localURL!)
+        } else if let uri, let parsed = Self.smbToken(in: uri) {
+            guard let connection = SMBClient.shared.connection(for: parsed.token) else {
+                result(FlutterError(code: "smb_stream", message: "SMB stream token not found", details: nil))
+                return
+            }
+            source = .custom(
+                SMBIOReader(source: connection, discImageProbeEnabled: false),
+                formatHint: nil
+            )
         } else if let uri, let u = URL(string: uri) {
-            url = u
+            localURL = u
+            source = .url(u)
         } else {
             result(FlutterError(code: "bad_args", message: "Missing path or uri", details: nil))
             return
@@ -320,8 +338,8 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         if let subtitleUri, !subtitleUri.isEmpty, let sub = Self.url(for: subtitleUri) {
             externals.append(ExternalSubtitleTrack(url: sub, isDefault: true, formatHint: sub.pathExtension.lowercased()))
             pendingAutoSubtitleIndex = AetherEngine.externalSubtitleTrackIDBase + 0
-        } else if url.isFileURL {
-            externals = Self.siblingSubtitles(for: url)
+        } else if let localURL, localURL.isFileURL {
+            externals = Self.siblingSubtitles(for: localURL)
             if let best = externals.firstIndex(where: { $0.isDefault }) {
                 pendingAutoSubtitleIndex = AetherEngine.externalSubtitleTrackIDBase + best
             }
@@ -335,7 +353,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             externalSubtitles: externals,
             autoplay: true
         )
-        lastURL = url
+        lastSource = source
         lastLoadOptions = options
         // Resume: continue from the last watched position when the caller asks.
         let startPosition: Double? = startMs > 0 ? Double(startMs) / 1000.0 : nil
@@ -343,7 +361,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         Task { @MainActor [weak self] in
             guard let self, let engine = self.engine else { return }
             do {
-                let probe = try await engine.load(url: url, startPosition: startPosition, options: options)
+                let probe = try await engine.load(source: source!, startPosition: startPosition, options: options)
                 if let probe {
                     self.videoCodecName = probe.videoCodecName
                     self.videoWidth = Int(probe.videoWidth)
@@ -369,10 +387,10 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     /// `.ended` as terminal (seek/play are no-ops there), so a replay / scrubber
     /// pull-back after the end card reloads the session instead.
     private func reloadSession(at position: Double) async {
-        guard let engine, let lastURL else { return }
+        guard let engine, let lastSource else { return }
         let activeSub = engine.activeSubtitleTrackIndex
         do {
-            let probe = try await engine.load(url: lastURL, startPosition: position, options: lastLoadOptions)
+            let probe = try await engine.load(source: lastSource, startPosition: position, options: lastLoadOptions)
             if let probe {
                 videoCodecName = probe.videoCodecName
                 videoWidth = Int(probe.videoWidth)
@@ -607,6 +625,21 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     private static func url(for s: String) -> URL? {
         if s.hasPrefix("/") { return URL(fileURLWithPath: s) }
         return URL(string: s)
+    }
+
+    /// `dreamplayersmb://<token>.<ext>` -> (token, ext). nil when the URI is not
+    /// an SMB stream URL. Token/ext parsed by string so URL quirks (empty path)
+    /// can't break resolution; the extension is informational only (the custom
+    /// source is probed, not format-hinted).
+    private static func smbToken(in uri: String) -> (token: String, ext: String)? {
+        let prefix = "dreamplayersmb://"
+        guard uri.hasPrefix(prefix) else { return nil }
+        let rest = String(uri.dropFirst(prefix.count))
+        guard !rest.isEmpty else { return nil }
+        let token = (rest as NSString).deletingPathExtension
+        let ext = (rest as NSString).pathExtension
+        guard !token.isEmpty else { return nil }
+        return (token, ext)
     }
 
     // MARK: - Sidecar subtitle auto-pairing

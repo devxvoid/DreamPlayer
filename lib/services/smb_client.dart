@@ -204,10 +204,10 @@ class SmbClient {
         .toList();
   }
 
-  /// Opens a file on the share for streaming and returns a playable local URL.
-  /// iOS serves it through the in-app loopback HTTP proxy (AMSMB2 reads, same
-  /// shape as the CX Explorer handoff); each call returns its own URL so a
-  /// folder playlist can open every video up-front. Call [closeShare] when the
+  /// Opens a file on the share for streaming and returns a playable URL.
+  /// iOS serves it via an AetherEngineSMB `SMBConnection` custom source
+  /// (`dreamplayersmb://<token>`); each call returns its own URL so a folder
+  /// playlist can open every video up-front. Call [closeShare] when the
   /// browsing session ends to tear down the streams and disconnect.
   Future<String> openShare(String serverId, String share, String path) async {
     final result = await _channel.invokeMethod<String>('openShare', {

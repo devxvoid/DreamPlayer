@@ -1,3 +1,4 @@
+import AetherEngineSMB
 import AMSMB2
 import Flutter
 import Foundation
@@ -19,23 +20,22 @@ private struct SmbServerRecord: Codable {
 private enum SMBError: LocalizedError {
     case unknownServer
     case initFailed(String)
-    case serverNotRunning
 
     var errorDescription: String? {
         switch self {
         case .unknownServer: return "Unknown server"
         case .initFailed(let host): return "Could not set up SMB connection to \(host)"
-        case .serverNotRunning: return "SMB stream server is not running"
         }
     }
 }
 
 /// iOS implementation of the `dreamplayer/smb` channel — the same contract as
 /// the (removed) Android `SMBClient.kt`, so the Dart `SmbClient` wrapper is
-/// shared. Playback is served through `SMBStreamServer` as a local
-/// `http://127.0.0.1:<port>/stream/...` URL (`openShare`/`closeShare`),
-/// which is what AetherEngine/AVPlayer consume — mirroring the CX Explorer
-/// local-proxy handoff that already works on Android.
+/// shared. Video playback hands the player a `dreamplayersmb://<token>` URL
+/// backed by a live `AetherEngineSMB` `SMBConnection` (`openShare`/`closeShare`),
+/// which the platform view loads as a custom `IOReader` source — the engine's
+/// FFmpeg has no network stack, so this is the supported SMB path (not a
+/// loopback HTTP proxy).
 final class SMBClient: NSObject {
     static let shared = SMBClient()
     private static let channelName = "dreamplayer/smb"
@@ -46,11 +46,11 @@ final class SMBClient: NSObject {
 
     private let queue = DispatchQueue(label: "dreamplayer.smb")
 
-    /// One connected manager per open share (playback). Keyed by server id;
-    /// value remembers which share it is bound to so a different share on the
-    /// same server reconnects.
-    private var playbackManagers: [String: (manager: SMB2Manager, share: String)] = [:]
-    private let managersLock = NSLock()
+    /// Open AetherEngineSMB connections per server (playback), keyed by the
+    /// token embedded in the `dreamplayersmb://` URL handed to the player.
+    /// Connection credentials never cross to Dart — the tokens are opaque.
+    private var streamConnections: [String: [(token: String, connection: SMBConnection)]] = [:]
+    private let streamLock = NSLock()
 
     private override init() { super.init() }
 
@@ -476,61 +476,82 @@ final class SMBClient: NSObject {
 
     // MARK: - Playback stream
 
+    /// AetherEngineSMB `SMBConnection` for a `dreamplayersmb://` stream token.
+    /// Called from the platform view's `open` to build the engine's custom
+    /// source. Thread-safe: connections are added under `streamLock` and never
+    /// mutated after open.
+    func connection(for token: String) -> SMBConnection? {
+        streamLock.lock()
+        defer { streamLock.unlock() }
+        for (_, items) in streamConnections {
+            if let match = items.first(where: { $0.token == token }) {
+                return match.connection
+            }
+        }
+        return nil
+    }
+
+    /// Returns the playable URL for `path` inside `share` on a saved server.
+    ///
+    /// Video files get a `dreamplayersmb://<token>.<ext>` URL: the platform
+    /// view resolves the token to the live `SMBConnection` and loads it as a
+    /// custom `IOReader` source (AetherEngine's FFmpeg has no network stack, so
+    /// a loopback HTTP bridge is the wrong shape). Subtitle files are small, so
+    /// they are downloaded to a temp file and returned as a `file://` URL the
+    /// engine's `ExternalSubtitleTrack` can read directly.
     private func openShare(serverId: String, share: String, path: String) throws -> String {
         guard let record = record(id: serverId) else { throw SMBError.unknownServer }
-        try SMBStreamServer.shared.start()
 
-        let manager: SMB2Manager
-        var connected = false
-        managersLock.lock()
-        if let existing = playbackManagers[serverId], existing.share == share {
-            manager = existing.manager
-        } else {
-            if let old = playbackManagers.removeValue(forKey: serverId) {
-                Task { try? await old.manager.disconnectShare() }
+        if Self.isSubtitle(path) {
+            let data = try withShare(record, share: share) { manager in
+                let attrs = try await manager.attributesOfItem(atPath: path)
+                let size: UInt64
+                if let n = attrs[.fileSizeKey] as? NSNumber { size = n.uint64Value }
+                else if let n = attrs[.fileSizeKey] as? Int64 { size = UInt64(n) }
+                else { size = 0 }
+                guard size > 0 else { return Data() }
+                return try await manager.contents(atPath: path, range: 0..<size)
             }
-            guard let created = self.manager(for: record) else {
-                managersLock.unlock()
-                throw SMBError.initFailed(record.host)
-            }
-            manager = created
-            playbackManagers[serverId] = (manager, share)
-            connected = true
-        }
-        managersLock.unlock()
-
-        // Connect before handing out the URL so the first HTTP request from
-        // AVPlayer/AetherEngine never races a fire-and-forget connect (which
-        // used to surface as a 500 → "could not open video").
-        if connected {
-            try runAsync { try await manager.connectShare(name: share) }
-        } else {
-            try? runAsync { try await manager.connectShare(name: share) }
+            let ext = (path as NSString).pathExtension
+            let fileURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("\(UUID().uuidString)")
+                .appendingPathExtension(ext.isEmpty ? "srt" : ext)
+            try data.write(to: fileURL)
+            return fileURL.absoluteString
         }
 
-        let source = SMBStreamSourceImpl(manager: manager, share: share, filePath: path)
+        let hostPort = record.port == 445 ? record.host : "\(record.host):\(record.port)"
+        guard let server = URL(string: "smb://\(hostPort)") else {
+            throw SMBError.initFailed(record.host)
+        }
+        let username = record.username
+        let domain = record.domain
+        let password = password(for: record.id) ?? ""
+        let connection = try runAsync {
+            try await SMBConnection.connect(
+                server: server,
+                share: share,
+                path: path,
+                user: username,
+                password: password,
+                domain: domain
+            )
+        }
         let token = UUID().uuidString
-        SMBStreamServer.shared.register(serverId: serverId, token: token, source: source)
-        guard let base = SMBStreamServer.shared.baseURL else {
-            throw SMBError.serverNotRunning
-        }
-        // Keep the source's extension in the URL (`<token>.mkv`) so the player
-        // can pick a decoder path; the server strips it before the token lookup.
-        var streamURL = base.appendingPathComponent(token)
+        streamLock.lock()
+        streamConnections[serverId, default: []].append((token, connection))
+        streamLock.unlock()
+
         let ext = (path as NSString).pathExtension
-        if !ext.isEmpty {
-            streamURL = streamURL.appendingPathExtension(ext)
-        }
-        return streamURL.absoluteString
+        return "dreamplayersmb://\(token).\(ext.isEmpty ? "stream" : ext)"
     }
 
     private func closeShare(serverId: String) {
-        SMBStreamServer.shared.unregisterAll(serverId: serverId)
-        managersLock.lock()
-        let existing = playbackManagers.removeValue(forKey: serverId)
-        managersLock.unlock()
-        if let existing {
-            Task { try? await existing.manager.disconnectShare() }
+        streamLock.lock()
+        let items = streamConnections.removeValue(forKey: serverId) ?? []
+        streamLock.unlock()
+        for item in items {
+            item.connection.close()
         }
     }
 

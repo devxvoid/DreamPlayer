@@ -5,7 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 ///
 /// Keyed by a stable source identifier (file path, content URI, or an explicit
 /// `resumeKey` for sources whose playable URL rotates between sessions, e.g.
-/// the iPad SMB loopback proxy URLs).
+/// the iPad SMB per-file token URLs).
 class ResumeStore {
   ResumeStore._();
 

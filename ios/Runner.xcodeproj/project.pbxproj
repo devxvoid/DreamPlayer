@@ -16,11 +16,12 @@
 		A1B2C3D50000000000000002 /* FileBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000002 /* FileBrowser.swift */; };
 		A1B2C3D50000000000000003 /* IntentBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000003 /* IntentBridge.swift */; };
 		A1B2C3D50000000000000007 /* SMBClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000007 /* SMBClient.swift */; };
-		A1B2C3D50000000000000008 /* SMBStreamServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000008 /* SMBStreamServer.swift */; };
 		78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */ = {isa = PBXBuildFile; productRef = 78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */; };
 		A1B2C3D40000000000000006 /* AetherEngine in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D40000000000000005 /* AetherEngine */; };
 		A1B2C3D50000000000000009 /* AMSMB2 in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4000000000000000B /* AMSMB2 */; };
 		A1B2C3D5000000000000000C /* AMSMB2 in Embed Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4000000000000000B /* AMSMB2 */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		A1B2C3D5000000000000000D /* AetherEngineSMB in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4000000000000000C /* AetherEngineSMB */; };
+		A1B2C3D5000000000000000E /* AetherEngineSMB in Embed Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4000000000000000C /* AetherEngineSMB */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
@@ -44,6 +45,7 @@
 			dstSubfolderSpec = 10;
 			files = (
 				A1B2C3D5000000000000000C /* AMSMB2 in Embed Frameworks */,
+				A1B2C3D5000000000000000E /* AetherEngineSMB in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -63,7 +65,6 @@
 		A1B2C3D40000000000000002 /* FileBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileBrowser.swift; sourceTree = "<group>"; };
 		A1B2C3D40000000000000003 /* IntentBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentBridge.swift; sourceTree = "<group>"; };
 		A1B2C3D40000000000000007 /* SMBClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SMBClient.swift; sourceTree = "<group>"; };
-		A1B2C3D40000000000000008 /* SMBStreamServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SMBStreamServer.swift; sourceTree = "<group>"; };
 		78E0A7A72DC9AD7400C4905E /* FlutterGeneratedPluginSwiftPackage */ = {isa = PBXFileReference; lastKnownFileType = wrapper; name = FlutterGeneratedPluginSwiftPackage; path = Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage; sourceTree = "<group>"; };
 		7AFA3C8E1D35360C0083082E /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Release.xcconfig; path = Flutter/Release.xcconfig; sourceTree = "<group>"; };
 		9740EEB21CF90195004384FC /* Debug.xcconfig */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xcconfig; name = Debug.xcconfig; path = Flutter/Debug.xcconfig; sourceTree = "<group>"; };
@@ -83,6 +84,7 @@
 				78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */,
 				A1B2C3D40000000000000006 /* AetherEngine in Frameworks */,
 				A1B2C3D50000000000000009 /* AMSMB2 in Frameworks */,
+				A1B2C3D5000000000000000D /* AetherEngineSMB in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -143,7 +145,6 @@
 				A1B2C3D40000000000000002 /* FileBrowser.swift */,
 				A1B2C3D40000000000000003 /* IntentBridge.swift */,
 				A1B2C3D40000000000000007 /* SMBClient.swift */,
-				A1B2C3D40000000000000008 /* SMBStreamServer.swift */,
 				74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */,
 			);
 			path = Runner;
@@ -189,6 +190,7 @@
 				78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */,
 				A1B2C3D40000000000000005 /* AetherEngine */,
 				A1B2C3D4000000000000000B /* AMSMB2 */,
+				A1B2C3D4000000000000000C /* AetherEngineSMB */,
 			);
 			productName = Runner;
 			productReference = 97C146EE1CF9000F007C117D /* Runner.app */;
@@ -313,7 +315,6 @@
 				A1B2C3D50000000000000002 /* FileBrowser.swift in Sources */,
 				A1B2C3D50000000000000003 /* IntentBridge.swift in Sources */,
 				A1B2C3D50000000000000007 /* SMBClient.swift in Sources */,
-				A1B2C3D50000000000000008 /* SMBStreamServer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -696,6 +697,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A1B2C3D4000000000000000A /* XCRemoteSwiftPackageReference "AMSMB2" */;
 			productName = AMSMB2;
+		};
+		A1B2C3D4000000000000000C /* AetherEngineSMB */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1B2C3D40000000000000004 /* XCRemoteSwiftPackageReference "AetherEngine" */;
+			productName = AetherEngineSMB;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

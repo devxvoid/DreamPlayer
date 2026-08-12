@@ -39,7 +39,7 @@ A cross-platform video player built with **Flutter**, designed for high-end play
 | Video decode | Android MediaCodec (hardware DV/HEVC/AVC; `c2.qti.dv.decoder` on device) |
 | Audio decode | Media3 `FFmpegAudioRenderer` extension (`libmedia3ext.so`) |
 | Subtitles | Media3 subtitle stack + custom SAMI/MicroDVD/MPL2/SubViewer parsers; auto-paired siblings from the video's folder |
-| NAS playback (iPad) | In-app SMB browser (**AMSMB2**) + loopback HTTP range server (`SMBStreamServer.swift`) |
+| NAS playback (iPad) | In-app SMB browser (**AMSMB2** browse + **AetherEngineSMB** `SMBIOReader` custom source for playback) |
 | NAS playback (Android) | Via CX Explorer → "Open with" (CX streams over a local HTTP proxy) |
 | HDR output | Hybrid-composition PlatformView keeps its own SurfaceFlinger layer → real HDR to the display |
 | Reference architecture | [Nova Video Player](https://github.com/nova-video-player/aos-AVP) |
@@ -120,9 +120,8 @@ android/app/src/main/kotlin/com/dreamplayer/app/
   FileBrowser.kt                # device storage browsing channel
   MainActivity.kt               # registers platform views + intent handling
 ios/Runner/
-  AvPlayerView.swift            # AetherEngine platform view + channels; host SubtitleOverlayView
-  SMBClient.swift               # AMSMB2 SMB client (channel dreamplayer/smb)
-  SMBStreamServer.swift         # loopback HTTP range server for SMB streaming
+  AvPlayerView.swift            # AetherEngine platform view + channels; host SubtitleOverlayView; SMB via AetherEngineSMB custom source
+  SMBClient.swift               # SMB client (channel dreamplayer/smb): AMSMB2 browse + AetherEngineSMB playback connections
   FileBrowser.swift             # Documents-folder + picked-folder browsing channel
   IntentBridge.swift            # "Open with" intent channel
 test/

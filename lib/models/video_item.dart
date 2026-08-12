@@ -30,7 +30,7 @@ class VideoItem {
   final String? uri;
 
   /// Stable identifier for the resume feature, for sources whose [path]/[uri]
-  /// rotate between sessions (e.g. iPad SMB loopback proxy URLs). Falls back to
+  /// rotate between sessions (e.g. iPad SMB per-file token URLs). Falls back to
   /// [path] then [uri] when null.
   final String? resumeKey;
 
