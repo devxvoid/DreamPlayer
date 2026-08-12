@@ -21,7 +21,6 @@
 		A1B2C3D50000000000000009 /* AMSMB2 in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4000000000000000B /* AMSMB2 */; };
 		A1B2C3D5000000000000000C /* AMSMB2 in Embed Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4000000000000000B /* AMSMB2 */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		A1B2C3D5000000000000000D /* AetherEngineSMB in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4000000000000000C /* AetherEngineSMB */; };
-		A1B2C3D5000000000000000E /* AetherEngineSMB in Embed Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4000000000000000C /* AetherEngineSMB */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
@@ -45,7 +44,6 @@
 			dstSubfolderSpec = 10;
 			files = (
 				A1B2C3D5000000000000000C /* AMSMB2 in Embed Frameworks */,
-				A1B2C3D5000000000000000E /* AetherEngineSMB in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
