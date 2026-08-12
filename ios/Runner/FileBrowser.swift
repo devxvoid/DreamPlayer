@@ -104,8 +104,8 @@ final class FileBrowser: NSObject {
             }
         }
 
-        dirs.sort { name($0) < name($1) }
-        files.sort { name($0) < name($1) }
+        dirs.sort { Self.name($0) < Self.name($1) }
+        files.sort { Self.name($0) < Self.name($1) }
         return dirs + files
     }
 
@@ -147,8 +147,7 @@ final class FileBrowser: NSObject {
         resolveAllBookmarks()
         var entries: [[String: Any]] = []
         for (id, data) in loadBookmarks() {
-            var isStale = false
-            guard let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale),
+            guard let url = resolve(data),
                   FileManager.default.fileExists(atPath: url.path) else { continue }
             entries.append(entryMap(url, isDirectory: true, bookmarkId: id))
         }
@@ -159,10 +158,17 @@ final class FileBrowser: NSObject {
     /// paths are readable this session.
     private func resolveAllBookmarks() {
         for (_, data) in loadBookmarks() {
-            var isStale = false
-            guard let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale) else { continue }
+            guard let url = resolve(data) else { continue }
             startAccess(url)
         }
+    }
+
+    /// Resolves a security-scoped bookmark. On iOS the security scope is baked
+    /// into the bookmark data automatically (no `.withSecurityScope` option,
+    /// which is macOS-only); access still has to be started explicitly.
+    private func resolve(_ data: Data) -> URL? {
+        var isStale = false
+        return try? URL(resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &isStale)
     }
 
     private func startAccess(_ url: URL) {
@@ -176,7 +182,7 @@ final class FileBrowser: NSObject {
         var bookmarks = loadBookmarks()
         guard let data = bookmarks.removeValue(forKey: bookmarkId) else { return }
         saveBookmarks(bookmarks)
-        if let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: nil),
+        if let url = resolve(data),
            let index = activeSecurityScopedURLs.firstIndex(of: url) {
             url.stopAccessingSecurityScopedResource()
             activeSecurityScopedURLs.remove(at: index)
