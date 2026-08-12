@@ -17,6 +17,8 @@ A cross-platform video player built with **Flutter**, designed for high-end play
 - **"Open with" integration** — tap any video on the device and open it in DreamPlayer; works with file managers like CX Explorer (including their network-stream handoff via a local HTTP proxy).
 - **Live codec / resolution overlay** — video codec, audio codec + channel count, resolution, HDR format as the file plays.
 - **Transport controls** — play/pause, seek bar, ±10s, fullscreen, buffering spinner, auto-hiding UI.
+- **Resume playback** — a video stopped mid-way continues from where you left off on the next open (bookmarked while playing / on pause / on background; cleared when it plays to the end). Works for local files, "Open with" files, and iPad SMB streams.
+- **Replay after end (iOS)** — the replay button and scrubber pull-back work even after playback reaches the end, by reloading the last-opened source.
 - **Native refresh rate** — selects the display's highest refresh rate (e.g. 120 Hz) at startup.
 
 ## Tech stack
@@ -66,6 +68,7 @@ lib/
   services/
     display_refresh_rate.dart   # high refresh rate selection
     exo_player.dart             # ExoPlayerController + ExoPlayerView platform view
+    resume_store.dart           # per-video resume position store (shared_preferences)
     file_browser.dart           # file-browser channel wrapper
     open_intent.dart            # "Open with" intent bridge
     smb_client.dart             # SMB channel wrapper (iPad in-app shares)
