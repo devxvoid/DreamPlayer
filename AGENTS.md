@@ -49,6 +49,12 @@ A video player app supporting:
     6 for HDR10/10+/DV, 7 for HLG. Audio/subtitle tracks pushed via
     `currentTracks`; `selectAudioTrack`/`selectSubtitleTrack`/`clearSubtitle`
     mapped 1:1 to engine calls.
+  - **Replay / scrub-after-end**: AetherEngine's `.ended` is terminal (seek and
+    play are explicit no-ops there), so `AvPlayerView` keeps the last-opened
+    `url` + `LoadOptions` and a `play`/`seekTo` arriving in `.ended` reloads the
+    session (`reloadSession(at:)` — start for replay, target for scrubber
+    pull-back) instead of calling a no-op seek. The active subtitle track is
+    re-applied after the reload.
   - **Subtitles render host-side**: AetherEngine decodes cues into
     `engine.$subtitleCues` and its `AetherPlayerView` does NOT paint them, so
     `AvPlayerView` draws its own `SubtitleOverlayView` (text + PGS/DVB bitmap
@@ -180,8 +186,9 @@ A video player app supporting:
 - **Library emptied of sample data**: the home library no longer shows hardcoded demo videos — it starts empty with a "Your library is empty" empty-state (file browser and "Open with" are the way in) until a real MediaStore scan lands. The dead "Scan for videos" button was removed.
 - **Responsive grid** (`lib/screens/home_screen.dart`): column count and card height computed from screen width; card text is `Expanded`/`Flexible`. Text scaling clamped to 1.3x app-wide.
 - **Native refresh rate** (`lib/services/display_refresh_rate.dart`): calls `FlutterDisplayMode.setHighRefreshRate()` on Android at startup.
+- **Resume playback** (`lib/services/resume_store.dart`, shared_preferences): a video stopped mid-way resumes from where it left off on the next open. Position is bookmarked every ~5 s while playing, on pause, on app-background, and on player dispose; cleared when the video plays to the end. `ExoPlayerController.open` gained `startPositionMs` (native: iOS passes it as `startPosition` to `engine.load`, Android seeks before `play()`). Resume keys are the file path / content URI by default; sources whose playable URL rotates between sessions (iPad SMB loopback proxy URLs) pass a stable `VideoItem.resumeKey` (`smb:<serverId>/<share>/<path>`). Skips trivial positions (<10 s) and "basically finished" ones (within 5 s of a known duration).
 - **In-app SMB / LAN playback (Android): REMOVED (2026-08)**. The Android in-app SMB server browser (`smb_screen.dart`, `smb_client.dart`, `SMBClient.kt`, `SmbDataSource.kt`, channel `dreamplayer/smb`, jcifs-ng) was deleted from the app — on Android the user's day-to-day workflow plays NAS files via **CX Explorer's network share → "Open with" → DreamPlayer**, which streams over CX's local HTTP proxy at full speed (see the CX handoff note above). The iPad, however, has a shipped in-app SMB browser (AMSMB2 — see the roadmap section below). The Android SMB implementation knowledge (buffering, jcifs-ng tuning, discovery, subtitles) is preserved in the roadmap section below for future development. **Lesson learned on-device**: jcifs-ng's streaming read size is bound by three interlocking properties (`snd_buf_size`/`rcv_buf_size`/`transaction_buf_size`, defaults 65535); raising only the first two did nothing (still ~64 KB reads / ~5 MB/s with constant ring-buffer stalls), and raising `transaction_buf_size` to 8 MiB made the NAS reject reads with `STATUS_INVALID_PARAMETER` ("The parameter is incorrect"); 1 MiB was still rejected. Do not raise buffers past what the NAS's negotiated `MaxReadSize` accepts.
-- Tests: 37 (`flutter test`) incl. no-overflow checks on small phone, tablet, landscape, and 2.0x text scale.
+- Tests: 41 (`flutter test`) incl. no-overflow checks on small phone, tablet, landscape, and 2.0x text scale.
 
 ## Roadmap
 

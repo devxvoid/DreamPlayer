@@ -7,6 +7,7 @@ class VideoItem {
     required this.title,
     this.path,
     this.uri,
+    this.resumeKey,
     required this.duration,
     this.sizeBytes,
     this.resolution,
@@ -27,6 +28,11 @@ class VideoItem {
 
   /// e.g. a `content://` URI handed over from an "Open with" intent.
   final String? uri;
+
+  /// Stable identifier for the resume feature, for sources whose [path]/[uri]
+  /// rotate between sessions (e.g. iPad SMB loopback proxy URLs). Falls back to
+  /// [path] then [uri] when null.
+  final String? resumeKey;
 
   /// Sideloaded subtitle source: a URI of a paired `.srt`/`.ass` file sitting
   /// next to the video in the same folder.

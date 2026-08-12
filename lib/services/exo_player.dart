@@ -232,12 +232,15 @@ class ExoPlayerController {
     String path, {
     String? uri,
     String? subtitleUri,
+    int? startPositionMs,
   }) =>
       _send('open', {
         if (uri != null && uri.isNotEmpty) 'uri': uri else 'path': path,
         if (path.isNotEmpty) 'path': path,
         if (subtitleUri != null && subtitleUri.isNotEmpty)
           'subtitleUri': subtitleUri,
+        if (startPositionMs != null && startPositionMs > 0)
+          'startPositionMs': startPositionMs,
       });
 
   Future<void> play() => _send('play');

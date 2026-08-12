@@ -179,6 +179,7 @@ class ExoPlayerView(
                     val path = call.argument<String>("path")
                     val uri = call.argument<String>("uri")
                     val subtitleUri = call.argument<String>("subtitleUri")
+                    val startMs = call.argument<Number>("startPositionMs")?.toLong() ?: 0L
                     val mediaItem = MediaItem.Builder()
                         .apply {
                             when {
@@ -236,6 +237,7 @@ class ExoPlayerView(
                         .build()
                     player.setMediaItem(mediaItem)
                     player.prepare()
+                    if (startMs > 0L) player.seekTo(startMs)
                     player.play()
                     subtitleOn = currentSubtitle != null
                     result.success(null)

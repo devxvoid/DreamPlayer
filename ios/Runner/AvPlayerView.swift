@@ -125,6 +125,10 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     private var savedVolume: Float = 1
     private var isMuted = false
 
+    // ---- Last-opened source (needed to reload when the engine parks in .ended). ----
+    private var lastURL: URL?
+    private var lastLoadOptions = LoadOptions()
+
     init(messenger: FlutterBinaryMessenger, viewId: Int64, frame: CGRect) {
         container = AetherPlayerView(frame: frame)
         subtitleOverlay = SubtitleOverlayView(frame: container.bounds)
@@ -155,14 +159,27 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                 case "open":
                     self.open(args, result)
                 case "play":
-                    self.engine?.play()
+                    // .ended is terminal in AetherEngine (seek/play no-op there), so
+                    // replay = reload the last source from the start.
+                    if self.engine?.state == .ended {
+                        await self.reloadSession(at: 0)
+                    } else {
+                        self.engine?.play()
+                    }
+                    self.emit()
                     result(nil)
                 case "pause":
                     self.engine?.pause()
                     result(nil)
                 case "seekTo":
                     let ms = (args?["positionMs"] as? NSNumber)?.int64Value ?? 0
-                    await self.engine?.seek(to: Double(ms) / 1000.0)
+                    if self.engine?.state == .ended {
+                        // Pulling the scrubber back after end-of-media: reload at the
+                        // requested position instead of seeking a parked session.
+                        await self.reloadSession(at: Double(ms) / 1000.0)
+                    } else {
+                        await self.engine?.seek(to: Double(ms) / 1000.0)
+                    }
                     self.emit()
                     result(nil)
                 case "setVolume":
@@ -269,6 +286,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         let path = args?["path"] as? String
         let uri = args?["uri"] as? String
         let subtitleUri = args?["subtitleUri"] as? String
+        let startMs = (args?["startPositionMs"] as? NSNumber)?.int64Value ?? 0
 
         let url: URL
         if let path, !path.isEmpty {
@@ -317,11 +335,15 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             externalSubtitles: externals,
             autoplay: true
         )
+        lastURL = url
+        lastLoadOptions = options
+        // Resume: continue from the last watched position when the caller asks.
+        let startPosition: Double? = startMs > 0 ? Double(startMs) / 1000.0 : nil
 
         Task { @MainActor [weak self] in
             guard let self, let engine = self.engine else { return }
             do {
-                let probe = try await engine.load(url: url, startPosition: nil, options: options)
+                let probe = try await engine.load(url: url, startPosition: startPosition, options: options)
                 if let probe {
                     self.videoCodecName = probe.videoCodecName
                     self.videoWidth = Int(probe.videoWidth)
@@ -341,6 +363,29 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             }
         }
         result(nil)
+    }
+
+    /// Replays the last-opened source at `position` seconds. AetherEngine treats
+    /// `.ended` as terminal (seek/play are no-ops there), so a replay / scrubber
+    /// pull-back after the end card reloads the session instead.
+    private func reloadSession(at position: Double) async {
+        guard let engine, let lastURL else { return }
+        let activeSub = engine.activeSubtitleTrackIndex
+        do {
+            let probe = try await engine.load(url: lastURL, startPosition: position, options: lastLoadOptions)
+            if let probe {
+                videoCodecName = probe.videoCodecName
+                videoWidth = Int(probe.videoWidth)
+                videoHeight = Int(probe.videoHeight)
+                isDolbyVision = probe.isDolbyVision
+                dvProfile = probe.dvProfile
+            }
+            if let activeSub, engine.subtitleTracks.contains(where: { $0.id == activeSub }) {
+                engine.selectSubtitleTrack(index: activeSub)
+            }
+        } catch {
+            lastError = String(describing: error)
+        }
     }
 
     // MARK: - Track selection

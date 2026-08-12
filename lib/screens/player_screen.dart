@@ -8,6 +8,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../models/hdr_format.dart';
 import '../models/video_item.dart';
 import '../services/exo_player.dart';
+import '../services/resume_store.dart';
 import '../utils/codec_info.dart';
 import '../widgets/format_chip.dart';
 
@@ -73,6 +74,15 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   List<ExoSubtitleTrack> _subtitleTracks = const [];
   int _selectedSubtitleTrack = -1;
 
+  /// Last time the resume position was persisted (throttled while playing).
+  DateTime _lastResumeSave = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Stable per-video key for the resume store: an explicit [VideoItem.resumeKey]
+  /// wins (sources whose path/URI rotate, e.g. iPad SMB proxy URLs), otherwise
+  /// path then URI.
+  String get _resumeKey =>
+      _current.resumeKey ?? _current.path ?? _current.uri ?? '';
+
   bool get _backendReady => _exo != null;
 
   @override
@@ -124,14 +134,43 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       }
       return;
     }
+    Duration? resume;
+    if (!_inTests) {
+      resume = await ResumeStore.positionFor(_resumeKey);
+      // Skip trivial positions and "basically finished" ones.
+      if (resume != null && resume < const Duration(seconds: 10)) resume = null;
+      if (resume != null &&
+          video.duration > Duration.zero &&
+          video.duration - resume < const Duration(seconds: 5)) {
+        resume = null;
+      }
+    }
     try {
-      await _exo?.open(video.path ?? '',
-          uri: video.uri, subtitleUri: video.subtitleUri);
+      await _exo?.open(
+        video.path ?? '',
+        uri: video.uri,
+        subtitleUri: video.subtitleUri,
+        startPositionMs: resume?.inMilliseconds,
+      );
     } catch (e) {
       if (mounted) {
         setState(() => _error = 'Playback unavailable: $e');
       }
     }
+  }
+
+  void _saveResume(Duration position) {
+    if (_inTests) return;
+    final key = _resumeKey;
+    if (key.isEmpty || position <= Duration.zero) return;
+    ResumeStore.save(key, position);
+  }
+
+  Future<void> _clearResume() async {
+    if (_inTests) return;
+    final key = _resumeKey;
+    if (key.isEmpty) return;
+    await ResumeStore.clear(key);
   }
 
   /// Advances to the next video in the playlist when the current one ends
@@ -189,6 +228,23 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     }
     _audioTracks = e.audioTracks;
     _selectedAudioTrackIndex = e.selectedAudioTrack;
+
+    // Resume bookmark: persist every ~5s while playing, and immediately when
+    // playback pauses/stops. A finished video clears its bookmark (it ended,
+    // so there is nothing left to resume).
+    if (e.ended) {
+      _clearResume();
+    } else {
+      final now = DateTime.now();
+      if (_playing && !_buffering && !_dragging &&
+          now.difference(_lastResumeSave) >= const Duration(seconds: 5)) {
+        _lastResumeSave = now;
+        _saveResume(_position);
+      } else if (wasPlaying && !_playing) {
+        _saveResume(_position);
+      }
+    }
+
     if (wasPlaying != _playing || wasBuffering != _buffering) {
       _syncControlsForPlaybackState();
     }
@@ -210,9 +266,21 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Persist the position when the app goes to the background or is killed,
+    // so "continue where I stopped" works even if playback was mid-way.
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      _saveResume(_position);
+    }
+  }
+
+  @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _hideTimer?.cancel();
+    _saveResume(_position);
     _exoSub?.cancel();
     _exo?.dispose();
     SystemChrome.setPreferredOrientations(DeviceOrientation.values);

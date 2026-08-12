@@ -229,6 +229,9 @@ class _SmbScreenState extends State<SmbScreen> {
             id: 'smb_${videos[i].path}_${DateTime.now().microsecondsSinceEpoch}',
             title: videos[i].name,
             uri: urls[i],
+            // Loopback proxy URLs rotate per session; key resume on the stable
+            // remote location instead.
+            resumeKey: 'smb_${server.id}/$_share${videos[i].path}',
             subtitleUri: _videoSubtitleUrls[urls[i]],
             duration: Duration.zero,
             sizeBytes: videos[i].size,
