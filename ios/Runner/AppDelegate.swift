@@ -34,5 +34,6 @@ import UIKit
     )
     FileBrowser.register(with: messenger)
     IntentBridge.shared.configure(with: messenger)
+    SMBClient.register(with: messenger)
   }
 }

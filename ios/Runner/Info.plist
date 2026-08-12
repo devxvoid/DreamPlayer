@@ -234,6 +234,14 @@
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_smb._tcp</string>
+		<string>_workstation._tcp</string>
+		<string>_smb._udp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>DreamPlayer connects to your local network to play videos stored on SMB/NAS servers.</string>
 	<key>UIFileSharingEnabled</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>

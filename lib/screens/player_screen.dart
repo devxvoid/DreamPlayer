@@ -544,8 +544,6 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final video = _current;
-    final isLandscape =
-        MediaQuery.sizeOf(context).width > MediaQuery.sizeOf(context).height;
 
     final total = _duration;
     final maxMs = total.inMilliseconds > 0
@@ -663,67 +661,43 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (isLandscape)
-                        Row(
-                          children: [
-                            IconButton(
-                              onPressed: () => Navigator.of(context).pop(),
-                              icon: const Icon(Icons.arrow_back),
-                              color: Colors.white,
-                            ),
-                            const SizedBox(width: 4),
-                            Expanded(
-                              child: Wrap(
-                                spacing: 8,
-                                runSpacing: 6,
-                                crossAxisAlignment: WrapCrossAlignment.center,
-                                children: [
-                                  Text(
-                                    video.title,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                  ...chips,
-                                ],
+                      Row(
+                        children: [
+                          IconButton(
+                            onPressed: () => Navigator.of(context).pop(),
+                            icon: const Icon(Icons.arrow_back),
+                            color: Colors.white,
+                          ),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              video.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
                               ),
                             ),
-                          ],
-                        )
-                      else ...[
-                        Row(
-                          children: [
-                            IconButton(
-                              onPressed: () => Navigator.of(context).pop(),
-                              icon: const Icon(Icons.arrow_back),
-                              color: Colors.white,
-                            ),
-                            const SizedBox(width: 4),
-                            Expanded(
-                              child: Text(
-                                video.title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
+                          ),
+                        ],
+                      ),
+                      if (chips.isNotEmpty) ...[
                         const SizedBox(height: 4),
                         Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 8),
-                          child: Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: chips,
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: Row(
+                              children: [
+                                for (final chip in chips)
+                                  Padding(
+                                    padding: const EdgeInsets.only(right: 8),
+                                    child: chip,
+                                  ),
+                              ],
+                            ),
                           ),
                         ),
                       ],
