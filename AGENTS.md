@@ -40,6 +40,8 @@ A video player app supporting:
   `upToNextMajorVersion` from 6.21.0) — Xcode auto-resolves FFmpegBuild's
   dynamic FFmpeg xcframeworks into the app bundle. **CI-green** (run on commit
   `82b3dd9`); **not yet verified on-device** (no Mac locally; CI builds it).
+  **Minimum iOS 18.0** (`IPHONEOS_DEPLOYMENT_TARGET = 18.0`; builds for
+  iOS 18 through the latest, iPhone and iPad).
   - Channel mapping: state 1/2/3/4 (idle/buffering/ready/ended); DV surfaces as
     `dvhe.<profile>.06` so Dart's `dv`-prefix detection fires; `colorTransfer`
     6 for HDR10/10+/DV, 7 for HLG. Audio/subtitle tracks pushed via
