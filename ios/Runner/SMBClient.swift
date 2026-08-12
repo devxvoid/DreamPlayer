@@ -481,6 +481,7 @@ final class SMBClient: NSObject {
         try SMBStreamServer.shared.start()
 
         let manager: SMB2Manager
+        var connected = false
         managersLock.lock()
         if let existing = playbackManagers[serverId], existing.share == share {
             manager = existing.manager
@@ -494,12 +495,18 @@ final class SMBClient: NSObject {
             }
             manager = created
             playbackManagers[serverId] = (manager, share)
+            connected = true
         }
         managersLock.unlock()
 
-        // Queued on AMSMB2's serial operation queue ahead of every read, so
-        // the first range request is guaranteed to hit a connected share.
-        Task { try? await manager.connectShare(name: share) }
+        // Connect before handing out the URL so the first HTTP request from
+        // AVPlayer/AetherEngine never races a fire-and-forget connect (which
+        // used to surface as a 500 → "could not open video").
+        if connected {
+            try runAsync { try await manager.connectShare(name: share) }
+        } else {
+            try? runAsync { try await manager.connectShare(name: share) }
+        }
 
         let source = SMBStreamSourceImpl(manager: manager, share: share, filePath: path)
         let token = UUID().uuidString
@@ -507,7 +514,14 @@ final class SMBClient: NSObject {
         guard let base = SMBStreamServer.shared.baseURL else {
             throw SMBError.serverNotRunning
         }
-        return base.appendingPathComponent(token).absoluteString
+        // Keep the source's extension in the URL (`<token>.mkv`) so the player
+        // can pick a decoder path; the server strips it before the token lookup.
+        var streamURL = base.appendingPathComponent(token)
+        let ext = (path as NSString).pathExtension
+        if !ext.isEmpty, let withExt = streamURL.appendingPathExtension(ext) {
+            streamURL = withExt
+        }
+        return streamURL.absoluteString
     }
 
     private func closeShare(serverId: String) {

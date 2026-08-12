@@ -176,6 +176,7 @@ final class SMBStreamServer: NSObject {
             sendStatus(connection, status: 400, body: "Bad request")
             return
         }
+        let method = parts[0].uppercased()
         var raw = parts[1]
         if let query = raw.firstIndex(of: "?") {
             raw = String(raw[..<query])
@@ -183,7 +184,11 @@ final class SMBStreamServer: NSObject {
         while raw.hasPrefix("/") {
             raw.removeFirst()
         }
-        let token = raw.removingPercentEncoding ?? ""
+        let decoded = raw.removingPercentEncoding ?? ""
+        // Tokens are UUIDs; the URL carries the source's file extension
+        // (e.g. `<token>.mkv`) so AVPlayer/AetherEngine can pick a decoder path.
+        let token = (decoded as NSString).deletingPathExtension
+        let fileExt = (decoded as NSString).pathExtension.lowercased()
         guard !token.isEmpty, let source = self.source(for: token) else {
             sendStatus(connection, status: 404, body: "Not found")
             return
@@ -235,7 +240,7 @@ final class SMBStreamServer: NSObject {
             let statusLine = rangeRequested ? "HTTP/1.1 206 Partial Content" : "HTTP/1.1 200 OK"
             var headerLines = [
                 statusLine,
-                "Content-Type: application/octet-stream",
+                "Content-Type: \(Self.contentType(for: fileExt))",
                 "Accept-Ranges: bytes",
                 "Content-Length: \(length)",
                 "Connection: close",
@@ -244,11 +249,37 @@ final class SMBStreamServer: NSObject {
                 headerLines.append("Content-Range: bytes \(startIndex)-\(endIndex)/\(size)")
             }
             let headerText = headerLines.joined(separator: "\r\n") + "\r\n\r\n"
+            if method == "HEAD" {
+                // Size/type probe: headers only, no body.
+                connection.send(content: Data(headerText.utf8), completion: .contentProcessed { _ in connection.cancel() })
+                return
+            }
             connection.send(content: Data(headerText.utf8), completion: .contentProcessed { [weak self] _ in
                 self?.streamBody(connection, source: source, offset: startIndex, remaining: length)
             })
         } catch {
             sendStatus(connection, status: 500, body: "Stream error")
+        }
+    }
+
+    /// Content type for a stream's file extension, so AVPlayer/AetherEngine can
+    /// sniff containers that the extensionless loopback path would obscure.
+    private static func contentType(for ext: String) -> String {
+        switch ext {
+        case "mkv", "mk3d": return "video/x-matroska"
+        case "webm": return "video/webm"
+        case "mp4", "m4v", "mov": return "video/mp4"
+        case "avi": return "video/x-msvideo"
+        case "ts", "m2ts", "mts": return "video/mp2t"
+        case "wmv": return "video/x-ms-wmv"
+        case "flv": return "video/x-flv"
+        case "mpg", "mpeg", "vob": return "video/mpeg"
+        case "srt": return "application/x-subrip"
+        case "ass", "ssa": return "text/x-ssa"
+        case "vtt": return "text/vtt"
+        case "smi": return "application/x-sami"
+        case "sub": return "text/x-microdvd"
+        default: return "application/octet-stream"
         }
     }
 

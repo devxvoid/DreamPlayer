@@ -240,6 +240,11 @@
 		<string>_workstation._tcp</string>
 		<string>_smb._udp</string>
 	</array>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>DreamPlayer connects to your local network to play videos stored on SMB/NAS servers.</string>
 	<key>UIFileSharingEnabled</key>
