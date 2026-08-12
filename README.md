@@ -67,7 +67,24 @@ flutter install --debug -d <device-id>
 Prebuilt binaries are attached to each [GitHub Release](https://github.com/mangeshghodke/DreamPlayer/releases) (versioning starts at **0.0.1** and increments per release):
 
 - **Android** — per-architecture release APKs (`arm64-v8a`, `armeabi-v7a`, `x86_64`) plus a **universal** APK that installs on any device, and the AAB for Google Play.
-- **iOS / iPadOS** — the `DreamPlayer.ipa` is **unsigned** (Apple only allows App Store / TestFlight installs), so sideload it with a free Apple ID via **SideStore** or **AltStore**: download the IPA, sign it in the app, and let the 7-day signature auto-refresh. Full steps are in the release notes.
+- **iOS / iPadOS** — the `DreamPlayer.ipa` is **unsigned** (Apple only allows App Store / TestFlight installs), so sideload it with a free Apple ID via **SideStore** or **AltStore** (guide below).
+
+### Installing on iPhone / iPad (SideStore or AltStore)
+
+Apple doesn't allow installing unsigned apps, so the IPA is signed on-device with your own Apple ID. SideStore and AltStore both do this and then **auto-refresh the 7-day signature** in the background over Wi-Fi.
+
+1. Install **SideStore** or **AltStore** on your iPhone/iPad:
+   - SideStore — [sidestore.io](https://sidestore.io)
+   - AltStore — [altstore.io](https://altstore.io)
+2. Download `DreamPlayer.ipa` from the [latest release](https://github.com/mangeshghodke/DreamPlayer/releases).
+3. Open SideStore/AltStore → **+** → select `DreamPlayer.ipa`. It signs it with your Apple ID and installs.
+4. The signature lasts **7 days**; SideStore/AltStore refresh it automatically over Wi-Fi — a weekly open is all that's needed.
+
+Notes:
+- A free Apple ID can keep ~3 sideloaded apps active per device.
+- First-time setup of SideStore/AltStore needs a computer (or a second Apple device).
+- No automatic updates — re-download the newest IPA from the Releases page when a new version is published.
+- Playback of DRM-free local/SMB media is fully supported; Dolby Vision/HDR needs a panel that supports it (e.g. iPad Pro M2).
 
 ## Project layout
 
