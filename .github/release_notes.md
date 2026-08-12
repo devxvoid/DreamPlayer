@@ -31,3 +31,12 @@ Notes:
 ## Versioning
 
 App version follows the **0.0.x** scheme (currently **0.0.1**), bumped per release.
+
+## Playing videos from your NAS / SMB share
+
+DreamPlayer plays NAS files through the Files app's built-in SMB support and "Open with"
+
+- **iPhone/iPad:** Files → **⋯ → Connect to Server** → enter `smb://<address>` → browse to a video → long-press → **Share → Open in "DreamPlayer"**. Prefer a folder? Bookmark it once in DreamPlayer's file browser (folder icon → **Pick a folder** → your NAS folder).
+- **Android:** CX Explorer → **Open with → DreamPlayer** (streams over CX's local HTTP proxy).
+
+Full walkthrough: **[SMB / NAS playback tutorial](docs/tutorials/play-smb-nas-videos.md)**.

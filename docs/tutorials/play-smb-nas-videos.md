@@ -1,0 +1,59 @@
+# Playing SMB / NAS videos with DreamPlayer
+
+DreamPlayer has no in-app SMB browser anymore (it was hidden in 2026-08 — switching
+audio tracks on an SMB stream could crash the app). Instead, NAS playback goes
+through the **Files app's built-in SMB support** and DreamPlayer's **"Open with"** / file-browser
+integration. Videos play exactly like any other file DreamPlayer receives — HDR/codec chips,
+subtitle picker, resume, everything works.
+
+## On iPhone / iPad
+
+### Option A — connect your NAS in the Files app, then "Open with" (recommended)
+
+1. **Connect the NAS in Files:**
+   - Open the **Files** app → **Browse** (sidebar) → tap the **⋯** menu at the top → **Connect to Server**.
+   - Enter your server address, e.g. `smb://192.168.1.50` or `smb://nas.local`.
+   - Pick **Registered User** (your NAS username/password) or **Guest**, tap **Next**, and the
+     share appears in the Files sidebar under **Locations**.
+2. **Browse to a video** inside the share. SMB streams are lazy — Files only downloads what it
+   needs, so you can browse a huge library without copying it.
+3. **Long-press the video → Share → Open in "DreamPlayer"** (or **Copy to** → **DreamPlayer**).
+   DreamPlayer appears in the share sheet for all video containers (mkv, ts, m2ts, webm, wmv,
+   flv, mpg… plus the standard video/* types).
+4. Playback starts immediately; tap **⋮ / audio** during playback to switch audio tracks.
+
+> Tip: for a *folder* of episodes, use **Option B** once and the folder stays bookmarked.
+
+### Option B — bookmark the NAS folder in DreamPlayer's file browser
+
+If you play from the same NAS folder often, bookmark it once:
+
+1. Do **Option A step 1** (connect the server in Files).
+2. Open **DreamPlayer → Folder icon (top-right) → Pick a folder**.
+3. In the system folder picker, navigate into the connected **server** under Locations, pick the
+   video folder, and tap **Open**. DreamPlayer bookmarks it (security-scoped, kept across launches).
+4. The folder now appears at the top of the file browser — browse and play any video in it, no
+   per-file share sheet needed.
+
+> Bookmarked folders keep their access across launches (iOS security-scoped bookmarks are stored
+> in UserDefaults). Remove a bookmark with the **×** beside it at the browser root.
+
+## On Android (CX Explorer → "Open with")
+
+Android has no in-app SMB browser either. The supported NAS path:
+
+1. In **CX Explorer**, connect to the SMB share and browse to a video.
+2. **Tap the video → Open with → DreamPlayer.** CX streams the file over a local HTTP proxy
+   (`http://127.0.0.1:<port>/SMB/...`); DreamPlayer plays it at full speed (4K HEVC verified
+   at 60 fps, 0 dropped frames). Tap the **audio** button to switch tracks.
+
+## Troubleshooting
+
+- **DreamPlayer doesn't appear in the share sheet / Open-with list:** on iOS ensure the video
+  file hasn't been renamed to a non-video extension (`.mkv` needs the sidebar picker, which Files
+  shows for known containers; for unusual containers check "Copy to" as well).
+- **Video opens but shows a spinner:** on iOS the first open of a large NAS file may stage some
+  data through Files; give it a few seconds. If it persists, the Wi-Fi link can't sustain the
+  bitrate — lower-bitrate or network-side fixes apply.
+- **Bookmarked folder disappears after an iPad restart:** iOS security-scoped bookmarks can expire
+  if the app wasn't opened for a long time; re-pick the folder once.
