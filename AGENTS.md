@@ -65,6 +65,26 @@ A video player app supporting:
     finishes swapping readers, so the running session is never interrupted
     mid-teardown. All SMB readers use `ownsSource: false` — SMBClient owns
     connection lifetime (closed on `closeShare`).
+  - **SMB buffering / read-ahead fix (2026-08)**: while SMB audio switching was
+    fixed, SMB streams still hit the buffering spinner mid-playback. Root cause:
+    `SMBIOReader` bridges every FFmpeg read to a SYNCHRONOUS SMB round-trip
+    (256 KB per read, zero prefetch), so a Wi-Fi latency spike starves the
+    engine's loopback HLS producer and AVPlayer drops into
+    `waitingToPlayAtSpecifiedRate. `AvPlayerView` now loads all SMB streams
+    through a new `BufferedSMBReader` (`ios/Runner/BufferedSMBReader.swift`), a
+    read-ahead sliding-window `IOReader` (32 MiB window / 4 MiB chunks fetched
+    on a background `Task.detached` prefetch): demux reads are served from
+    memory while the next chunk streams from the NAS, so latency only bites on
+    a seek or a full window drain. Same idea as Nova's 48 MB ring buffer. It
+    keeps `SMBIOReader`'s lifecycle contract (`cancel()` only bumps a cancel
+    epoch so teardown unblocks THIS read without poisoning a reload reopen;
+    `close()` stops prefetch but does NOT close the connection — SMBClient owns
+    it; `makeIndependentReader` clones share the transport, which SMBClient
+    serialises internally). Prefetch is error-recoverable: a failed fetch
+    parks the task and a later read/seek kick (re-anchor resets `fetchFailed`)
+    retries instead of dying permanently. Used for both the initial `open()`
+    and `reopenSMBStream(audioIndex:)` (both SMB source sites). CI will verify
+    the iOS build; on-device buffering was still to be re-measured.
   - **Replay / scrub-after-end**: AetherEngine's `.ended` is terminal (seek and
     play are explicit no-ops there), so `AvPlayerView` keeps the last-opened
     `url` + `LoadOptions` and a `play`/`seekTo` arriving in `.ended` reloads the
@@ -313,7 +333,8 @@ android/app/src/main/kotlin/com/dreamplayer/app/
   FileBrowser.kt                # device storage browsing channel
   MainActivity.kt               # registers platform views + "Open with" intent handling
 ios/Runner/
-  AvPlayerView.swift            # AetherEngine platform view + channels (same contract as ExoPlayerView.kt); host SubtitleOverlayView; SMB streams load via AetherEngineSMB SMBIOReader custom source
+  AvPlayerView.swift            # AetherEngine platform view + channels (same contract as ExoPlayerView.kt); host SubtitleOverlayView; SMB streams load via BufferedSMBReader custom source
+  BufferedSMBReader.swift       # read-ahead sliding-window IOReader (32 MiB) for SMB playback
   SMBClient.swift               # AMSMB2 SMB client (channel dreamplayer/smb); AetherEngineSMB playback connections; keychain passwords + LAN discovery
   FileBrowser.swift             # Documents-folder browsing channel (same contract as FileBrowser.kt)
   IntentBridge.swift            # "Open with" intent channel (same contract as MainActivity.kt)

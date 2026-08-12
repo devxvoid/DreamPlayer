@@ -325,14 +325,17 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                 result(FlutterError(code: "smb_stream", message: "SMB stream token not found", details: nil))
                 return
             }
-            // ownsSource: false — the SMBConnection's lifetime is owned by
-            // SMBClient (closed on closeShare / server delete), not by the
-            // reader. With the default true, the engine closing the reader at
-            // the end of a session would tear down the connection.
+            // Read-ahead wrapper: SMBIOReader bridges every FFmpeg read to a
+            // synchronous SMB round-trip (256 KB per read, zero prefetch), so
+            // a Wi-Fi latency spike starves the engine's loopback producer and
+            // AVPlayer buffers. BufferedSMBReader keeps a 32 MiB window filled
+            // ahead of the cursor on a background task. ownsSource stays false
+            // on both the connection and the reader — SMBClient owns the
+            // connection's lifetime (closed on closeShare / server delete).
             smbToken = parsed.token
             isSMBStream = true
             source = .custom(
-                SMBIOReader(source: connection, ownsSource: false, discImageProbeEnabled: false),
+                BufferedSMBReader(source: connection),
                 formatHint: nil
             )
         } else if let uri, let u = URL(string: uri) {
@@ -460,7 +463,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         let connection = pair.fresh
         let stale = pair.stale
         let source: MediaSource = .custom(
-            SMBIOReader(source: connection, ownsSource: false, discImageProbeEnabled: false),
+            BufferedSMBReader(source: connection),
             formatHint: nil
         )
         lastSource = source
