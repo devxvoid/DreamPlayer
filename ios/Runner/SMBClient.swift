@@ -52,6 +52,12 @@ final class SMBClient: NSObject {
     private var streamConnections: [String: [(token: String, connection: SMBConnection)]] = [:]
     private let streamLock = NSLock()
 
+    /// The open parameters behind each stream token, so a reopen (audio-track
+    /// switch reload) can mint a FRESH SMBConnection instead of reusing one
+    /// whose FileReader may still be draining a cancelled read. Guarded by
+    /// `streamLock`.
+    private var streamParams: [String: (serverId: String, share: String, path: String)] = [:]
+
     private override init() { super.init() }
 
     static func register(with messenger: FlutterBinaryMessenger) {
@@ -491,6 +497,59 @@ final class SMBClient: NSObject {
         return nil
     }
 
+    /// Mints a FRESH `SMBConnection` for a stream token and swaps it into the
+    /// registry in place. The engine's `selectAudioTrack` reload reuses the
+    /// retained custom `SMBIOReader`, and that reader shares ONE
+    /// `SMBConnection` with the old session whose cancelled read may still be
+    /// draining on the `FileReader` — a fresh connection is the only thing that
+    /// guarantees the reopen's probe reads a clean, uncontended transport
+    /// (EPERM "Demuxer: open failed" otherwise).
+    ///
+    /// Returns the fresh connection plus the connection it displaced (stale,
+    /// if any). The caller closes the stale connection only AFTER the engine
+    /// has finished replacing the reader it was serving, so the running
+    /// session is never interrupted mid-teardown.
+    func reconnect(for token: String) -> (fresh: SMBConnection, stale: SMBConnection?)? {
+        streamLock.lock()
+        guard let params = streamParams[token] else {
+            streamLock.unlock()
+            return nil
+        }
+        let (serverId, share, path) = (params.serverId, params.share, params.path)
+        let oldConnection = streamConnections[serverId]?.first(where: { $0.token == token })?.connection
+        streamLock.unlock()
+
+        guard let record = record(id: serverId) else { return nil }
+        let hostPort = record.port == 445 ? record.host : "\(record.host):\(record.port)"
+        guard let server = URL(string: "smb://\(hostPort)") else { return nil }
+        let username = record.username
+        let domain = record.domain
+        let password = password(for: record.id) ?? ""
+
+        let connection: SMBConnection
+        do {
+            connection = try runAsync {
+                try await SMBConnection.connect(
+                    server: server,
+                    share: share,
+                    path: path,
+                    user: username,
+                    password: password,
+                    domain: domain
+                )
+            }
+        } catch {
+            return nil
+        }
+
+        streamLock.lock()
+        if let idx = streamConnections[serverId]?.firstIndex(where: { $0.token == token }) {
+            streamConnections[serverId]?[idx].connection = connection
+        }
+        streamLock.unlock()
+        return (connection, oldConnection)
+    }
+
     /// Returns the playable URL for `path` inside `share` on a saved server.
     ///
     /// Video files get a `dreamplayersmb://<token>.<ext>` URL: the platform
@@ -540,6 +599,7 @@ final class SMBClient: NSObject {
         let token = UUID().uuidString
         streamLock.lock()
         streamConnections[serverId, default: []].append((token, connection))
+        streamParams[token] = (serverId, share, path)
         streamLock.unlock()
 
         let ext = (path as NSString).pathExtension
@@ -549,6 +609,7 @@ final class SMBClient: NSObject {
     private func closeShare(serverId: String) {
         streamLock.lock()
         let items = streamConnections.removeValue(forKey: serverId) ?? []
+        streamParams = streamParams.filter { $0.value.serverId != serverId }
         streamLock.unlock()
         for item in items {
             item.connection.close()

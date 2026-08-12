@@ -49,6 +49,22 @@ A video player app supporting:
     6 for HDR10/10+/DV, 7 for HLG. Audio/subtitle tracks pushed via
     `currentTracks`; `selectAudioTrack`/`selectSubtitleTrack`/`clearSubtitle`
     mapped 1:1 to engine calls.
+  - **SMB audio-track switch fix (2026-08)**: `selectAudioTrack` on an SMB
+    stream used to fail with "Demuxer: open failed (Operation not permitted
+    (-1))". AetherEngine's reload reuses the RETAINED custom `SMBIOReader`
+    (`keepCustomReader: true`); the old session teardown calls
+    `SMBIOReader.cancel()` which marks the CURRENT in-flight read cancelled —
+    when it lands on the new probe's first read, that read aborts with -1
+    (EPERM). `AvPlayerView.setAudioTrack` now detects SMB streams
+    (`isSMBStream`/`smbToken`) and calls `reopenSMBStream(audioIndex:)`
+    instead: `SMBClient.reconnect(for:)` mints a FRESH `SMBConnection` on the
+    same server/share/path (swapping it into the registry, returning the
+    displaced stale connection), then `engine.load(source:startPosition:
+    options:audioSourceStreamIndex:)` rebuilds at the current playhead with the
+    requested track. The stale connection is closed only AFTER the engine
+    finishes swapping readers, so the running session is never interrupted
+    mid-teardown. All SMB readers use `ownsSource: false` — SMBClient owns
+    connection lifetime (closed on `closeShare`).
   - **Replay / scrub-after-end**: AetherEngine's `.ended` is terminal (seek and
     play are explicit no-ops there), so `AvPlayerView` keeps the last-opened
     `url` + `LoadOptions` and a `play`/`seekTo` arriving in `.ended` reloads the

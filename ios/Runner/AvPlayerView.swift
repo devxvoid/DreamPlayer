@@ -130,6 +130,16 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     private var lastSource: MediaSource?
     private var lastLoadOptions = LoadOptions()
 
+    // ---- SMB stream (see SMBClient.openShare). Kept so an audio-track switch
+    // reopens with a FRESH SMBIOReader on a FRESH connection: the engine's
+    // retained-reader reload (keepCustomReader) reuses one SMBIOReader whose
+    // cancel() from the old session teardown can poison the new probe's first
+    // read (returns -1 → EPERM "Demuxer: open failed"). ownsSource: false so
+    // the engine closing the previous reader doesn't tear down the shared
+    // SMBConnection (SMBClient owns its lifetime). ----
+    private var smbToken: String?
+    private var isSMBStream = false
+
     init(messenger: FlutterBinaryMessenger, viewId: Int64, frame: CGRect) {
         container = AetherPlayerView(frame: frame)
         subtitleOverlay = SubtitleOverlayView(frame: container.bounds)
@@ -196,7 +206,16 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                     result(self.audioTrackMaps())
                 case "setAudioTrack":
                     let index = (args?["index"] as? NSNumber)?.intValue ?? -1
-                    self.engine?.selectAudioTrack(index: index)
+                    if self.isSMBStream {
+                        // The engine's selectAudioTrack reload reuses the RETAINED
+                        // SMBIOReader; its teardown cancel() can poison the new probe's
+                        // first read (EPERM "Demuxer: open failed"). Reopen with a
+                        // FRESH connection + reader and select the stream via
+                        // load(audioSourceStreamIndex:) instead.
+                        await self.reopenSMBStream(audioIndex: index)
+                    } else {
+                        self.engine?.selectAudioTrack(index: index)
+                    }
                     result(nil)
                 case "setSubtitles":
                     let on = (args?["on"] as? Bool) ?? true
@@ -296,6 +315,8 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         // the engine's native SMB path (AetherEngineSMB).
         var source: MediaSource?
         var localURL: URL?
+        smbToken = nil
+        isSMBStream = false
         if let path, !path.isEmpty {
             localURL = URL(fileURLWithPath: path)
             source = .url(localURL!)
@@ -304,8 +325,14 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                 result(FlutterError(code: "smb_stream", message: "SMB stream token not found", details: nil))
                 return
             }
+            // ownsSource: false — the SMBConnection's lifetime is owned by
+            // SMBClient (closed on closeShare / server delete), not by the
+            // reader. With the default true, the engine closing the reader at
+            // the end of a session would tear down the connection.
+            smbToken = parsed.token
+            isSMBStream = true
             source = .custom(
-                SMBIOReader(source: connection, discImageProbeEnabled: false),
+                SMBIOReader(source: connection, ownsSource: false, discImageProbeEnabled: false),
                 formatHint: nil
             )
         } else if let uri, let u = URL(string: uri) {
@@ -403,6 +430,64 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             }
         } catch {
             lastError = String(describing: error)
+        }
+    }
+
+    /// Audio-track switch on an SMB stream. AetherEngine's `selectAudioTrack`
+    /// reload reuses the RETAINED custom `SMBIOReader`: its teardown `cancel()`
+    /// marks the CURRENT in-flight read cancelled, so if it lands while the new
+    /// probe is reading the same shared reader, that read aborts with -1
+    /// (FFmpeg maps to EPERM, "Demuxer: open failed (Operation not
+    /// permitted)"). A fresh SMBConnection per reopen sidesteps this entirely:
+    /// `SMBClient.reconnect(for:)` mints a new transport, so no two sessions
+    /// ever share an `SMBConnection` / `FileReader` mid-teardown.
+    private func reopenSMBStream(audioIndex: Int) async {
+        guard let engine, let smbToken else { return }
+        guard audioIndex >= 0, engine.audioTracks.contains(where: { $0.id == audioIndex }) else { return }
+        if engine.activeAudioTrackIndex == audioIndex { return }
+        let activeSub = engine.activeSubtitleTrackIndex
+        let resumeAt = engine.currentTime
+        // The reconnect does a blocking SMB handshake (runAsync semaphore);
+        // keep it off the main actor regardless of threading semantics.
+        let pair = await Task.detached(priority: .userInitiated) {
+            SMBClient.shared.reconnect(for: smbToken)
+        }.value
+        guard let pair else {
+            lastError = "SMB stream reconnect failed for audio track switch"
+            emit()
+            return
+        }
+        let connection = pair.fresh
+        let stale = pair.stale
+        let source: MediaSource = .custom(
+            SMBIOReader(source: connection, ownsSource: false, discImageProbeEnabled: false),
+            formatHint: nil
+        )
+        lastSource = source
+        do {
+            let probe = try await engine.load(
+                source: source,
+                startPosition: resumeAt,
+                options: lastLoadOptions,
+                audioSourceStreamIndex: Int32(audioIndex)
+            )
+            if let probe {
+                videoCodecName = probe.videoCodecName
+                videoWidth = Int(probe.videoWidth)
+                videoHeight = Int(probe.videoHeight)
+                isDolbyVision = probe.isDolbyVision
+                dvProfile = probe.dvProfile
+            }
+            if let activeSub, engine.subtitleTracks.contains(where: { $0.id == activeSub }) {
+                engine.selectSubtitleTrack(index: activeSub)
+            }
+            // The engine has now swapped the stale reader/connection out; safe
+            // to release the displaced connection.
+            stale?.close()
+            emit()
+        } catch {
+            lastError = String(describing: error)
+            emit()
         }
     }
 
