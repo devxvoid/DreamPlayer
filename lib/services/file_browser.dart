@@ -7,6 +7,7 @@ class FileEntry {
     required this.path,
     required this.isDirectory,
     required this.size,
+    this.bookmarkId,
   });
 
   final String name;
@@ -14,12 +15,16 @@ class FileEntry {
   final bool isDirectory;
   final int size;
 
+  /// Non-null for iOS folders picked via the system picker (bookmarked).
+  final String? bookmarkId;
+
   factory FileEntry.fromMap(Map<dynamic, dynamic> map) {
     return FileEntry(
       name: (map['name'] as String?) ?? '',
       path: (map['path'] as String?) ?? '',
       isDirectory: (map['isDirectory'] as bool?) ?? false,
       size: (map['size'] as num?)?.toInt() ?? 0,
+      bookmarkId: map['bookmarkId'] as String?,
     );
   }
 }
@@ -33,7 +38,7 @@ class FileBrowserService {
   static const MethodChannel _channel = MethodChannel('dreamplayer/files');
 
   /// True when the app can freely read the whole filesystem
-  /// (always true below Android 11).
+  /// (always true below Android 11 and on iOS).
   Future<bool> hasAllFilesAccess() async {
     final result = await _channel.invokeMethod<bool>('hasAllFilesAccess');
     return result ?? false;
@@ -63,5 +68,21 @@ class FileBrowserService {
         .where((e) => (e as Map<dynamic, dynamic>)['error'] == null)
         .map((e) => FileEntry.fromMap(e as Map<dynamic, dynamic>))
         .toList();
+  }
+
+  /// Presents the system folder picker (iOS). Returns the picked folder,
+  /// bookmarked for future sessions, or null if the user cancelled.
+  /// Unsupported on Android.
+  Future<FileEntry?> pickFolder() async {
+    final result = await _channel.invokeMapMethod<dynamic, dynamic>('pickFolder');
+    if (result == null) return null;
+    return FileEntry.fromMap(result);
+  }
+
+  /// Forgets a bookmarked folder (iOS).
+  Future<void> removeBookmark(String bookmarkId) async {
+    await _channel.invokeMethod<void>('removeBookmark', {
+      'bookmarkId': bookmarkId,
+    });
   }
 }

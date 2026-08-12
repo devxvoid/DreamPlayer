@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -139,6 +141,62 @@ class _FileBrowserScreenState extends State<FileBrowserScreen>
     await _load(parent);
   }
 
+  /// iOS: opens the system folder picker and bookmarks the chosen folder so it
+  /// shows up as a root and stays accessible across launches.
+  Future<void> _pickFolder() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final picked = await _service.pickFolder();
+      if (picked != null) {
+        await _loadRoots();
+      } else {
+        if (mounted) setState(() => _loading = false);
+      }
+    } on PlatformException catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.message ?? 'Could not open the folder';
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _removeBookmark(FileEntry entry) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Remove folder?'),
+        content: Text(
+          '"${entry.name}" will no longer appear here. You can add it again '
+          'anytime.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await _service.removeBookmark(entry.bookmarkId!);
+      await _loadRoots();
+    } on PlatformException catch (e) {
+      if (mounted) {
+        setState(() => _error = e.message ?? 'Could not remove the folder');
+      }
+    }
+  }
+
   static String? _parentOf(String? path) {
     if (path == null) return null;
     final index = path.lastIndexOf('/');
@@ -202,15 +260,31 @@ class _FileBrowserScreenState extends State<FileBrowserScreen>
     if (_entries.isEmpty) {
       return const Center(child: Text('No videos or folders here'));
     }
-    return ListView.builder(
-      itemCount: _entries.length,
-      itemBuilder: (context, index) {
-        final entry = _entries[index];
-        return _FileTile(
+    final colorScheme = Theme.of(context).colorScheme;
+    final items = <Widget>[
+      // iOS: the app is sandboxed, so extra folders come from the system
+      // picker instead of Android-style storage roots / all-files access.
+      if (_atRoot && Platform.isIOS)
+        ListTile(
+          leading: Icon(Icons.add_to_drive, color: colorScheme.primary),
+          title: const Text('Pick a folder'),
+          subtitle: const Text('iCloud Drive, On My iPad, other apps\u2026'),
+          onTap: _pickFolder,
+        ),
+      for (final entry in _entries)
+        _FileTile(
           entry: entry,
           onTap: () => _openEntry(entry),
-        );
-      },
+          onRemove: _atRoot &&
+                  Platform.isIOS &&
+                  entry.bookmarkId != null
+              ? () => _removeBookmark(entry)
+              : null,
+        ),
+    ];
+    return ListView.builder(
+      itemCount: items.length,
+      itemBuilder: (context, index) => items[index],
     );
   }
 }
@@ -219,10 +293,12 @@ class _FileTile extends StatelessWidget {
   const _FileTile({
     required this.entry,
     required this.onTap,
+    this.onRemove,
   });
 
   final FileEntry entry;
   final VoidCallback onTap;
+  final VoidCallback? onRemove;
 
   static String _sizeLabel(int bytes) {
     if (bytes <= 0) return '';
@@ -252,9 +328,15 @@ class _FileTile extends StatelessWidget {
         overflow: TextOverflow.ellipsis,
       ),
       subtitle: subtitle == null ? null : Text(subtitle),
-      trailing: entry.isDirectory
-          ? const Icon(Icons.chevron_right)
-          : null,
+      trailing: onRemove != null
+          ? IconButton(
+              icon: const Icon(Icons.delete_outline),
+              tooltip: 'Remove folder',
+              onPressed: onRemove,
+            )
+          : (entry.isDirectory
+              ? const Icon(Icons.chevron_right)
+              : null),
       onTap: onTap,
     );
   }
