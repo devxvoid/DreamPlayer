@@ -15,7 +15,7 @@ class FileEntry {
   final bool isDirectory;
   final int size;
 
-  /// Non-null for iOS folders picked via the system picker (bookmarked).
+  /// Non-null for folders picked via the system folder picker (bookmarked).
   final String? bookmarkId;
 
   factory FileEntry.fromMap(Map<dynamic, dynamic> map) {
@@ -70,16 +70,16 @@ class FileBrowserService {
         .toList();
   }
 
-  /// Presents the system folder picker (iOS). Returns the picked folder,
-  /// bookmarked for future sessions, or null if the user cancelled.
-  /// Unsupported on Android.
+  /// Presents the system folder picker (iOS document picker / Android
+  /// ACTION_OPEN_DOCUMENT_TREE). Returns the picked folder, bookmarked for
+  /// future sessions, or null if the user cancelled.
   Future<FileEntry?> pickFolder() async {
     final result = await _channel.invokeMapMethod<dynamic, dynamic>('pickFolder');
     if (result == null) return null;
     return FileEntry.fromMap(result);
   }
 
-  /// Forgets a bookmarked folder (iOS).
+  /// Forgets a bookmarked folder.
   Future<void> removeBookmark(String bookmarkId) async {
     await _channel.invokeMethod<void>('removeBookmark', {
       'bookmarkId': bookmarkId,

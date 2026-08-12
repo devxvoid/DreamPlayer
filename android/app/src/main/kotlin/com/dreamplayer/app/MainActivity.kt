@@ -10,6 +10,7 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
 
     private var intentChannel: MethodChannel? = null
+    private var fileBrowser: FileBrowser? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -17,7 +18,8 @@ class MainActivity : FlutterActivity() {
             "dreamplayer/exo_player",
             ExoPlayerViewFactory(flutterEngine.dartExecutor.binaryMessenger),
         )
-        FileBrowser(this).configure(
+        fileBrowser = FileBrowser(this)
+        fileBrowser!!.configure(
             MethodChannel(flutterEngine.dartExecutor.binaryMessenger, FileBrowser.CHANNEL),
         )
         intentChannel = MethodChannel(
@@ -39,6 +41,13 @@ class MainActivity : FlutterActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         intentChannel?.invokeMethod("open", intentPayload(intent))
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == FileBrowser.REQ_PICK_FOLDER) {
+            fileBrowser?.onFolderPicked(resultCode, data)
+        }
     }
 
     /// Maps a VIEW intent to {uri, title, path?}. Returns null for non-VIDEO

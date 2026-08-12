@@ -106,12 +106,16 @@ class _FileBrowserScreenState extends State<FileBrowserScreen>
       setState(() => _loading = true);
       await _load(entry.path);
     } else {
+      // Bookmarked-tree videos come back as content:// URIs (no real file
+      // path), so hand those to the player's `uri` field.
+      final isContentUri = entry.path.startsWith('content://');
       Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => PlayerScreen(video: VideoItem(
             id: 'file_${DateTime.now().microsecondsSinceEpoch}',
             title: entry.name,
-            path: entry.path,
+            path: isContentUri ? null : entry.path,
+            uri: isContentUri ? entry.path : null,
             duration: Duration.zero,
             sizeBytes: entry.size,
           )),
@@ -142,8 +146,10 @@ class _FileBrowserScreenState extends State<FileBrowserScreen>
     await _load(parent);
   }
 
-  /// iOS: opens the system folder picker and bookmarks the chosen folder so it
-  /// shows up as a root and stays accessible across launches.
+  /// Opens the system folder picker and bookmarks the chosen folder so it shows
+  /// up as a root and stays accessible across launches. On iOS the picker is
+  /// the document picker; on Android it is ACTION_OPEN_DOCUMENT_TREE (SD cards,
+  /// USB drives, cloud providers).
   Future<void> _pickFolder() async {
     setState(() {
       _loading = true;
@@ -263,22 +269,23 @@ class _FileBrowserScreenState extends State<FileBrowserScreen>
     }
     final colorScheme = Theme.of(context).colorScheme;
     final items = <Widget>[
-      // iOS: the app is sandboxed, so extra folders come from the system
-      // picker instead of Android-style storage roots / all-files access.
-      if (_atRoot && Platform.isIOS)
+      // Extra folders come from the system picker: on iOS the app is sandboxed
+      // (no whole-storage browsing); on Android this covers SD cards, USB
+      // drives, and cloud providers that don't map to a plain /storage path.
+      if (_atRoot)
         ListTile(
           leading: Icon(Icons.add_to_drive, color: colorScheme.primary),
           title: const Text('Pick a folder'),
-          subtitle: const Text('iCloud Drive, On My iPad, other apps\u2026'),
+          subtitle: Text(Platform.isIOS
+              ? 'iCloud Drive, On My iPad, other apps\u2026'
+              : 'SD card, USB drive, cloud apps\u2026'),
           onTap: _pickFolder,
         ),
       for (final entry in _entries)
         _FileTile(
           entry: entry,
           onTap: () => _openEntry(entry),
-          onRemove: _atRoot &&
-                  Platform.isIOS &&
-                  entry.bookmarkId != null
+          onRemove: _atRoot && entry.bookmarkId != null
               ? () => _removeBookmark(entry)
               : null,
         ),

@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 
 import '../models/video_item.dart';
@@ -37,17 +39,21 @@ class _HomeScreenState extends State<HomeScreen> {
                 );
               },
             ),
-            IconButton(
-              tooltip: 'Network shares',
-              icon: const Icon(Icons.lan_outlined),
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const SmbScreen(),
-                  ),
-                );
-              },
-            ),
+            // In-app SMB is iPad-only (AMSMB2). On Android the workflow is
+            // CX Explorer's network share → "Open with" → DreamPlayer, so the
+            // entry is hidden there (the SMB channel has no Android backend).
+            if (!Platform.isAndroid)
+              IconButton(
+                tooltip: 'Network shares',
+                icon: const Icon(Icons.lan_outlined),
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const SmbScreen(),
+                    ),
+                  );
+                },
+              ),
           ],
         ),
         SliverPadding(

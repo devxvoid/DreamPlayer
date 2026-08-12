@@ -5,6 +5,8 @@
 [![Flutter](https://img.shields.io/badge/Flutter-3.44-46A6F2?logo=flutter&logoColor=white&color=46A6F2)](https://flutter.dev)
 [![iOS build](https://github.com/mangeshghodke/DreamPlayer/actions/workflows/ios.yml/badge.svg)](https://github.com/mangeshghodke/DreamPlayer/actions/workflows/ios.yml)
 [![Stars](https://img.shields.io/github/stars/mangeshghodke/DreamPlayer)](https://github.com/mangeshghodke/DreamPlayer)
+[![Donate](https://img.shields.io/badge/Donate-Razorpay-2D8CF0)](https://rzp.io/rzp/cZ5afqVG)
+[![GitHub Sponsors](https://img.shields.io/badge/GitHub_Sponsors-Support-EA4AAA?logo=github&logoColor=white)](https://github.com/sponsors/mangeshghodke/)
 
 A cross-platform video player built with **Flutter**, designed for high-end playback on Android and iOS/iPad — including **Dolby Vision**, HDR10/HDR10+, and lossless audio formats like DTS-HD and TrueHD.
 
@@ -60,6 +62,13 @@ flutter build apk --debug --target-platform android-arm64
 flutter install --debug -d <device-id>
 ```
 
+## Download
+
+Prebuilt binaries are attached to each [GitHub Release](https://github.com/mangeshghodke/DreamPlayer/releases) (versioning starts at **0.0.1** and increments per release):
+
+- **Android** — per-architecture release APKs (`arm64-v8a`, `armeabi-v7a`, `x86_64`) plus a **universal** APK that installs on any device, and the AAB for Google Play.
+- **iOS / iPadOS** — the `DreamPlayer.ipa` is **unsigned** (Apple only allows App Store / TestFlight installs), so sideload it with a free Apple ID via **SideStore** or **AltStore**: download the IPA, sign it in the app, and let the 7-day signature auto-refresh. Full steps are in the release notes.
+
 ## Project layout
 
 ```
@@ -113,13 +122,23 @@ test/
 - [x] iOS/iPad playback (AetherEngine; FFmpeg demux/decode + native DV/HDR path)
 - [x] In-app SMB/LAN playback on iPad (AMSMB2 browse + stream; Android uses CX Explorer → "Open with")
 - [ ] MediaStore scanning for the library
-- [ ] Release build + Play Store / TestFlight distribution
+- [x] GitHub Releases (Android APKs for all ABIs + universal; unsigned iOS IPA)
+- [ ] Play Store / TestFlight distribution (paid Apple Developer account)
 
 ## License
 
 Copyright (C) 2026 Mangesh Ghodke. This project is free software released under the **GNU General Public License v3.0** (or any later version) — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 DreamPlayer is GPLv3 because the Android build links [nextlib-media3ext](https://github.com/anilbeesetti/nextlib) (GPLv3), an FFmpeg extension for Media3 that provides the lossless audio decoders (DTS, TrueHD, E-AC3). Under GPLv3 you are free to use, modify, and redistribute this software (including commercially); modified versions must also be released under GPLv3.
+
+## Support
+
+If DreamPlayer is useful to you, consider supporting the project:
+
+- [Razorpay](https://rzp.io/rzp/cZ5afqVG) — pay via UPI, cards, or netbanking (India)
+- [GitHub Sponsors](https://github.com/sponsors/mangeshghodke/) — recurring support
+
+Both options are also in the app under **Settings → Support**.
 
 Third-party components are used under their own licenses:
 

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
+import '../services/support_links.dart';
 import 'licenses_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
@@ -16,76 +18,33 @@ class SettingsScreen extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
             child: Text(
-              'Playback',
+              'Support',
               style: theme.textTheme.titleSmall?.copyWith(
                 color: theme.colorScheme.primary,
                 fontWeight: FontWeight.w600,
               ),
             ),
           ),
-          const ListTile(
-            leading: Icon(Icons.speaker_group_outlined),
-            title: Text('Audio output'),
-            subtitle: Text('Auto (recommended)'),
-            trailing: Icon(Icons.chevron_right),
-          ),
-          const ListTile(
-            leading: Icon(Icons.speed),
-            title: Text('Default playback speed'),
-            subtitle: Text('1.0x'),
-            trailing: Icon(Icons.chevron_right),
-          ),
-          const ListTile(
-            leading: Icon(Icons.volume_off_outlined),
-            title: Text('Resume playback'),
-            subtitle: Text('Remember position for each video'),
-            trailing: Switch(value: true, onChanged: null),
-          ),
-          const Divider(),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: Text(
-              'Video',
-              style: theme.textTheme.titleSmall?.copyWith(
-                color: theme.colorScheme.primary,
-                fontWeight: FontWeight.w600,
-              ),
+          for (final option in supportOptions)
+            ListTile(
+              leading: Icon(option.icon),
+              title: Text(option.title),
+              subtitle: Text(option.subtitle),
+              trailing: const Icon(Icons.open_in_new, size: 18),
+              onTap: () async {
+                try {
+                  await openSupportUrl(option.url);
+                } on PlatformException {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Could not open this link'),
+                      ),
+                    );
+                  }
+                }
+              },
             ),
-          ),
-          const ListTile(
-            leading: Icon(Icons.hdr_plus_outlined),
-            title: Text('HDR / Dolby Vision'),
-            subtitle: Text('Use device passthrough when supported'),
-            trailing: Switch(value: true, onChanged: null),
-          ),
-          const ListTile(
-            leading: Icon(Icons.crop_original_outlined),
-            title: Text('Default aspect ratio'),
-            subtitle: Text('Original'),
-            trailing: Icon(Icons.chevron_right),
-          ),
-          const Divider(),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: Text(
-              'Library',
-              style: theme.textTheme.titleSmall?.copyWith(
-                color: theme.colorScheme.primary,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          const ListTile(
-            leading: Icon(Icons.folder_outlined),
-            title: Text('Folders to scan'),
-            subtitle: Text('Movies, Download'),
-            trailing: Icon(Icons.chevron_right),
-          ),
-          const ListTile(
-            leading: Icon(Icons.video_library_outlined),
-            title: Text('Include subfolders'),
-            trailing: Switch(value: true, onChanged: null),
-          ),
           const Divider(),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
@@ -105,7 +64,7 @@ class SettingsScreen extends StatelessWidget {
           const ListTile(
             leading: Icon(Icons.info_outline),
             title: Text('Version'),
-            subtitle: Text('0.1.0'),
+            subtitle: Text('0.0.1'),
           ),
           ListTile(
             leading: const Icon(Icons.gavel),

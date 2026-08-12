@@ -25,8 +25,9 @@ void main() {
     await tester.tap(find.text('Settings'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Playback'), findsOneWidget);
-    expect(find.text('Folders to scan'), findsOneWidget);
+    expect(find.text('Support'), findsOneWidget);
+    expect(find.text('About'), findsOneWidget);
+    expect(find.text('Version'), findsOneWidget);
   });
 
   testWidgets('About lists open-source licenses', (tester) async {
