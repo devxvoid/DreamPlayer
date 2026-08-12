@@ -72,7 +72,7 @@ final class SMBClient: NSObject {
         case "saveServer":
             queue.async {
                 do {
-                    result(self.saveServer(args ?? [:]))
+                    result(try self.saveServer(args ?? [:]))
                 } catch {
                     result(FlutterError(code: "save_failed", message: error.localizedDescription, details: nil))
                 }
@@ -94,7 +94,7 @@ final class SMBClient: NSObject {
             let id = args?["id"] as? String ?? ""
             queue.async {
                 do {
-                    result(self.listShares(serverId: id))
+                    result(try self.listShares(serverId: id))
                 } catch {
                     result(FlutterError(code: "smb_error", message: error.localizedDescription, details: nil))
                 }
@@ -120,7 +120,7 @@ final class SMBClient: NSObject {
             }
             queue.async {
                 do {
-                    result(self.listDirectory(serverId: id, share: share, path: path))
+                    result(try self.listDirectory(serverId: id, share: share, path: path))
                 } catch {
                     result(FlutterError(code: "smb_error", message: error.localizedDescription, details: nil))
                 }
@@ -148,7 +148,7 @@ final class SMBClient: NSObject {
             let path = args?["path"] as? String ?? ""
             queue.async {
                 do {
-                    result(self.openShare(serverId: id, share: share, path: path))
+                    result(try self.openShare(serverId: id, share: share, path: path))
                 } catch {
                     result(FlutterError(code: "smb_error", message: error.localizedDescription, details: nil))
                 }
@@ -416,7 +416,7 @@ final class SMBClient: NSObject {
                 }
             }
 
-            let files = videos.map { base, entry in
+            var files = videos.map { base, entry in
                 var e = entry
                 if let match = Self.findMatchingSubtitle(videoBase: base, subtitles: subtitles) {
                     e["subtitlePath"] = match
@@ -488,7 +488,7 @@ final class SMBClient: NSObject {
             if let old = playbackManagers.removeValue(forKey: serverId) {
                 Task { try? await old.manager.disconnectShare() }
             }
-            guard let created = manager(for: record) else {
+            guard let created = self.manager(for: record) else {
                 managersLock.unlock()
                 throw SMBError.initFailed(record.host)
             }
@@ -511,7 +511,7 @@ final class SMBClient: NSObject {
     }
 
     private func closeShare(serverId: String) {
-        SMBStreamServer.shared.unregisterAll(serverId)
+        SMBStreamServer.shared.unregisterAll(serverId: serverId)
         managersLock.lock()
         let existing = playbackManagers.removeValue(forKey: serverId)
         managersLock.unlock()
@@ -545,7 +545,7 @@ final class SMBClient: NSObject {
         guard errno == EINPROGRESS else { return false }
 
         var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
-        let n = poll(&pfd, 1, Int(timeout * 1000))
+        let n = poll(&pfd, 1, Int32(timeout * 1000))
         if n <= 0 { return false }
 
         var err: Int32 = 0

@@ -36,12 +36,8 @@ final class SMBStreamSourceImpl: SMBStreamSource {
     }
 
     func read(at offset: UInt64, length: Int) async throws -> Data {
-        let stream = manager.contents(atPath: filePath, range: offset..<(offset + UInt64(max(length, 0))))
-        var data = Data()
-        for try await chunk in stream {
-            data.append(chunk)
-        }
-        return data
+        let end = offset + UInt64(max(length, 0))
+        return try await manager.contents(atPath: filePath, range: offset..<end)
     }
 
     func close() {
