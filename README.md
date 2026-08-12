@@ -3,7 +3,7 @@
 A cross-platform video player built with **Flutter**, designed for high-end playback on Android and iOS/iPad — including **Dolby Vision**, HDR10/HDR10+, and lossless audio formats like DTS-HD and TrueHD.
 
 > **Android (primary):** playback runs on the native **ExoPlayer / Media3** engine inside a Flutter platform view, so the display receives a real HDR / Dolby Vision signal (no tone-mapped preview).
-> **iOS/iPad:** coming soon (native AVPlayer path).
+> **iOS/iPad:** playback runs on **AetherEngine** (FFmpeg demux/decode + native AVPlayer path for DV/HDR) behind the same platform-view contract; verified on the iPad Pro M2.
 
 ## Features
 
@@ -12,8 +12,8 @@ A cross-platform video player built with **Flutter**, designed for high-end play
 - **All major audio codecs** — DTS, DTS-HD, E-AC3, AC3, TrueHD, AAC, and more via Media3 `FFmpegAudioRenderer` (FLAC and E-AC3 work around buggy platform decoders).
 - **Audio track selection** — pick any audio track mid-playback; the sheet shows the full track name and channels (e.g. `DTS-HD MA 5.1`).
 - **Subtitles — embedded + sideloaded with a full track picker** — every subtitle file sitting next to the video (SRT, SSA/ASS, WebVTT, TTML, SAMI, MicroDVD, MPL2, SubViewer) auto-attaches and the best match auto-selects; the CC button opens a picker over embedded container tracks plus all sideloaded files, with Off. Non-UTF-8 sidecars are re-encoded automatically.
-- **NAS / LAN playback** — stream files from network shares via CX Explorer → "Open with" (CX serves them over a local HTTP proxy at full speed; in-app SMB is deferred, blueprint in AGENTS.md).
-- **In-app file browser** — browse the whole device and play any video, no import needed.
+- **NAS / LAN playback** — **on iPad**: an in-app **SMB browser** (AMSMB2) browses shares, discovers NAS servers on the LAN, and streams directly (with subtitle auto-pairing). **On Android**: stream files from network shares via CX Explorer → "Open with" (CX serves them over a local HTTP proxy at full speed).
+- **In-app file browser** — browse the whole device (Android storage / iPad Files app folders) and play any video, no import needed.
 - **"Open with" integration** — tap any video on the device and open it in DreamPlayer; works with file managers like CX Explorer (including their network-stream handoff via a local HTTP proxy).
 - **Live codec / resolution overlay** — video codec, audio codec + channel count, resolution, HDR format as the file plays.
 - **Transport controls** — play/pause, seek bar, ±10s, fullscreen, buffering spinner, auto-hiding UI.
@@ -25,10 +25,12 @@ A cross-platform video player built with **Flutter**, designed for high-end play
 |---|---|
 | Framework | Flutter (stable 3.44.x) |
 | Playback engine (Android) | ExoPlayer / Media3 in a native `SurfaceView` PlatformView |
+| Playback engine (iOS/iPad) | AetherEngine in a native `AVPlayerView` PlatformView (FFmpeg demux/decode + native path for DV/HDR) |
 | Video decode | Android MediaCodec (hardware DV/HEVC/AVC; `c2.qti.dv.decoder` on device) |
 | Audio decode | Media3 `FFmpegAudioRenderer` extension (`libmedia3ext.so`) |
 | Subtitles | Media3 subtitle stack + custom SAMI/MicroDVD/MPL2/SubViewer parsers; auto-paired siblings from the video's folder |
-| NAS playback | Via CX Explorer → "Open with" (CX streams over a local HTTP proxy; no in-app SMB) |
+| NAS playback (iPad) | In-app SMB browser (**AMSMB2**) + loopback HTTP range server (`SMBStreamServer.swift`) |
+| NAS playback (Android) | Via CX Explorer → "Open with" (CX streams over a local HTTP proxy) |
 | HDR output | Hybrid-composition PlatformView keeps its own SurfaceFlinger layer → real HDR to the display |
 | Reference architecture | [Nova Video Player](https://github.com/nova-video-player/aos-AVP) |
 | Permissions | `permission_handler` (runtime `READ_MEDIA_VIDEO`); `MANAGE_EXTERNAL_STORAGE` for the file browser |
@@ -66,10 +68,12 @@ lib/
     exo_player.dart             # ExoPlayerController + ExoPlayerView platform view
     file_browser.dart           # file-browser channel wrapper
     open_intent.dart            # "Open with" intent bridge
+    smb_client.dart             # SMB channel wrapper (iPad in-app shares)
   screens/
     home_screen.dart            # library (empty state until scanning lands)
-    player_screen.dart          # ExoPlayer playback + live chips + controls + subtitle/audio pickers
+    player_screen.dart          # ExoPlayer/AetherEngine playback + live chips + controls + subtitle/audio pickers
     file_browser_screen.dart    # in-app device file browser
+    smb_screen.dart             # in-app SMB share browser (iPad)
     settings_screen.dart        # settings
   widgets/
     video_card.dart             # library card with HDR/audio badges
@@ -80,6 +84,12 @@ android/app/src/main/kotlin/com/dreamplayer/app/
   DreamSubtitleParserFactory.kt # SAMI/MicroDVD/MPL2/SubViewer parsers
   FileBrowser.kt                # device storage browsing channel
   MainActivity.kt               # registers platform views + intent handling
+ios/Runner/
+  AvPlayerView.swift            # AetherEngine platform view + channels; host SubtitleOverlayView
+  SMBClient.swift               # AMSMB2 SMB client (channel dreamplayer/smb)
+  SMBStreamServer.swift         # loopback HTTP range server for SMB streaming
+  FileBrowser.swift             # Documents-folder + picked-folder browsing channel
+  IntentBridge.swift            # "Open with" intent channel
 test/
   widget_test.dart              # shell/navigation/overflow tests
   codec_info_test.dart          # HDR + codec formatting tests
@@ -91,9 +101,8 @@ test/
 - [x] Dolby Vision + lossless audio on-device (DV P8, E-AC3)
 - [x] Remove mpv/media_kit (cannot output Dolby Vision)
 - [x] Subtitles: embedded + sideloaded with a full track picker (SRT, ASS, VTT, TTML, SAMI, MicroDVD, MPL2, SubViewer)
-- [x] SMB/LAN playback v1 (browse, stream, discovery, subtitles, play-next) — *removed from app; NAS files play via CX Explorer → "Open with"*
-- [ ] Re-add in-app SMB/LAN playback (deferred; blueprint in AGENTS.md)
-- [ ] iOS/iPad playback (AVPlayer)
+- [x] iOS/iPad playback (AetherEngine; FFmpeg demux/decode + native DV/HDR path)
+- [x] In-app SMB/LAN playback on iPad (AMSMB2 browse + stream; Android uses CX Explorer → "Open with")
 - [ ] MediaStore scanning for the library
 - [ ] Release build + Play Store / TestFlight distribution
 

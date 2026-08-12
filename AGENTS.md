@@ -39,7 +39,9 @@ A video player app supporting:
   does). Engine added as an SPM dependency (`project.pbxproj`, pinned
   `upToNextMajorVersion` from 6.21.0) — Xcode auto-resolves FFmpegBuild's
   dynamic FFmpeg xcframeworks into the app bundle. **CI-green** (run on commit
-  `82b3dd9`); **not yet verified on-device** (no Mac locally; CI builds it).
+  `82b3dd9`). **Verified on-device (2026-08):** local/Documents files AND SMB streams
+  play on the iPad Pro M2 via the in-app SMB browser (AMSMB2) — see "SMB / network
+  shares".
   **Minimum iOS 18.0** (`IPHONEOS_DEPLOYMENT_TARGET = 18.0`; builds for
   iOS 18 through the latest, iPhone and iPad).
   - Channel mapping: state 1/2/3/4 (idle/buffering/ready/ended); DV surfaces as
@@ -89,6 +91,7 @@ A video player app supporting:
 | Framework | Flutter (stable, 3.44.x) | Cross-platform, single codebase |
 | Playback engine (Android) | **ExoPlayer / Media3** (native, in PlatformView) | HDR/DV passthrough-capable; working (`c2.qti.dv.decoder`). |
 | Playback engine (iOS/iPad) | **AetherEngine** (native, in PlatformView) | `AvPlayerView.swift` + `AetherEngine` SPM dep; FFmpeg demux/decode + native AVPlayer path for DV/HDR; cues drawn by host `SubtitleOverlayView`. |
+| SMB client (iPad) | **AMSMB2** (SPM) + loopback `SMBStreamServer` | `SMBClient.swift` (channel `dreamplayer/smb`) + tiny HTTP `Range`-serving proxy; verify on-device: NAS browse + stream. |
 | Android audio decode | Media3 `FFmpegAudioRenderer` (ffmpeg extension) | DTS, DTS-HD, E-AC3, AC3, TrueHD — same bundled-FFmpeg approach Nova uses. |
 | Reference architecture | **Nova Video Player** (`nova-video-player/aos-AVP`) | See "Playback research notes". |
 | ~~media_kit / libmpv~~ | **retired** | Cannot do Dolby Vision (no passthrough, no RPU). |
@@ -177,7 +180,7 @@ A video player app supporting:
 - **Library emptied of sample data**: the home library no longer shows hardcoded demo videos — it starts empty with a "Your library is empty" empty-state (file browser and "Open with" are the way in) until a real MediaStore scan lands. The dead "Scan for videos" button was removed.
 - **Responsive grid** (`lib/screens/home_screen.dart`): column count and card height computed from screen width; card text is `Expanded`/`Flexible`. Text scaling clamped to 1.3x app-wide.
 - **Native refresh rate** (`lib/services/display_refresh_rate.dart`): calls `FlutterDisplayMode.setHighRefreshRate()` on Android at startup.
-- **In-app SMB / LAN playback: REMOVED (2026-08)**. The in-app SMB server browser (`smb_screen.dart`, `smb_client.dart`, `SMBClient.kt`, `SmbDataSource.kt`, channel `dreamplayer/smb`, jcifs-ng) was deleted from the app — the user's day-to-day workflow plays NAS files via **CX Explorer's network share → "Open with" → DreamPlayer**, which streams over CX's local HTTP proxy at full speed (see the CX handoff note above). The SMB implementation knowledge (buffering, jcifs-ng tuning, discovery, subtitles) is preserved in the roadmap section below for future development. **Lesson learned on-device**: jcifs-ng's streaming read size is bound by three interlocking properties (`snd_buf_size`/`rcv_buf_size`/`transaction_buf_size`, defaults 65535); raising only the first two did nothing (still ~64 KB reads / ~5 MB/s with constant ring-buffer stalls), and raising `transaction_buf_size` to 8 MiB made the NAS reject reads with `STATUS_INVALID_PARAMETER` ("The parameter is incorrect"); 1 MiB was still rejected. Do not raise buffers past what the NAS's negotiated `MaxReadSize` accepts.
+- **In-app SMB / LAN playback (Android): REMOVED (2026-08)**. The Android in-app SMB server browser (`smb_screen.dart`, `smb_client.dart`, `SMBClient.kt`, `SmbDataSource.kt`, channel `dreamplayer/smb`, jcifs-ng) was deleted from the app — on Android the user's day-to-day workflow plays NAS files via **CX Explorer's network share → "Open with" → DreamPlayer**, which streams over CX's local HTTP proxy at full speed (see the CX handoff note above). The iPad, however, has a shipped in-app SMB browser (AMSMB2 — see the roadmap section below). The Android SMB implementation knowledge (buffering, jcifs-ng tuning, discovery, subtitles) is preserved in the roadmap section below for future development. **Lesson learned on-device**: jcifs-ng's streaming read size is bound by three interlocking properties (`snd_buf_size`/`rcv_buf_size`/`transaction_buf_size`, defaults 65535); raising only the first two did nothing (still ~64 KB reads / ~5 MB/s with constant ring-buffer stalls), and raising `transaction_buf_size` to 8 MiB made the NAS reject reads with `STATUS_INVALID_PARAMETER` ("The parameter is incorrect"); 1 MiB was still rejected. Do not raise buffers past what the NAS's negotiated `MaxReadSize` accepts.
 - Tests: 37 (`flutter test`) incl. no-overflow checks on small phone, tablet, landscape, and 2.0x text scale.
 
 ## Roadmap
@@ -186,11 +189,12 @@ A video player app supporting:
 
 Play files from LAN/NAS SMB shares in-app, mirroring the existing file-browser pattern.
 
-**Status: deferred (2026-08).** An in-app SMB v1 (browse + stream) was implemented and
-verified against the real NAS, then **removed from the app** — the user's workflow is
-CX Explorer's network share → "Open with" → DreamPlayer (streams over CX's local HTTP
-proxy at full speed; no in-app SMB needed). If in-app SMB returns, the knowledge below
-is the complete blueprint; the v1 was essentially done and only needed polish.
+**Status: Android deferred (2026-08); iPad DONE (2026-08).** An Android in-app SMB v1 (browse
++ stream) was implemented and verified against the real NAS, then **removed from the app** —
+on Android the user's workflow is CX Explorer's network share → "Open with" → DreamPlayer
+(streams over CX's local HTTP proxy at full speed; no in-app SMB needed on Android). **On iPad
+the in-app SMB browser + streaming is shipped and verified on-device** (see "iOS/iPad status"
+below). The Android knowledge below is the complete blueprint if in-app SMB ever returns to Android.
 
 **Architecture**
 - New native module per platform exposing a MethodChannel (same shape as `FileBrowser.kt` / `dreamplayer/files`):
@@ -214,7 +218,8 @@ is the complete blueprint; the v1 was essentially done and only needed polish.
 4. *Extras*: auto-pair subtitles from same folder (`.srt`/`.ass`); pin recently-used servers on home screen; DNS/WINS hostname resolution for NAS names.
 - **Scope (v1)**: manual server add + Guest/basic auth + browse + stream + play-next. Add discovery + subtitles after.
 - **Status**: v1 core landed (Android): discovery, status dots, play-next-episode and subtitle auto-pair are implemented and the app is running on-device; the Nova-style read-ahead ring buffer is implemented but **not yet verified against a real NAS**. Remaining: **full NAS verify of streaming/seek + subtitles + play-next** (share browsing is verified), Reconnect-on-drop/resume for high bitrates, and the iPad path (needs an SMB2 client on the Swift side).
-- **iOS/iPad status (2026-08)**: the in-app SMB browser + playback landed for iPad via **AMSMB2** (`ios/Runner/SMBClient.swift`, channel `dreamplayer/smb`, same Dart `SmbClient` contract as the removed Android one) + **`SMBStreamServer.swift`** — a tiny loopback HTTP server (`http://127.0.0.1:<port>/<token>`) that serves `Range` requests via seekable AMSMB2 reads, so AetherEngine/AVPlayer can play SMB files exactly like the CX Explorer local-proxy handoff on Android. `openShare` returns a per-file token URL (one per playlist item → play-next works); `closeShare(serverId)` tears down all streams + disconnects. Servers persist in UserDefaults (passwords in Keychain, never to Dart); shares list via `listShares` + manual add-share; directory listing sorts folders-then-videos and auto-pairs sibling subtitles (`subtitlePath` opened as a second stream URL). LAN scan (`discoverServers`) probes the local /24 on port 445. Registered in `AppDelegate`; `NSBonjourServices` + `NSLocalNetworkUsageDescription` added to Info.plist; AMSMB2 added to the project (SPM, `upToNextMajorVersion` from 4.0.0). **CI-built, not yet verified on-device** (no Mac locally).
+- **iOS/iPad status (2026-08)**: the in-app SMB browser + playback landed for iPad via **AMSMB2** (`ios/Runner/SMBClient.swift`, channel `dreamplayer/smb`, same Dart `SmbClient` contract as the removed Android one) + **`SMBStreamServer.swift`** — a tiny loopback HTTP server (`http://127.0.0.1:<port>/<token>`) that serves `Range` requests via seekable AMSMB2 reads, so AetherEngine/AVPlayer can play SMB files exactly like the CX Explorer local-proxy handoff on Android. `openShare` returns a per-file token URL (one per playlist item → play-next works); `closeShare(serverId)` tears down all streams + disconnects. Servers persist in UserDefaults (passwords in Keychain, never to Dart); shares list via `listShares` + manual add-share; directory listing sorts folders-then-videos and auto-pairs sibling subtitles (`subtitlePath` opened as a second stream URL). LAN scan (`discoverServers`) probes the local /24 on port 445. Registered in `AppDelegate`; `NSBonjourServices` + `NSLocalNetworkUsageDescription` added to Info.plist; AMSMB2 added to the project (SPM, `upToNextMajorVersion` from 4.0.0). **Verified on-device (2026-08):** NAS browsing + streaming works on the iPad Pro M2.
+  - **Gotcha fixed on-device — dynamic SPM framework not embedded**: AMSMB2's package product is `type: .dynamic`, so linking it into Runner is NOT enough. It must ALSO be added to the Runner target's **Embed Frameworks** copy phase (`PBXCopyFilesBuildPhase`, `dstSubfolderSpec = 10`) as a `PBXBuildFile` with `productRef` + `settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy); }`. Without that, `AMSMB2.framework` is missing from `Runner.app/Frameworks/` (the binary still has an `@rpath/AMSMB2.framework/AMSMB2` load command, so the build passes but dyld crashes at launch with "image not found"). Transitive dynamic products (e.g. FFmpegBuild's xcframeworks pulled in by AetherEngine) are auto-embedded; direct package products added by hand to the Frameworks phase are not.
 
 ## CI / Deployment
 
@@ -265,9 +270,11 @@ lib/
   utils/codec_info.dart         # HDR detection + codec -> label mapping + live label merge
   services/display_refresh_rate.dart  # high refresh rate selection (Android)
   services/exo_player.dart        # ExoPlayerController + ExoPlayerView platform view
+  services/smb_client.dart        # SMB channel wrapper (iPad in-app shares; same contract as removed Android one)
   screens/
     home_screen.dart            # library grid (adaptive columns, empty state until scanning lands)
     player_screen.dart          # ExoPlayer/Media3 playback + live codec/HDR chips + controls + subtitle/audio pickers
+    smb_screen.dart             # in-app SMB share browser (server list → shares → folders → play)
     settings_screen.dart        # settings list
   widgets/
     video_card.dart             # library card with HDR/audio badges
@@ -280,9 +287,11 @@ android/app/src/main/kotlin/com/dreamplayer/app/
   MainActivity.kt               # registers platform views + "Open with" intent handling
 ios/Runner/
   AvPlayerView.swift            # AetherEngine platform view + channels (same contract as ExoPlayerView.kt); host SubtitleOverlayView
+  SMBClient.swift               # AMSMB2 SMB client (channel dreamplayer/smb); keychain passwords + LAN discovery
+  SMBStreamServer.swift         # loopback HTTP Range server for SMB streaming (http://127.0.0.1:<port>/<token>)
   FileBrowser.swift             # Documents-folder browsing channel (same contract as FileBrowser.kt)
   IntentBridge.swift            # "Open with" intent channel (same contract as MainActivity.kt)
-  AppDelegate.swift             # registers the AvPlayerView factory + files/intent channels
+  AppDelegate.swift             # registers the AvPlayerView factory + files/intent/smb channels
   SceneDelegate.swift           # forwards scene-opened URLs to IntentBridge
 test/
   widget_test.dart              # shell/navigation/overflow tests
