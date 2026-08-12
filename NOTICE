@@ -1,0 +1,86 @@
+DreamPlayer
+Copyright (C) 2026 Mangesh Ghodke
+
+This project is licensed under the GNU General Public License v3.0 (or, at
+your option, any later version). See the LICENSE file for the full license
+text.
+
+The following third-party components are used by DreamPlayer. Their licenses
+and copyrights are reproduced below. Full license texts are available at the
+linked URLs and, for packages fetched by the build system, inside their
+distributed archives.
+
+-------------------------------------------------------------------------------
+Flutter / Dart
+-------------------------------------------------------------------------------
+
+Flutter SDK and the Dart language
+  Copyright (C) the Flutter/Dart authors
+  License: BSD 3-Clause
+  https://flutter.dev / https://dart.dev
+
+cupertino_icons 1.0.9
+  Copyright (C) the cupertino_icons authors
+  License: MIT
+  https://pub.dev/packages/cupertino_icons
+
+flutter_displaymode 0.7.0
+  Copyright (C) the flutter_displaymode authors
+  License: MIT
+  https://pub.dev/packages/flutter_displaymode
+
+permission_handler 13.0.0
+  Copyright (C) Baseflow
+  License: MIT
+  https://pub.dev/packages/permission_handler
+
+shared_preferences 2.5.5
+  Copyright (C) the Flutter Authors
+  License: BSD 3-Clause
+  https://pub.dev/packages/shared_preferences
+
+-------------------------------------------------------------------------------
+Android
+-------------------------------------------------------------------------------
+
+AndroidX Media3 (ExoPlayer) 1.10.1
+  Copyright (C) the Android Open Source Project
+  License: Apache License 2.0
+  https://github.com/androidx/media
+
+nextlib-media3ext 1.10.1-0.13.0 (Media3 FFmpeg extension)
+  Copyright (C) Anil Kumar Beesetti
+  License: GNU General Public License v3.0
+  https://github.com/anilbeesetti/nextlib
+
+Kotlin standard library (transitive)
+  Copyright (C) JetBrains s.r.o.
+  License: Apache License 2.0
+  https://github.com/JetBrains/kotlin
+
+-------------------------------------------------------------------------------
+iOS / iPad
+-------------------------------------------------------------------------------
+
+AetherEngine (video playback engine)
+  Copyright (C) Vincent Herbst and contributors
+  License: GNU Lesser General Public License v3.0 with an Apple Store / DRM
+           exception (unmodified builds may be distributed via app stores)
+  https://github.com/superuser404notfound/AetherEngine
+
+FFmpegBuild (dynamically linked FFmpeg frameworks for AetherEngine)
+  Copyright (C) the FFmpeg developers
+  License: GNU Lesser General Public License v2.1 or later (no GPL components)
+  https://github.com/superuser404notfound/FFmpegBuild
+
+AMSMB2 4.0.0 (SMB2/3 client)
+  Copyright (C) Amir Abbas Mousavian
+  License: MIT
+  https://github.com/amosavian/AMSMB2
+
+-------------------------------------------------------------------------------
+
+Third-party trademarks mentioned in this project (Dolby Vision, DTS, HDR10,
+HDMI, etc.) are the property of their respective owners. "Dolby Vision" and
+"DTS" are registered trademarks of Dolby Laboratories and DTS, Inc.; their
+use here does not imply endorsement or certification.

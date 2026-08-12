@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'licenses_screen.dart';
+
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
 
@@ -104,6 +106,18 @@ class SettingsScreen extends StatelessWidget {
             leading: Icon(Icons.info_outline),
             title: Text('Version'),
             subtitle: Text('0.1.0'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.gavel),
+            title: const Text('Open-source licenses'),
+            subtitle: const Text('GNU GPL v3.0 and third-party notices'),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const LicensesScreen(),
+                ),
+              );
+            },
           ),
         ],
       ),

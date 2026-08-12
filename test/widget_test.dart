@@ -29,6 +29,30 @@ void main() {
     expect(find.text('Folders to scan'), findsOneWidget);
   });
 
+  testWidgets('About lists open-source licenses', (tester) async {
+    await tester.pumpWidget(const DreamPlayerApp());
+
+    await tester.tap(find.text('Settings'));
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.text('Open-source licenses'),
+      200,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Open-source licenses'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('GNU GPL v3.0 and third-party notices'), findsNothing);
+    expect(find.text('nextlib-media3ext (Android FFmpeg extension)'), findsOneWidget);
+    expect(find.text('AetherEngine (iOS engine)'), findsOneWidget);
+    expect(
+      find.textContaining('DreamPlayer is free software released under the GNU General'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('Tapping a video opens the player with codec chips', (
     tester,
   ) async {

@@ -111,4 +111,21 @@ test/
 
 ## License
 
-This project is for personal use. Media3 is licensed under the Apache 2.0 license; the bundled FFmpeg extension (`nextlib-media3ext`) is GPLv3.
+Copyright (C) 2026 Mangesh Ghodke. This project is free software released under the **GNU General Public License v3.0** (or any later version) — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+DreamPlayer is GPLv3 because the Android build links [nextlib-media3ext](https://github.com/anilbeesetti/nextlib) (GPLv3), an FFmpeg extension for Media3 that provides the lossless audio decoders (DTS, TrueHD, E-AC3). Under GPLv3 you are free to use, modify, and redistribute this software (including commercially); modified versions must also be released under GPLv3.
+
+Third-party components are used under their own licenses:
+
+| Component | License |
+|---|---|
+| AndroidX Media3 / ExoPlayer | Apache 2.0 |
+| nextlib-media3ext (Android FFmpeg) | GPLv3 |
+| AetherEngine (iOS engine) | LGPL-3.0 + Apple Store/DRM exception |
+| FFmpeg frameworks (iOS, via FFmpegBuild) | LGPL-2.1+ |
+| AMSMB2 (iOS SMB client) | MIT |
+| Flutter / Dart | BSD-3-Clause |
+| permission_handler, flutter_displaymode, cupertino_icons | MIT |
+| shared_preferences | BSD-3-Clause |
+
+Dolby Vision, DTS, HDR10, and other trademarks belong to their respective owners.
