@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 import '../services/support_links.dart';
 import 'licenses_screen.dart';
@@ -66,10 +67,15 @@ class SettingsScreen extends StatelessWidget {
                   : 'ExoPlayer (Media3) + FFmpeg',
             ),
           ),
-          const ListTile(
-            leading: Icon(Icons.info_outline),
-            title: Text('Version'),
-            subtitle: Text('0.0.1'),
+          ListTile(
+            leading: const Icon(Icons.info_outline),
+            title: const Text('Version'),
+            subtitle: FutureBuilder<String>(
+              future: _loadVersion(),
+              builder: (context, snapshot) => Text(
+                snapshot.hasData ? snapshot.data! : '…',
+              ),
+            ),
           ),
           ListTile(
             leading: const Icon(Icons.gavel),
@@ -86,5 +92,14 @@ class SettingsScreen extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  Future<String> _loadVersion() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      return '${info.version}+${info.buildNumber}';
+    } on Exception {
+      return '0.0.2+2';
+    }
   }
 }
