@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -56,10 +57,14 @@ class SettingsScreen extends StatelessWidget {
               ),
             ),
           ),
-          const ListTile(
-            leading: Icon(Icons.memory),
-            title: Text('Engine'),
-            subtitle: Text('ExoPlayer (Media3) + FFmpeg'),
+          ListTile(
+            leading: const Icon(Icons.memory),
+            title: const Text('Engine'),
+            subtitle: Text(
+              defaultTargetPlatform == TargetPlatform.iOS
+                  ? 'AetherEngine (AVPlayer + FFmpeg)'
+                  : 'ExoPlayer (Media3) + FFmpeg',
+            ),
           ),
           const ListTile(
             leading: Icon(Icons.info_outline),
