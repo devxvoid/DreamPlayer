@@ -40,8 +40,9 @@ A video player app supporting:
   `upToNextMajorVersion` from 6.21.0) — Xcode auto-resolves FFmpegBuild's
   dynamic FFmpeg xcframeworks into the app bundle. **CI-green** (run on commit
   `82b3dd9`). **Verified on-device (2026-08):** local/Documents files AND SMB streams
-  play on the iPad Pro M2 via the in-app SMB browser (AMSMB2) — see "SMB / network
-  shares".
+  play on the iPad Pro M2 via the former in-app SMB browser (AMSMB2) — since
+  hidden from the UI (2026-08-13, see "SMB / network shares"), NAS playback is
+  via CX/Files "Open with".
   **Minimum iOS 18.0** (`IPHONEOS_DEPLOYMENT_TARGET = 18.0`; builds for
   iOS 18 through the latest, iPhone and iPad).
   - Channel mapping: state 1/2/3/4 (idle/buffering/ready/ended); DV surfaces as

@@ -20,12 +20,12 @@ A cross-platform video player built with **Flutter**, designed for high-end play
 - **All major audio codecs** — DTS, DTS-HD, E-AC3, AC3, TrueHD, AAC, and more via Media3 `FFmpegAudioRenderer` (FLAC and E-AC3 work around buggy platform decoders).
 - **Audio track selection** — pick any audio track mid-playback; the sheet shows the full track name and channels (e.g. `DTS-HD MA 5.1`).
 - **Subtitles — embedded + sideloaded with a full track picker** — every subtitle file sitting next to the video (SRT, SSA/ASS, WebVTT, TTML, SAMI, MicroDVD, MPL2, SubViewer) auto-attaches and the best match auto-selects; the CC button opens a picker over embedded container tracks plus all sideloaded files, with Off. Non-UTF-8 sidecars are re-encoded automatically.
-- **NAS / LAN playback** — **on iPad**: an in-app **SMB browser** (AMSMB2) browses shares, discovers NAS servers on the LAN, and streams directly (with subtitle auto-pairing). **On Android**: stream files from network shares via CX Explorer → "Open with" (CX serves them over a local HTTP proxy at full speed).
+- **NAS / LAN playback** — stream files from network shares via **CX Explorer → "Open with"** on Android (CX serves them over a local HTTP proxy at full speed) and via the **Files app → "Open with"** on iPad. The in-app SMB browser existed on iPad (AMSMB2) but is hidden from the home screen (2026-08): switching audio tracks on an SMB stream could crash the app, and the picker/Open-with paths cover local + NAS workflows without it.
 - **In-app file browser** — browse the whole device (Android storage / iPad Files app folders) and play any video, no import needed.
 - **"Open with" integration** — tap any video on the device and open it in DreamPlayer; works with file managers like CX Explorer (including their network-stream handoff via a local HTTP proxy).
 - **Live codec / resolution overlay** — video codec, audio codec + channel count, resolution, HDR format as the file plays.
 - **Transport controls** — play/pause, seek bar, ±10s, fullscreen, buffering spinner, auto-hiding UI.
-- **Resume playback** — a video stopped mid-way continues from where you left off on the next open (bookmarked while playing / on pause / on background; cleared when it plays to the end). Works for local files, "Open with" files, and iPad SMB streams.
+- **Resume playback** — a video stopped mid-way continues from where you left off on the next open (bookmarked while playing / on pause / on background; cleared when it plays to the end). Works for local files and "Open with" files.
 - **Replay after end (iOS)** — the replay button and scrubber pull-back work even after playback reaches the end, by reloading the last-opened source.
 - **Native refresh rate** — selects the display's highest refresh rate (e.g. 120 Hz) at startup.
 
@@ -39,7 +39,7 @@ A cross-platform video player built with **Flutter**, designed for high-end play
 | Video decode | Android MediaCodec (hardware DV/HEVC/AVC; `c2.qti.dv.decoder` on device) |
 | Audio decode | Media3 `FFmpegAudioRenderer` extension (`libmedia3ext.so`) |
 | Subtitles | Media3 subtitle stack + custom SAMI/MicroDVD/MPL2/SubViewer parsers; auto-paired siblings from the video's folder |
-| NAS playback (iPad) | In-app SMB browser (**AMSMB2** browse + **AetherEngineSMB** `SMBIOReader` custom source for playback) |
+| NAS playback (iPad) | Via Files app → "Open with" + bookmarked folders (in-app SMB browser hidden 2026-08 — see Roadmap) |
 | NAS playback (Android) | Via CX Explorer → "Open with" (CX streams over a local HTTP proxy) |
 | HDR output | Hybrid-composition PlatformView keeps its own SurfaceFlinger layer → real HDR to the display |
 | Reference architecture | [Nova Video Player](https://github.com/nova-video-player/aos-AVP) |
@@ -84,7 +84,7 @@ Notes:
 - A free Apple ID can keep ~3 sideloaded apps active per device.
 - First-time setup of SideStore/AltStore needs a computer (or a second Apple device).
 - No automatic updates — re-download the newest IPA from the Releases page when a new version is published.
-- Playback of DRM-free local/SMB media is fully supported; Dolby Vision/HDR needs a panel that supports it (e.g. iPad Pro M2).
+- Playback of DRM-free local media is fully supported; Dolby Vision/HDR needs a panel that supports it (e.g. iPad Pro M2).
 
 ## Project layout
 
@@ -103,12 +103,12 @@ lib/
     resume_store.dart           # per-video resume position store (shared_preferences)
     file_browser.dart           # file-browser channel wrapper
     open_intent.dart            # "Open with" intent bridge
-    smb_client.dart             # SMB channel wrapper (iPad in-app shares)
+    smb_client.dart             # SMB channel wrapper (ipad in-app shares; hidden from the UI)
   screens/
     home_screen.dart            # library (empty state until scanning lands)
     player_screen.dart          # ExoPlayer/AetherEngine playback + live chips + controls + subtitle/audio pickers
     file_browser_screen.dart    # in-app device file browser
-    smb_screen.dart             # in-app SMB share browser (iPad)
+    smb_screen.dart             # in-app SMB share browser (hidden from the UI 2026-08)
     settings_screen.dart        # settings
   widgets/
     video_card.dart             # library card with HDR/audio badges
@@ -120,8 +120,8 @@ android/app/src/main/kotlin/com/dreamplayer/app/
   FileBrowser.kt                # device storage browsing channel
   MainActivity.kt               # registers platform views + intent handling
 ios/Runner/
-  AvPlayerView.swift            # AetherEngine platform view + channels; host SubtitleOverlayView; SMB via AetherEngineSMB custom source
-  SMBClient.swift               # SMB client (channel dreamplayer/smb): AMSMB2 browse + AetherEngineSMB playback connections
+  AvPlayerView.swift            # AetherEngine platform view + channels; host SubtitleOverlayView; SMB via AetherEngineSMB custom source (unused — entry hidden)
+  SMBClient.swift               # SMB client (channel dreamplayer/smb): AMSMB2 browse + AetherEngineSMB playback connections (unused — entry hidden)
   FileBrowser.swift             # Documents-folder + picked-folder browsing channel
   IntentBridge.swift            # "Open with" intent channel
 test/
@@ -136,7 +136,7 @@ test/
 - [x] Remove mpv/media_kit (cannot output Dolby Vision)
 - [x] Subtitles: embedded + sideloaded with a full track picker (SRT, ASS, VTT, TTML, SAMI, MicroDVD, MPL2, SubViewer)
 - [x] iOS/iPad playback (AetherEngine; FFmpeg demux/decode + native DV/HDR path)
-- [x] In-app SMB/LAN playback on iPad (AMSMB2 browse + stream; Android uses CX Explorer → "Open with")
+- [~] In-app SMB/LAN playback on iPad (AMSMB2 browse + stream) — **hidden 2026-08**: switching audio tracks on an SMB stream could crash the app; NAS files reach the app via CX/Files "Open with" instead. Code stays in the tree as a rebuild blueprint.
 - [ ] MediaStore scanning for the library
 - [x] GitHub Releases (Android APKs for all ABIs + universal; unsigned iOS IPA)
 - [ ] Play Store / TestFlight distribution (paid Apple Developer account)
