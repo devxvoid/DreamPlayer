@@ -97,9 +97,9 @@ class SettingsScreen extends StatelessWidget {
   Future<String> _loadVersion() async {
     try {
       final info = await PackageInfo.fromPlatform();
-      return '${info.version}+${info.buildNumber}';
+      return info.version;
     } on Exception {
-      return '0.0.2+2';
+      return '0.0.6';
     }
   }
 }
