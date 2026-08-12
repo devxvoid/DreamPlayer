@@ -518,8 +518,8 @@ final class SMBClient: NSObject {
         // can pick a decoder path; the server strips it before the token lookup.
         var streamURL = base.appendingPathComponent(token)
         let ext = (path as NSString).pathExtension
-        if !ext.isEmpty, let withExt = streamURL.appendingPathExtension(ext) {
-            streamURL = withExt
+        if !ext.isEmpty {
+            streamURL = streamURL.appendingPathExtension(ext)
         }
         return streamURL.absoluteString
     }
