@@ -99,7 +99,7 @@ class SettingsScreen extends StatelessWidget {
       final info = await PackageInfo.fromPlatform();
       return info.version;
     } on Exception {
-      return '0.0.6';
+      return '0.0.7';
     }
   }
 }
