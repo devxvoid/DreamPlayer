@@ -60,6 +60,25 @@ If you play from the same NAS folder often, bookmark it once:
 > Bookmarked folders keep their access across launches (iOS security-scoped bookmarks are stored
 > in UserDefaults). Remove a bookmark with the **×** beside it at the browser root.
 
+### Option C — WebDAV / FTP servers (via a third-party client)
+
+The Files app's **"Connect to Server" is SMB only** — it cannot connect to WebDAV or FTP servers
+natively. For those, use a third-party client and hand the file to DreamPlayer:
+
+1. Install a WebDAV client such as **[Documents by Readdle](https://apps.apple.com/app/documents-file-manager-docs/id364901807)** (free),
+   **WebDAV Nav+**, or **FE File Explorer**, and connect it to your server (e.g.
+   `https://my-nas.local/dav`, username + password).
+2. Browse to a video in the client. SMB/WebDAV streams are lazy, so you can browse a huge
+   library without copying it.
+3. **Long-press the video → Share → Open in "DreamPlayer"** (or **Open with → DreamPlayer**).
+   DreamPlayer appears in the share sheet for all video containers (mkv, ts, m2ts, webm, wmv,
+   flv, mpg… plus the standard video/* types).
+4. Playback starts immediately; tap **⋮ / audio** during playback to switch audio tracks.
+
+> Tip: in **Documents by Readdle**, enable **"Use as Storage Provider"** for the WebDAV
+> connection — the server then also appears in the Files app under **Locations**, so you can
+> browse it from Files too (still hand the video to DreamPlayer via Share → Open in).
+
 ## On Android (CX Explorer → "Open with")
 
 Android has no in-app SMB browser either. The supported NAS path:
