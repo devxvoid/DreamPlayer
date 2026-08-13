@@ -8,9 +8,12 @@ subtitle picker, resume, everything works.
 
 ## On iPhone / iPad
 
-### Option A — connect your NAS in the Files app, then "Open with" (recommended)
+### Option A — connect your NAS in the Files app, then "Open with"
 
 1. **Connect the NAS in Files:**
+
+   <img src="images/1.%20connect_to_server.png" alt="Connect to Server in the Files app" width="360" align="center"/>
+
    - Open the **Files** app → **Browse** (sidebar) → tap the **⋯** menu at the top → **Connect to Server**.
    - Enter your server address, e.g. `smb://192.168.1.50` or `smb://nas.local`.
    - Pick **Registered User** (your NAS username/password) or **Guest**, tap **Next**, and the
@@ -28,12 +31,29 @@ subtitle picker, resume, everything works.
 
 If you play from the same NAS folder often, bookmark it once:
 
-1. Do **Option A step 1** (connect the server in Files).
-2. Open **DreamPlayer → Folder icon (top-right) → Pick a folder**.
-3. In the system folder picker, navigate into the connected **server** under Locations, pick the
-   video folder, and tap **Open**. DreamPlayer bookmarks it (security-scoped, kept across launches).
-4. The folder now appears at the top of the file browser — browse and play any video in it, no
-   per-file share sheet needed.
+1. Do **Option A step 1** (connect the server in Files — see the first image above).
+
+2. Open **DreamPlayer → Folder icon (top-right)**:
+
+   <img src="images/2.%20open_app_and_click_folder_icon.png" alt="Open DreamPlayer and tap the folder icon" width="360" align="center"/>
+
+3. Tap **Pick a folder**:
+
+   <img src="images/3.%20click_pick_folder.png" alt="Tap Pick a folder" width="360" align="center"/>
+
+4. In the system folder picker, navigate into the connected **server** under Locations:
+
+   <img src="images/4.%20select_connected_server.png" alt="Select the connected server" width="360" align="center"/>
+
+5. Pick the video folder and tap **Open**. DreamPlayer bookmarks it (security-scoped, kept
+   across launches):
+
+   <img src="images/5.%20choose_folder_click_open.png" alt="Choose the folder and tap Open" width="360" align="center"/>
+
+6. The folder now appears at the top of the file browser — browse and play any video in it, no
+   per-file share sheet needed:
+
+   <img src="images/6.%20play_file.png" alt="Browse and play any video in the bookmarked folder" width="360" align="center"/>
 
 > Bookmarked folders keep their access across launches (iOS security-scoped bookmarks are stored
 > in UserDefaults). Remove a bookmark with the **×** beside it at the browser root.
