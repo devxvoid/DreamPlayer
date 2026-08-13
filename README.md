@@ -20,7 +20,7 @@ A cross-platform video player built with **Flutter**, designed for high-end play
 - **All major audio codecs** — DTS, DTS-HD, E-AC3, AC3, TrueHD, AAC, and more via Media3 `FFmpegAudioRenderer` (FLAC and E-AC3 work around buggy platform decoders).
 - **Audio track selection** — pick any audio track mid-playback; the sheet shows the full track name and channels (e.g. `DTS-HD MA 5.1`).
 - **Subtitles — embedded + sideloaded with a full track picker** — every subtitle file sitting next to the video (SRT, SSA/ASS, WebVTT, TTML, SAMI, MicroDVD, MPL2, SubViewer) auto-attaches and the best match auto-selects; the CC button opens a picker over embedded container tracks plus all sideloaded files, with Off. Non-UTF-8 sidecars are re-encoded automatically.
-- **NAS / LAN playback** — stream files from network shares via **CX Explorer → "Open with"** on Android (CX serves them over a local HTTP proxy at full speed) and via the **Files app → "Open with"** on iPad (SMB) or a third-party WebDAV client (Documents by Readdle, WebDAV Nav+). The in-app SMB browser existed on iPad (AMSMB2) but is hidden from the home screen (2026-08): switching audio tracks on an SMB stream could crash the app, and the picker/Open-with paths cover local + NAS workflows without it. See the **[SMB / NAS playback tutorial](docs/tutorials/play-smb-nas-videos.md)** ([video walkthrough](https://youtube.com/shorts/a7oR1yxGz2o)).
+- **NAS / LAN playback** — stream files from network shares via **CX Explorer → "Open with"** on Android (CX serves them over a local HTTP proxy at full speed) and via the **Files app → "Open with"** on iPad. The in-app SMB browser existed on iPad (AMSMB2) but is hidden from the home screen (2026-08): switching audio tracks on an SMB stream could crash the app, and the picker/Open-with paths cover local + NAS workflows without it. See the **[SMB / NAS playback tutorial](docs/tutorials/play-smb-nas-videos.md)** ([video walkthrough](https://youtube.com/shorts/a7oR1yxGz2o)).
 - **In-app file browser** — browse the whole device (Android storage / iPad Files app folders) and play any video, no import needed.
 - **"Open with" integration** — tap any video on the device and open it in DreamPlayer; works with file managers like CX Explorer (including their network-stream handoff via a local HTTP proxy).
 - **Live codec / resolution overlay** — video codec, audio codec + channel count, resolution, HDR format as the file plays.
@@ -39,7 +39,7 @@ A cross-platform video player built with **Flutter**, designed for high-end play
 | Video decode | Android MediaCodec (hardware DV/HEVC/AVC; `c2.qti.dv.decoder` on device) |
 | Audio decode | Media3 `FFmpegAudioRenderer` extension (`libmedia3ext.so`) |
 | Subtitles | Media3 subtitle stack + custom SAMI/MicroDVD/MPL2/SubViewer parsers; auto-paired siblings from the video's folder |
-| NAS playback (iPad) | Via Files app → "Open with" (SMB) + bookmarked folders; WebDAV/FTP via a third-party client → "Open with" (in-app SMB browser hidden 2026-08 — see Roadmap) |
+| NAS playback (iPad) | Via Files app → "Open with" + bookmarked folders (in-app SMB browser hidden 2026-08 — see Roadmap) |
 | NAS playback (Android) | Via CX Explorer → "Open with" (CX streams over a local HTTP proxy) |
 | HDR output | Hybrid-composition PlatformView keeps its own SurfaceFlinger layer → real HDR to the display |
 | Reference architecture | [Nova Video Player](https://github.com/nova-video-player/aos-AVP) |
