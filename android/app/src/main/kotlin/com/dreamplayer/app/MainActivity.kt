@@ -22,6 +22,9 @@ class MainActivity : FlutterActivity() {
         fileBrowser!!.configure(
             MethodChannel(flutterEngine.dartExecutor.binaryMessenger, FileBrowser.CHANNEL),
         )
+        WebDAVClient(this).configure(
+            MethodChannel(flutterEngine.dartExecutor.binaryMessenger, WebDAVClient.CHANNEL),
+        )
         intentChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "dreamplayer/intent",

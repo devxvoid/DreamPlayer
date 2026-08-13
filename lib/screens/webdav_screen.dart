@@ -1,0 +1,751 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import '../models/video_item.dart';
+import '../services/webdav_client.dart';
+import 'player_screen.dart';
+
+enum _WebDavProtocol { http, https }
+
+/// WebDAV browser: saved servers -> folders -> videos. Playback streams the
+/// plain HTTP file URL to the player with the server's Basic auth header.
+class WebDavScreen extends StatefulWidget {
+  const WebDavScreen({super.key});
+
+  @override
+  State<WebDavScreen> createState() => _WebDavScreenState();
+}
+
+class _WebDavScreenState extends State<WebDavScreen> {
+  static final WebDavClient _webdav = WebDavClient.instance;
+
+  List<WebDavServer> _servers = const [];
+  WebDavServer? _browsing;
+  String _path = '/';
+  List<WebDavEntry> _entries = const [];
+  bool _loading = true;
+  String? _error;
+
+  bool get _atBrowseRoot => _browsing == null || _path == '/';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadServers();
+  }
+
+  Future<void> _loadServers() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final servers = await _webdav.listServers();
+      if (!mounted) return;
+      setState(() {
+        _servers = servers;
+        _loading = false;
+      });
+    } on PlatformException catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.message ?? 'Something went wrong';
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _openServer(WebDavServer server) async {
+    setState(() {
+      _browsing = server;
+      _path = '/';
+      _loading = true;
+      _error = null;
+    });
+    await _loadDirectory('/');
+  }
+
+  Future<void> _loadDirectory(String path) async {
+    final server = _browsing;
+    if (server == null) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final entries = await _webdav.listDirectory(server.id, path);
+      if (!mounted) return;
+      setState(() {
+        _path = path;
+        _entries = entries;
+        _loading = false;
+      });
+    } on PlatformException catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.message ?? 'Something went wrong';
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _openEntry(WebDavEntry entry) async {
+    if (entry.isDirectory) {
+      await _loadDirectory(entry.path);
+      return;
+    }
+    final server = _browsing;
+    if (server == null) return;
+
+    String authHeader;
+    try {
+      authHeader = await _webdav.authorizationHeader(server.id);
+    } on PlatformException {
+      authHeader = '';
+    }
+    if (!mounted) return;
+
+    final base = server.url.replaceAll(RegExp(r'/+$'), '');
+    // Playlist = every video in this folder (play-next-episode in a folder).
+    final videos = _entries.where((e) => !e.isDirectory).toList();
+    final playlist = [
+      for (final v in videos)
+        VideoItem(
+          id: 'webdav_${server.id}${v.path}',
+          title: v.name,
+          uri: '$base${v.path}',
+          // WebDAV URLs are stable across sessions; key resume on them.
+          resumeKey: 'webdav_${server.id}${v.path}',
+          duration: Duration.zero,
+          sizeBytes: v.size,
+          httpHeaders: authHeader.isEmpty
+              ? const {}
+              : {'Authorization': authHeader},
+          allowSelfSigned: server.allowSelfSigned,
+        ),
+    ];
+    final playIndex = playlist.indexWhere((item) => item.title == entry.name);
+    if (playIndex < 0 || playlist.isEmpty) return;
+
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => PlayerScreen(
+          video: playlist[playIndex],
+          playlist: playlist,
+          playlistIndex: playIndex,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _goUp() async {
+    if (_browsing == null) {
+      Navigator.of(context).pop();
+      return;
+    }
+    if (_path != '/') {
+      final trimmed = _path.replaceAll(RegExp(r'/+$'), '');
+      final slash = trimmed.lastIndexOf('/');
+      await _loadDirectory(slash <= 0 ? '/' : trimmed.substring(0, slash));
+    } else {
+      setState(() {
+        _browsing = null;
+        _path = '/';
+        _loading = false;
+      });
+      await _loadServers();
+    }
+  }
+
+  void _addServer() => _showServerDialog();
+
+  void _editServer(WebDavServer server) => _showServerDialog(existing: server);
+
+  Future<void> _deleteServer(WebDavServer server) async {
+    await _webdav.deleteServer(server.id);
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('Removed ${server.name}')));
+    _loadServers();
+  }
+
+  void _showServerDialog({WebDavServer? existing}) {
+    showDialog<void>(
+      context: context,
+      builder: (_) =>
+          _ServerFormDialog(existing: existing, onSave: () => _loadServers()),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final browsing = _browsing;
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(browsing == null ? 'WebDAV' : _breadcrumbTitle(browsing)),
+        leading: browsing != null
+            ? IconButton(
+                tooltip: 'Up',
+                icon: const Icon(Icons.arrow_back),
+                onPressed: _goUp,
+              )
+            : null,
+        actions: [
+          if (browsing != null)
+            IconButton(
+              tooltip: 'Server list',
+              icon: const Icon(Icons.dns_outlined),
+              onPressed: () => setState(() {
+                _browsing = null;
+                _path = '/';
+                _loading = false;
+              }),
+            )
+          else
+            IconButton(
+              tooltip: 'Refresh',
+              icon: const Icon(Icons.refresh),
+              onPressed: _loadServers,
+            ),
+        ],
+      ),
+      floatingActionButton: browsing == null
+          ? FloatingActionButton.extended(
+              onPressed: _addServer,
+              icon: const Icon(Icons.add),
+              label: const Text('Add server'),
+            )
+          : null,
+      body: _body(context),
+    );
+  }
+
+  String _breadcrumbTitle(WebDavServer server) {
+    if (_path == '/') return server.name;
+    final folder = _path.replaceAll(RegExp(r'/+$'), '').split('/').last;
+    return '${server.name} / $folder';
+  }
+
+  Widget _body(BuildContext context) {
+    if (_loading) return const Center(child: CircularProgressIndicator());
+    if (_error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.cloud_off_outlined, size: 64),
+              const SizedBox(height: 16),
+              Text(
+                'Error: $_error',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+              const SizedBox(height: 16),
+              FilledButton(
+                onPressed: _atBrowseRoot ? _loadServers : _goUp,
+                child: const Text('Retry'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    if (_browsing == null) return _serverList(context);
+    if (_entries.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            'Nothing here',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+        ),
+      );
+    }
+    return ListView.builder(
+      itemCount: _entries.length,
+      itemBuilder: (context, index) {
+        final entry = _entries[index];
+        return _WebDavTile(entry: entry, onTap: () => _openEntry(entry));
+      },
+    );
+  }
+
+  Widget _serverList(BuildContext context) {
+    if (_servers.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.cloud_outlined, size: 64),
+              const SizedBox(height: 16),
+              Text(
+                'Add your WebDAV server (NAS, Nextcloud, Synology...) to '
+                'browse and play videos from it',
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                onPressed: _addServer,
+                icon: const Icon(Icons.add),
+                label: const Text('Add server'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    return RefreshIndicator(
+      onRefresh: _loadServers,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          const _SectionHeader('Saved servers'),
+          for (final server in _servers)
+            ListTile(
+              leading: const Icon(Icons.cloud),
+              title: Text(
+                server.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Text(
+                server.subtitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: PopupMenuButton<String>(
+                onSelected: (action) {
+                  if (action == 'edit') {
+                    _editServer(server);
+                  } else if (action == 'delete') {
+                    _deleteServer(server);
+                  }
+                },
+                itemBuilder: (_) => const [
+                  PopupMenuItem(value: 'edit', child: Text('Edit')),
+                  PopupMenuItem(value: 'delete', child: Text('Delete')),
+                ],
+              ),
+              onTap: () => _openServer(server),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SectionHeader extends StatelessWidget {
+  const _SectionHeader(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+          color: Theme.of(context).colorScheme.primary,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+}
+
+class _WebDavTile extends StatelessWidget {
+  const _WebDavTile({required this.entry, required this.onTap});
+
+  final WebDavEntry entry;
+  final VoidCallback onTap;
+
+  static String _sizeLabel(int bytes) {
+    if (bytes <= 0) return '';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    var value = bytes.toDouble();
+    var unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+      value /= 1024;
+      unit++;
+    }
+    return '${value.toStringAsFixed(value >= 100 ? 0 : 1)} ${units[unit]}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final icon = entry.isDirectory ? Icons.folder : Icons.play_circle_outline;
+    final color = entry.isDirectory
+        ? colorScheme.primary
+        : colorScheme.secondary;
+    final subtitle = entry.isDirectory ? null : _sizeLabel(entry.size);
+    return ListTile(
+      leading: Icon(icon, color: color),
+      title: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: subtitle == null ? null : Text(subtitle),
+      trailing: entry.isDirectory ? const Icon(Icons.chevron_right) : null,
+      onTap: onTap,
+    );
+  }
+}
+
+class _ServerFormDialog extends StatefulWidget {
+  const _ServerFormDialog({this.existing, this.onSave});
+
+  final WebDavServer? existing;
+  final VoidCallback? onSave;
+
+  @override
+  State<_ServerFormDialog> createState() => _ServerFormDialogState();
+}
+
+class _ServerFormDialogState extends State<_ServerFormDialog> {
+  static final WebDavClient _webdav = WebDavClient.instance;
+
+  late final TextEditingController _name;
+  late final TextEditingController _host;
+  late final TextEditingController _port;
+  late final TextEditingController _path;
+  late final TextEditingController _username;
+  late final TextEditingController _password;
+  late _WebDavProtocol _protocol;
+  late bool _allowSelfSigned;
+  bool _testing = false;
+  String? _resultMessage;
+  bool? _resultSuccess;
+
+  bool get _isHttps => _protocol == _WebDavProtocol.https;
+
+  @override
+  void initState() {
+    super.initState();
+    final s = widget.existing;
+    _name = TextEditingController(text: s?.name ?? '');
+    _username = TextEditingController(text: s?.username ?? '');
+    _password = TextEditingController(text: '');
+    _allowSelfSigned = s?.allowSelfSigned ?? false;
+
+    // Prefill host/port/path from an existing server URL so editing stays
+    // round-trip clean.
+    final uri = s == null ? null : Uri.tryParse(s.url);
+    if (uri != null && uri.host.isNotEmpty) {
+      _protocol = uri.scheme == 'https'
+          ? _WebDavProtocol.https
+          : _WebDavProtocol.http;
+      _host = TextEditingController(text: uri.host);
+      _port = TextEditingController(
+        text: (uri.hasPort ? uri.port : (_isHttps ? 443 : 80)).toString(),
+      );
+      final p = uri.path.isEmpty || uri.path == '/' ? '' : uri.path;
+      _path = TextEditingController(text: p.replaceAll(RegExp(r'/+$'), ''));
+    } else {
+      _protocol = _WebDavProtocol.http;
+      _host = TextEditingController();
+      _port = TextEditingController();
+      _path = TextEditingController();
+    }
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _host.dispose();
+    _port.dispose();
+    _path.dispose();
+    _username.dispose();
+    _password.dispose();
+    super.dispose();
+  }
+
+  void _setProtocol(_WebDavProtocol p) {
+    setState(() {
+      // Fill the protocol's default port only when the field is empty (fresh
+      // form) or still holds the other protocol's auto-default from a toggle,
+      // so a typed custom port is preserved.
+      final current = _port.text.trim();
+      final staleDefault = p == _WebDavProtocol.http ? '8443' : '8080';
+      _protocol = p;
+      if (current.isEmpty || current == staleDefault) {
+        _port.text = p == _WebDavProtocol.http ? '8080' : '8443';
+      }
+    });
+  }
+
+  String? _validate() {
+    if (_host.text.trim().isEmpty) return 'Host is required';
+    final port = int.tryParse(_port.text.trim());
+    if (port == null || port < 1 || port > 65535) {
+      return 'Enter a valid port (1–65535)';
+    }
+    return null;
+  }
+
+  /// Builds `scheme://host:port/path` from the split fields.
+  String _composedUrl() {
+    final scheme = _isHttps ? 'https' : 'http';
+    final host = _host.text.trim();
+    final port = int.tryParse(_port.text.trim());
+    final path = _path.text.trim();
+    var url = port == null ? '$scheme://$host' : '$scheme://$host:$port';
+    if (path.isNotEmpty && path != '/') {
+      url += path.startsWith('/') ? path : '/$path';
+    }
+    return url.replaceAll(RegExp(r'/+$'), '');
+  }
+
+  Future<void> _test() async {
+    final error = _validate();
+    if (error != null) {
+      setState(() {
+        _resultSuccess = false;
+        _resultMessage = error;
+      });
+      return;
+    }
+    setState(() {
+      _testing = true;
+      _resultMessage = null;
+      _resultSuccess = null;
+    });
+    final result = await _webdav.testConnection(
+      url: _composedUrl(),
+      username: _username.text.trim(),
+      password: _password.text,
+      allowSelfSigned: _allowSelfSigned,
+    );
+    if (!mounted) return;
+    setState(() {
+      _testing = false;
+      _resultSuccess = result.ok;
+      _resultMessage = result.ok
+          ? 'Connected'
+          : (result.error ?? 'Connection failed');
+    });
+  }
+
+  Future<void> _save() async {
+    final error = _validate();
+    if (error != null) {
+      setState(() {
+        _resultSuccess = false;
+        _resultMessage = error;
+      });
+      return;
+    }
+    try {
+      await _webdav.saveServer(
+        id: widget.existing?.id,
+        name: _name.text.trim(),
+        url: _composedUrl(),
+        username: _username.text.trim(),
+        password: _password.text,
+        allowSelfSigned: _allowSelfSigned,
+      );
+      widget.onSave?.call();
+      if (mounted) Navigator.of(context).pop();
+    } on PlatformException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _resultSuccess = false;
+        _resultMessage = e.message ?? 'Save failed';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.existing == null ? 'Add server' : 'Edit server'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Flexible(
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    controller: _name,
+                    decoration: const InputDecoration(
+                      labelText: 'Server name',
+                      hintText: 'e.g. Home NAS',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Protocol',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  RadioGroup<_WebDavProtocol>(
+                    groupValue: _protocol,
+                    onChanged: (v) {
+                      if (v != null) _setProtocol(v);
+                    },
+                    child: Wrap(
+                      spacing: 16,
+                      runSpacing: 4,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: const [
+                        Radio<_WebDavProtocol>(value: _WebDavProtocol.http),
+                        Text('HTTP'),
+                        Radio<_WebDavProtocol>(value: _WebDavProtocol.https),
+                        Text('HTTPS'),
+                      ],
+                    ),
+                  ),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Expanded(
+                        flex: 3,
+                        child: TextField(
+                          controller: _host,
+                          keyboardType: TextInputType.url,
+                          decoration: const InputDecoration(
+                            labelText: 'Host',
+                            hintText: '192.168.1.16',
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        flex: 1,
+                        child: TextField(
+                          controller: _port,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            labelText: 'Port',
+                            hintText: '8080',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  TextField(
+                    controller: _path,
+                    decoration: const InputDecoration(
+                      labelText: 'Path',
+                      hintText: '/dav',
+                    ),
+                  ),
+                  TextField(
+                    controller: _username,
+                    decoration: const InputDecoration(
+                      labelText: 'Username (optional)',
+                      hintText: 'admin',
+                    ),
+                  ),
+            TextField(
+              controller: _password,
+              obscureText: true,
+              decoration: InputDecoration(
+                labelText: 'Password',
+                hintText: widget.existing?.hasPassword ?? false
+                    ? '(unchanged)'
+                    : 'Your password',
+              ),
+            ),
+            if (!_isHttps &&
+                (_username.text.trim().isNotEmpty || _password.text.isNotEmpty))
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      Icons.warning_amber_rounded,
+                      size: 18,
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'HTTP sends the password insecurely. Use HTTPS when '
+                        'connecting over the internet.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+                  if (_isHttps)
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Accept self-signed certificate'),
+                      subtitle: const Text(
+                        'For HTTPS servers without a trusted certificate (NAS, '
+                        'Nextcloud, etc.)',
+                      ),
+                      value: _allowSelfSigned,
+                      onChanged: (v) => setState(() => _allowSelfSigned = v),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          if (_resultMessage != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 16),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    _resultSuccess == true
+                        ? Icons.check_circle
+                        : Icons.error_outline,
+                    size: 18,
+                    color: _resultSuccess == true
+                        ? const Color(0xFF4CAF50)
+                        : Theme.of(context).colorScheme.error,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _resultMessage!,
+                      style: TextStyle(
+                        color: _resultSuccess == true
+                            ? const Color(0xFF4CAF50)
+                            : Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: _testing ? null : _test,
+          child: _testing
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Test'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(onPressed: _save, child: const Text('Save')),
+      ],
+    );
+  }
+}

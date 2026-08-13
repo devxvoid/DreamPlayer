@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+ data extraction rules: never back up or device-transfer the
+     WebDAV server list or its encrypted password store. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="dreamplayer.webdavServers.xml"/>
+        <exclude domain="sharedpref" path="dreamplayer.webdavSecrets.xml"/>
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="dreamplayer.webdavServers.xml"/>
+        <exclude domain="sharedpref" path="dreamplayer.webdavSecrets.xml"/>
+    </device-transfer>
+</data-extraction-rules>

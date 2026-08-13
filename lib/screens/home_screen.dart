@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../models/video_item.dart';
+import '../services/file_browser.dart';
 import '../widgets/video_card.dart';
 import 'file_browser_screen.dart';
 import 'player_screen.dart';
+import 'webdav_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -19,80 +22,136 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return CustomScrollView(
-      slivers: [
-        SliverAppBar(
-          title: const Text('DreamPlayer'),
-          floating: true,
-          actions: [
-            IconButton(
-              tooltip: 'Browse files',
-              icon: const Icon(Icons.folder_open),
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const FileBrowserScreen(),
-                  ),
-                );
-              },
+    return Scaffold(
+      body: CustomScrollView(
+        slivers: [
+          SliverAppBar(
+            title: const Text('DreamPlayer'),
+            floating: true,
+          ),
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            sliver: SliverToBoxAdapter(
+              child: Text(
+                'Your library',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+              ),
+            ),
+          ),
+          if (_videos.isEmpty)
+            const SliverFillRemaining(
+              hasScrollBody: false,
+              child: _EmptyLibrary(),
+            )
+          else
+            SliverPadding(
+              padding: const EdgeInsets.all(16),
+              sliver: SliverLayoutBuilder(
+                builder: (context, constraints) {
+                  final width = constraints.crossAxisExtent;
+                  final columns = _columnsForWidth(width);
+                  const spacing = 14.0;
+                  final itemWidth = (width - spacing * (columns - 1)) / columns;
+                  final itemHeight = itemWidth * 9 / 16 + _textBlockHeight;
+                  return SliverGrid(
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: columns,
+                      mainAxisSpacing: spacing,
+                      crossAxisSpacing: spacing,
+                      mainAxisExtent: itemHeight,
+                    ),
+                    delegate: SliverChildBuilderDelegate(
+                      (context, index) {
+                        final video = _videos[index];
+                        return VideoCard(
+                          video: video,
+                          onTap: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => PlayerScreen(video: video),
+                              ),
+                            );
+                          },
+                        );
+                      },
+                      childCount: _videos.length,
+                    ),
+                  );
+                },
+              ),
+            ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _showAddMenu,
+        tooltip: 'Add a source',
+        child: const Icon(Icons.add),
+      ),
+    );
+  }
+
+  /// Opens the "+" menu: WebDAV server, internal storage, or pick a folder.
+  Future<void> _showAddMenu() async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.cloud_outlined),
+              title: const Text('WebDAV'),
+              subtitle: const Text('Add a WebDAV server'),
+              onTap: () => Navigator.of(context).pop('webdav'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.storage_outlined),
+              title: const Text('Internal storage'),
+              subtitle: const Text('Browse files on this device'),
+              onTap: () => Navigator.of(context).pop('storage'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.add_to_drive),
+              title: const Text('Pick a folder'),
+              subtitle: const Text('SD card, USB drive, cloud apps\u2026'),
+              onTap: () => Navigator.of(context).pop('folder'),
             ),
           ],
         ),
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-          sliver: SliverToBoxAdapter(
-            child: Text(
-              'Your library',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
-            ),
-          ),
-        ),
-        if (_videos.isEmpty)
-          const SliverFillRemaining(
-            hasScrollBody: false,
-            child: _EmptyLibrary(),
-          )
-        else
-          SliverPadding(
-            padding: const EdgeInsets.all(16),
-            sliver: SliverLayoutBuilder(
-              builder: (context, constraints) {
-                final width = constraints.crossAxisExtent;
-                final columns = _columnsForWidth(width);
-                const spacing = 14.0;
-                final itemWidth = (width - spacing * (columns - 1)) / columns;
-                final itemHeight = itemWidth * 9 / 16 + _textBlockHeight;
-                return SliverGrid(
-                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: columns,
-                    mainAxisSpacing: spacing,
-                    crossAxisSpacing: spacing,
-                    mainAxisExtent: itemHeight,
-                  ),
-                  delegate: SliverChildBuilderDelegate(
-                    (context, index) {
-                      final video = _videos[index];
-                      return VideoCard(
-                        video: video,
-                        onTap: () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              builder: (_) => PlayerScreen(video: video),
-                            ),
-                          );
-                        },
-                      );
-                    },
-                    childCount: _videos.length,
-                  ),
-                );
-              },
-            ),
-          ),
-      ],
+      ),
     );
+    if (!mounted) return;
+    switch (action) {
+      case 'webdav':
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => const WebDavScreen()),
+        );
+      case 'storage':
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => const FileBrowserScreen()),
+        );
+      case 'folder':
+        await _pickFolder();
+    }
+  }
+
+  Future<void> _pickFolder() async {
+    try {
+      final picked = await FileBrowserService.instance.pickFolder();
+      if (!mounted) return;
+      if (picked == null) return;
+      // The picked folder is now bookmarked as a root; open the file browser
+      // so it (and the rest of storage) is browsable.
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const FileBrowserScreen()),
+      );
+    } on PlatformException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message ?? 'Could not open the folder')),
+      );
+    }
   }
 
   static int _columnsForWidth(double width) {

@@ -151,6 +151,8 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
         uri: video.uri,
         subtitleUri: video.subtitleUri,
         startPositionMs: resume?.inMilliseconds,
+        httpHeaders: video.httpHeaders,
+        allowSelfSigned: video.allowSelfSigned,
       );
     } catch (e) {
       if (mounted) {

@@ -18,6 +18,8 @@ class VideoItem {
     this.audioChannels,
     this.thumbnailPath,
     this.subtitleUri,
+    this.httpHeaders = const {},
+    this.allowSelfSigned = false,
   });
 
   final String id;
@@ -28,6 +30,13 @@ class VideoItem {
 
   /// e.g. a `content://` URI handed over from an "Open with" intent.
   final String? uri;
+
+  /// HTTP request headers to send when loading [uri] (e.g. WebDAV Basic auth).
+  /// Only applied for HTTP(S) sources.
+  final Map<String, String> httpHeaders;
+
+  /// Trusts any certificate for this source (self-signed WebDAV servers).
+  final bool allowSelfSigned;
 
   /// Stable identifier for the resume feature, for sources whose [path]/[uri]
   /// rotate between sessions (e.g. iPad SMB per-file token URLs). Falls back to

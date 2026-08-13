@@ -1,5 +1,3 @@
-import 'dart:io' show Platform;
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -146,32 +144,7 @@ class _FileBrowserScreenState extends State<FileBrowserScreen>
     await _load(parent);
   }
 
-  /// Opens the system folder picker and bookmarks the chosen folder so it shows
-  /// up as a root and stays accessible across launches. On iOS the picker is
-  /// the document picker; on Android it is ACTION_OPEN_DOCUMENT_TREE (SD cards,
-  /// USB drives, cloud providers).
-  Future<void> _pickFolder() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      final picked = await _service.pickFolder();
-      if (picked != null) {
-        await _loadRoots();
-      } else {
-        if (mounted) setState(() => _loading = false);
-      }
-    } on PlatformException catch (e) {
-      if (mounted) {
-        setState(() {
-          _error = e.message ?? 'Could not open the folder';
-          _loading = false;
-        });
-      }
-    }
-  }
-
+  /// Forgets a bookmarked folder.
   Future<void> _removeBookmark(FileEntry entry) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -267,20 +240,7 @@ class _FileBrowserScreenState extends State<FileBrowserScreen>
     if (_entries.isEmpty) {
       return const Center(child: Text('No videos or folders here'));
     }
-    final colorScheme = Theme.of(context).colorScheme;
     final items = <Widget>[
-      // Extra folders come from the system picker: on iOS the app is sandboxed
-      // (no whole-storage browsing); on Android this covers SD cards, USB
-      // drives, and cloud providers that don't map to a plain /storage path.
-      if (_atRoot)
-        ListTile(
-          leading: Icon(Icons.add_to_drive, color: colorScheme.primary),
-          title: const Text('Pick a folder'),
-          subtitle: Text(Platform.isIOS
-              ? 'iCloud Drive, On My iPad, other apps\u2026'
-              : 'SD card, USB drive, cloud apps\u2026'),
-          onTap: _pickFolder,
-        ),
       for (final entry in _entries)
         _FileTile(
           entry: entry,

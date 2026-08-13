@@ -14,7 +14,8 @@ import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultDataSource
-import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.HttpDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
@@ -31,7 +32,12 @@ import io.flutter.plugin.common.StandardMessageCodec
 import io.flutter.plugin.platform.PlatformView
 import io.flutter.plugin.platform.PlatformViewFactory
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
+import okhttp3.OkHttpClient
 import java.io.File
+import java.security.SecureRandom
+import java.security.cert.X509Certificate
+import javax.net.ssl.SSLContext
+import javax.net.ssl.X509TrustManager
 
 @UnstableApi
 class ExoPlayerViewFactory(private val messenger: BinaryMessenger) :
@@ -87,9 +93,51 @@ class ExoPlayerView(
     /// rtsp, ...) here — e.g. file managers that stream SMB files to players
     /// through a local HTTP proxy (CX Explorer hands out
     /// `http://127.0.0.1:<port>/SMB/...`, verified 4K HEVC at 60 fps).
+    ///
+    /// Playback uses OkHttp (not DefaultHttpDataSource, which wraps
+    /// HttpURLConnection) so WebDAV servers with self-signed certificates can
+    /// be played by swapping in a trust-all client per media item. HTTP
+    /// headers (e.g. WebDAV Basic auth) are applied to the factory, not the
+    /// MediaItem, in current Media3 — the player plays one item at a time, so
+    /// setting default request properties at open time is correct.
+    private val permissiveClient: OkHttpClient by lazy {
+        val trustAll = object : X509TrustManager {
+            override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) = Unit
+            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) = Unit
+            override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+        }
+        val sslContext = SSLContext.getInstance("TLS")
+        sslContext.init(null, arrayOf(trustAll), SecureRandom())
+        OkHttpClient.Builder()
+            .sslSocketFactory(sslContext.socketFactory, trustAll)
+            .hostnameVerifier { _, _ -> true }
+            .build()
+    }
+
+    /// Uses the system trust store (the default) or [permissiveClient] based on
+    /// [allowSelfSigned], which is flipped per media item at open time.
+    private val httpDataSourceFactory = object : HttpDataSource.Factory {
+        private val standard = OkHttpDataSource.Factory(OkHttpClient())
+        private val permissive = OkHttpDataSource.Factory(permissiveClient)
+        @Volatile var allowSelfSigned = false
+
+        override fun createDataSource(): HttpDataSource =
+            (if (allowSelfSigned) permissive else standard).createDataSource()
+
+        override fun setDefaultRequestProperties(defaultRequestProperties: Map<String, String>): HttpDataSource.Factory {
+            standard.setDefaultRequestProperties(defaultRequestProperties)
+            permissive.setDefaultRequestProperties(defaultRequestProperties)
+            return this
+        }
+
+        fun setPermissive(value: Boolean) {
+            allowSelfSigned = value
+        }
+    }
+
     private val dataSourceFactory = DefaultDataSource.Factory(
         context,
-        DefaultHttpDataSource.Factory(),
+        httpDataSourceFactory,
     )
 
     private val subtitleParserFactory = DreamSubtitleParserFactory()
@@ -180,6 +228,17 @@ class ExoPlayerView(
                     val uri = call.argument<String>("uri")
                     val subtitleUri = call.argument<String>("subtitleUri")
                     val startMs = call.argument<Number>("startPositionMs")?.toLong() ?: 0L
+                    // HTTP request headers for this media item (e.g. WebDAV
+                    // Basic auth). Media3 removed per-MediaItem headers; they
+                    // now live on the HttpDataSource factory, which clearAndSet's
+                    // them — so always call, clearing when empty.
+                    val headers: Map<String, String> =
+                        call.argument<Map<String, String>>("headers") ?: emptyMap()
+                    httpDataSourceFactory.setDefaultRequestProperties(headers)
+                    // Self-signed WebDAV servers: swap in the trust-all client.
+                    httpDataSourceFactory.setPermissive(
+                        call.argument<Boolean>("allowSelfSigned") ?: false,
+                    )
                     val mediaItem = MediaItem.Builder()
                         .apply {
                             when {

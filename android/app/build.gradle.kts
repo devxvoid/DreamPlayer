@@ -47,9 +47,22 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:1.10.1")
     implementation("androidx.media3:media3-ui:1.10.1")
     implementation("androidx.media3:media3-common:1.10.1")
+    // OkHttp-backed HTTP DataSource so playback can use a permissive TLS client
+    // for WebDAV servers with self-signed certificates. DefaultHttpDataSource
+    // uses HttpURLConnection internally, which cannot accept custom certs.
+    implementation("androidx.media3:media3-datasource-okhttp:1.10.1")
+    // WebDAV PROPFIND: Android's HttpURLConnection only allows the standard
+    // RFC 2616 verbs, so it cannot send PROPFIND. OkHttp permits arbitrary
+    // methods and is used for browsing; playback uses it via the module above.
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     // SAF DocumentFile wrapper used to browse folders picked via
     // ACTION_OPEN_DOCUMENT_TREE (SD cards, USB drives, cloud providers).
     implementation("androidx.documentfile:documentfile:1.0.1")
+    // EncryptedSharedPreferences (Android Keystore-backed) for WebDAV server
+    // passwords: server metadata stays in plain SharedPreferences, secrets go
+    // in an AES-256-GCM encrypted prefs file so a backup or file dump of the
+    // app data cannot expose credentials.
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
     // Prebuilt Media3 FFmpeg extension (GPLv3): software decode for
     // DTS/DTS-HD, TrueHD/MLP, E-AC3, AC3 where MediaCodec has no decoder.
     implementation("io.github.anilbeesetti:nextlib-media3ext:1.10.1-0.13.0")

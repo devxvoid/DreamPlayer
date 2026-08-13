@@ -233,6 +233,8 @@ class ExoPlayerController {
     String? uri,
     String? subtitleUri,
     int? startPositionMs,
+    Map<String, String>? httpHeaders,
+    bool allowSelfSigned = false,
   }) =>
       _send('open', {
         if (uri != null && uri.isNotEmpty) 'uri': uri else 'path': path,
@@ -241,6 +243,9 @@ class ExoPlayerController {
           'subtitleUri': subtitleUri,
         if (startPositionMs != null && startPositionMs > 0)
           'startPositionMs': startPositionMs,
+        if (httpHeaders != null && httpHeaders.isNotEmpty)
+          'headers': httpHeaders,
+        if (allowSelfSigned) 'allowSelfSigned': true,
       });
 
   Future<void> play() => _send('play');
