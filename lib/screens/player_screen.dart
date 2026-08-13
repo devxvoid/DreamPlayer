@@ -7,6 +7,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../models/hdr_format.dart';
 import '../models/video_item.dart';
+import '../services/continue_watching.dart';
 import '../services/exo_player.dart';
 import '../services/resume_store.dart';
 import '../utils/codec_info.dart';
@@ -128,6 +129,10 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
 
   Future<void> _openCurrent() async {
     final video = _current;
+    debugPrint(
+      'DREAM_OPEN title="${video.title}" path=${video.path} uri=${video.uri} '
+      'headers=${video.httpHeaders.keys.toList()}',
+    );
     if (video.path == null && video.uri == null) {
       if (mounted) {
         setState(() => _error = 'No video source provided.');
@@ -166,13 +171,26 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     final key = _resumeKey;
     if (key.isEmpty || position <= Duration.zero) return;
     ResumeStore.save(key, position);
+    // Keep the home "Continue watching" list in sync (skip trivial positions).
+    if (position >= const Duration(seconds: 10)) {
+      ContinueWatchingStore.save(_withLiveDuration, position);
+    }
   }
+
+  /// The current video, but with a real duration when the player already knows
+  /// it (WebDAV/stream URLs start with `Duration.zero`, and the card needs the
+  /// duration to draw its progress bar).
+  VideoItem get _withLiveDuration =>
+      _duration > Duration.zero && _current.duration <= Duration.zero
+          ? _current.withPlaybackInfo(duration: _duration)
+          : _current;
 
   Future<void> _clearResume() async {
     if (_inTests) return;
     final key = _resumeKey;
     if (key.isEmpty) return;
     await ResumeStore.clear(key);
+    await ContinueWatchingStore.remove(key);
   }
 
   /// Advances to the next video in the playlist when the current one ends
@@ -201,6 +219,38 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     await _openCurrent();
   }
 
+  /// Maps a native PlaybackException to something a user can act on.
+  String _friendlyError(ExoPlayerEvent e) {
+    final code = e.error ?? '';
+    switch (code) {
+      case 'error_code_io_bad_http_status':
+        final detail = e.errorMessage?.isNotEmpty == true
+            ? '\n${e.errorMessage}'
+            : '';
+        return 'Server returned an error status for this file$detail. The '
+            'source may have expired (e.g. a file handoff from a file '
+            'manager) — reopen it from its source and try again.';
+      case 'error_code_io_file_not_found':
+      case 'error_code_io_no_permission':
+        return 'The video file could not be accessed. It may have been '
+            'moved, deleted, or its access permission has expired — reopen '
+            'it from its source.';
+      case 'error_code_io_network_connection_failed':
+      case 'error_code_io_network_connection_timeout':
+      case 'error_code_timeout':
+        return 'Could not reach the server. Check your network connection '
+            'and try again.';
+      case 'error_code_io_cleartext_not_permitted':
+        return 'Plain HTTP is blocked for this source. Use HTTPS if the '
+            'server supports it.';
+      default:
+        final detail = e.errorMessage?.isNotEmpty == true
+            ? '\n${e.errorMessage}'
+            : '';
+        return 'Playback failed ($code).$detail';
+    }
+  }
+
   void _onExoEvent(ExoPlayerEvent e) {
     final wasPlaying = _playing;
     final wasBuffering = _buffering;
@@ -209,7 +259,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     _duration = e.duration;
     _buffering = e.buffering;
     _completed = e.ended;
-    if (e.error != null && e.error!.isNotEmpty) _error = e.error;
+    if (e.error != null && e.error!.isNotEmpty) _error = _friendlyError(e);
     _subtitleOn = e.subtitleOn;
     _subtitleTracks = e.subtitleTracks;
     _selectedSubtitleTrack = e.selectedSubtitleTrack;

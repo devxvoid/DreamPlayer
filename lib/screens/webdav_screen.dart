@@ -7,6 +7,12 @@ import 'player_screen.dart';
 
 enum _WebDavProtocol { http, https }
 
+/// Percent-encodes each path segment of a WebDAV file path so playback URLs
+/// survive filenames with spaces, `#`, `%`, `?`, or non-ASCII characters
+/// (a raw `#` would otherwise truncate the URL as a fragment).
+String _encodePath(String path) =>
+    path.split('/').map(Uri.encodeComponent).join('/');
+
 /// WebDAV browser: saved servers -> folders -> videos. Playback streams the
 /// plain HTTP file URL to the player with the server's Basic auth header.
 class WebDavScreen extends StatefulWidget {
@@ -115,7 +121,7 @@ class _WebDavScreenState extends State<WebDavScreen> {
         VideoItem(
           id: 'webdav_${server.id}${v.path}',
           title: v.name,
-          uri: '$base${v.path}',
+          uri: '$base${_encodePath(v.path)}',
           // WebDAV URLs are stable across sessions; key resume on them.
           resumeKey: 'webdav_${server.id}${v.path}',
           duration: Duration.zero,

@@ -122,6 +122,8 @@ class ExoPlayerEvent {
     this.subtitleTracks = const [],
     this.selectedSubtitleTrack = -1,
     this.error,
+    this.errorMessage,
+    this.errorCause,
   });
 
   final int state;
@@ -153,6 +155,11 @@ class ExoPlayerEvent {
   final List<ExoSubtitleTrack> subtitleTracks;
   final int selectedSubtitleTrack;
   final String? error;
+
+  /// Native PlaybackException detail (message / cause) for a friendlier error
+  /// surface than just the opaque error code name.
+  final String? errorMessage;
+  final String? errorCause;
 
   Duration get position => Duration(milliseconds: positionMs);
   Duration get duration => Duration(milliseconds: durationMs);
@@ -188,6 +195,8 @@ class ExoPlayerEvent {
           .toList(),
       selectedSubtitleTrack: asInt(m['selectedSubtitleTrack'], -1),
       error: m['error'] as String?,
+      errorMessage: m['errorMessage'] as String?,
+      errorCause: m['errorCause'] as String?,
     );
   }
 }

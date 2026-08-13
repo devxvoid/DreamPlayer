@@ -1,6 +1,7 @@
 package com.dreamplayer.app
 
 import android.content.Context
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.util.Base64
@@ -14,7 +15,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import org.xmlpull.v1.XmlPullParser
 import java.net.URL
-import java.net.URLDecoder
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
 import java.util.UUID
@@ -474,8 +474,10 @@ class WebDAVClient(private val context: Context) {
         } catch (_: Exception) {
             href.split('?').first()
         }
+        // Decode only %xx escapes. (URLDecoder.decode would also turn a literal
+        // `+` into a space, mangling filenames like "224kbps + English".)
         val decodedPath = try {
-            URLDecoder.decode(rawPath, "UTF-8")
+            Uri.decode(rawPath)
         } catch (_: Exception) {
             rawPath
         }

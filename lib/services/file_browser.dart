@@ -79,6 +79,15 @@ class FileBrowserService {
     return FileEntry.fromMap(result);
   }
 
+  /// Re-grants native access to an imported video's file (iOS security-scoped
+  /// bookmarks). No-op on Android.
+  Future<bool> resolveImportedPath(String path) async {
+    final result = await _channel.invokeMethod<bool>('resolveImportedPath', {
+      'path': path,
+    });
+    return result ?? true;
+  }
+
   /// Forgets a bookmarked folder.
   Future<void> removeBookmark(String bookmarkId) async {
     await _channel.invokeMethod<void>('removeBookmark', {

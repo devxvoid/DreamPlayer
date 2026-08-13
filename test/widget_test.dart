@@ -13,8 +13,8 @@ void main() {
     await tester.pumpWidget(const DreamPlayerApp());
 
     expect(find.text('DreamPlayer'), findsOneWidget);
-    expect(find.text('Your library'), findsOneWidget);
-    expect(find.text('Your library is empty'), findsOneWidget);
+    expect(find.text('Continue watching'), findsOneWidget);
+    expect(find.text('Nothing to continue yet'), findsOneWidget);
     expect(find.text('Library'), findsOneWidget);
     expect(find.text('Settings'), findsOneWidget);
   });

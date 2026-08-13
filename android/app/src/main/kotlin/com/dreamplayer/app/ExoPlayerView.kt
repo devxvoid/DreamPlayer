@@ -212,7 +212,11 @@ class ExoPlayerView(
         }
 
         override fun onPlayerError(error: PlaybackException) {
-            emit(error.errorCodeName)
+            emit(
+                errorCodeName = error.errorCodeName,
+                errorMessage = error.message,
+                errorCause = error.cause?.message,
+            )
         }
     }
 
@@ -529,7 +533,11 @@ class ExoPlayerView(
         }
     }
 
-    private fun emit(errorCodeName: String? = null) {
+    private fun emit(
+        errorCodeName: String? = null,
+        errorMessage: String? = null,
+        errorCause: String? = null,
+    ) {
         val s = sink ?: return
         val videoFormat = player.videoFormat
         val audioFormat = player.audioFormat
@@ -566,6 +574,8 @@ class ExoPlayerView(
         map["subtitleTracks"] = subtitleTracks
         map["selectedSubtitleTrack"] = selectedSubtitle
         map["error"] = errorCodeName
+        map["errorMessage"] = errorMessage
+        map["errorCause"] = errorCause
         s.success(map)
     }
 

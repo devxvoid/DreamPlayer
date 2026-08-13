@@ -1,27 +1,186 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../app.dart' show appRouteObserver;
 import '../models/video_item.dart';
+import '../services/continue_watching.dart';
 import '../services/file_browser.dart';
+import '../services/webdav_client.dart';
 import '../widgets/video_card.dart';
 import 'file_browser_screen.dart';
 import 'player_screen.dart';
 import 'webdav_screen.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  const HomeScreen({super.key, this.refreshTick});
+
+  /// Notifies the screen that it became visible again (e.g. the Library tab
+  /// was re-selected) so it can reload its continue-watching list.
+  final Listenable? refreshTick;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
-  /// The user's library. Empty until real library scanning lands (the file
-  /// browser and network shares are the current way to open videos).
-  final List<VideoItem> _videos = const [];
+class _HomeScreenState extends State<HomeScreen>
+    with WidgetsBindingObserver, RouteAware {
+  /// "Continue watching": videos with a saved resume position, most recently
+  /// played first (persisted via [ContinueWatchingStore]).
+  List<ContinueWatchingEntry> _entries = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    widget.refreshTick?.addListener(_loadLibrary);
+    // Reload whenever the persisted list changes (e.g. a save or remove).
+    ContinueWatchingStore.changes.addListener(_loadLibrary);
+    _loadLibrary();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route != null) {
+      appRouteObserver.subscribe(this, route);
+    }
+  }
+
+  @override
+  void dispose() {
+    appRouteObserver.unsubscribe(this);
+    widget.refreshTick?.removeListener(_loadLibrary);
+    ContinueWatchingStore.changes.removeListener(_loadLibrary);
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// A route pushed above Home popped (file browser, player, "Open with"), so
+  /// resume positions may have changed — refresh the continue-watching list.
+  @override
+  void didPopNext() {
+    _loadLibrary();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // The list may have changed while the app was in the background (e.g. the
+    // player paused and saved a resume position), so refresh on return.
+    if (state == AppLifecycleState.resumed) _loadLibrary();
+  }
+
+  Future<void> _loadLibrary() async {
+    final entries = await ContinueWatchingStore.load();
+    for (final e in entries) {
+      debugPrint(
+        'DREAM_HOME entry title=${e.video.title} '
+        'dur=${e.video.duration.inSeconds}s',
+      );
+    }
+    if (mounted) {
+      setState(() => _entries = entries);
+    }
+  }
+
+  Future<void> _removeVideo(ContinueWatchingEntry entry) async {
+    final video = entry.video;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Remove from Continue watching?'),
+        content: Text('"${video.title}" will no longer appear here.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final key = ContinueWatchingStore.keyFor(video);
+    await ContinueWatchingStore.remove(key);
+    if (!mounted) return;
+    setState(() {
+      _entries = _entries
+          .where((e) => ContinueWatchingStore.keyFor(e.video) != key)
+          .toList();
+    });
+  }
+
+  void _openVideo(ContinueWatchingEntry entry) async {
+    // iOS: re-grant security-scoped access to the picked file if it's outside
+    // the sandbox (the picker's grant expires between launches).
+    if (entry.video.path != null) {
+      await FileBrowserService.instance.resolveImportedPath(entry.video.path!);
+    }
+    if (!mounted) return;
+    final video = await _restoreWebDavSource(entry.video);
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => PlayerScreen(video: video),
+      ),
+    );
+    // Resume positions may have changed while playing — refresh on return.
+    await _loadLibrary();
+  }
+
+  /// WebDAV entries deliberately do NOT persist the Authorization header (no
+  /// plaintext credentials). The saved key encodes the server id + path, so
+  /// rebuild the source with a freshly-fetched header and the server's current
+  /// URL when the user taps a continue-watching card.
+  Future<VideoItem> _restoreWebDavSource(VideoItem video) async {
+    final key = video.resumeKey;
+    if (key == null || !key.startsWith('webdav_')) return video;
+    final rest = key.substring('webdav_'.length);
+    // Server id = leading UUID (or legacy integer id), the rest is the path.
+    final id = RegExp('^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}')
+            .firstMatch(rest)
+            ?.group(0) ??
+        RegExp(r'^\d+').firstMatch(rest)?.group(0);
+    if (id == null || rest.length <= id.length) return video;
+    try {
+      final servers = await WebDavClient.instance.listServers();
+      WebDavServer? server;
+      for (final s in servers) {
+        if (s.id == id) {
+          server = s;
+          break;
+        }
+      }
+      if (server == null) return video;
+      var auth = '';
+      try {
+        auth = await WebDavClient.instance.authorizationHeader(id);
+      } on PlatformException {
+        auth = '';
+      }
+      final path = rest.substring(id.length);
+      final base = server.url.replaceAll(RegExp(r'/+$'), '');
+      return VideoItem(
+        id: video.id,
+        title: video.title,
+        uri: '$base${_encodePath(path)}',
+        resumeKey: key,
+        duration: video.duration,
+        sizeBytes: video.sizeBytes,
+        httpHeaders: auth.isEmpty ? const {} : {'Authorization': auth},
+        allowSelfSigned: server.allowSelfSigned,
+      );
+    } on PlatformException {
+      return video;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Scaffold(
       body: CustomScrollView(
         slivers: [
@@ -33,14 +192,14 @@ class _HomeScreenState extends State<HomeScreen> {
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
             sliver: SliverToBoxAdapter(
               child: Text(
-                'Your library',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
-                    ),
+                'Continue watching',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
           ),
-          if (_videos.isEmpty)
+          if (_entries.isEmpty)
             const SliverFillRemaining(
               hasScrollBody: false,
               child: _EmptyLibrary(),
@@ -64,19 +223,23 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                     delegate: SliverChildBuilderDelegate(
                       (context, index) {
-                        final video = _videos[index];
+                        final entry = _entries[index];
+                        final video = entry.video;
+                        final progress = video.duration > Duration.zero
+                            ? (entry.position.inMilliseconds /
+                                  video.duration.inMilliseconds)
+                                .clamp(0.0, 1.0)
+                            : null;
                         return VideoCard(
                           video: video,
-                          onTap: () {
-                            Navigator.of(context).push(
-                              MaterialPageRoute<void>(
-                                builder: (_) => PlayerScreen(video: video),
-                              ),
-                            );
-                          },
+                          progress: progress,
+                          subtitle: 'Continue from '
+                              '${_positionLabel(entry.position)}',
+                          onTap: () => _openVideo(entry),
+                          onLongPress: () => _removeVideo(entry),
                         );
                       },
-                      childCount: _videos.length,
+                      childCount: _entries.length,
                     ),
                   );
                 },
@@ -161,6 +324,17 @@ class _HomeScreenState extends State<HomeScreen> {
     return 2;
   }
 
+  /// Percent-encodes each path segment (mirrors `_encodePath` in
+  /// `webdav_screen.dart`).
+  static String _encodePath(String path) =>
+      path.split('/').map(Uri.encodeComponent).join('/');
+
+  static String _positionLabel(Duration position) {
+    final minutes = position.inMinutes;
+    final seconds = position.inSeconds.remainder(60);
+    return '$minutes:${seconds.toString().padLeft(2, '0')}';
+  }
+
   static const double _textBlockHeight = 84;
 }
 
@@ -184,14 +358,15 @@ class _EmptyLibrary extends StatelessWidget {
             ),
             const SizedBox(height: 16),
             Text(
-              'Your library is empty',
+              'Nothing to continue yet',
               style: theme.textTheme.titleMedium?.copyWith(
                 fontWeight: FontWeight.w600,
               ),
             ),
             const SizedBox(height: 8),
             Text(
-              'Browse files to play videos.',
+              'Play a video from your storage or a WebDAV server and it '
+              'will show up here so you can pick up where you left off.',
               textAlign: TextAlign.center,
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: colorScheme.onSurfaceVariant,

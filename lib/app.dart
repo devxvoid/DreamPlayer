@@ -9,6 +9,11 @@ import 'theme/app_theme.dart';
 /// Used by the "Open with" intent handler to navigate without a BuildContext.
 final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
 
+/// Route observer so screens (e.g. Home) can refresh when a pushed route above
+/// them pops back (file browser → Home, player → Home, "Open with" → Home).
+final RouteObserver<ModalRoute<void>> appRouteObserver =
+    RouteObserver<ModalRoute<void>>();
+
 class DreamPlayerApp extends StatefulWidget {
   const DreamPlayerApp({super.key});
 
@@ -45,6 +50,7 @@ class _DreamPlayerAppState extends State<DreamPlayerApp> {
       debugShowCheckedModeBanner: false,
       theme: AppTheme.dark(),
       navigatorKey: appNavigatorKey,
+      navigatorObservers: [appRouteObserver],
       builder: (context, child) {
         final mediaQuery = MediaQuery.of(context);
         final clampedTextScaler = mediaQuery.textScaler.clamp(
@@ -71,6 +77,17 @@ class RootShell extends StatefulWidget {
 class _RootShellState extends State<RootShell> {
   int _selectedIndex = 0;
 
+  /// Bumped whenever the Library tab is (re)selected so the Home screen can
+  /// reload its "Continue watching" list even though IndexedStack keeps it
+  /// alive (playing from the file browser/WebDAV never pushes through Home).
+  final ValueNotifier<int> _homeRefreshTick = ValueNotifier(0);
+
+  @override
+  void dispose() {
+    _homeRefreshTick.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     final mediaQuery = MediaQuery.of(context);
@@ -88,9 +105,9 @@ class _RootShellState extends State<RootShell> {
         data: padded,
         child: IndexedStack(
           index: _selectedIndex,
-          children: const [
-            HomeScreen(),
-            SettingsScreen(),
+          children: [
+            HomeScreen(refreshTick: _homeRefreshTick),
+            const SettingsScreen(),
           ],
         ),
       ),
@@ -100,6 +117,7 @@ class _RootShellState extends State<RootShell> {
           setState(() {
             _selectedIndex = index;
           });
+          if (index == 0) _homeRefreshTick.value++;
         },
         destinations: const [
           NavigationDestination(

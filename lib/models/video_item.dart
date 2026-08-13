@@ -16,7 +16,6 @@ class VideoItem {
     this.audioCodec,
     this.audioProfile,
     this.audioChannels,
-    this.thumbnailPath,
     this.subtitleUri,
     this.httpHeaders = const {},
     this.allowSelfSigned = false,
@@ -54,11 +53,34 @@ class VideoItem {
   final String? audioCodec;
   final String? audioProfile;
   final String? audioChannels;
-  final String? thumbnailPath;
 
   HdrFormat get hdrFormat => detectHdrFormat(hdrHint);
 
   String get hdrLabel => hdrFormat.label;
+
+  /// Returns a copy with [duration] replaced. The duration often isn't known
+  /// until playback starts (e.g. WebDAV URLs), but the Continue watching card
+  /// needs it to draw a progress bar.
+  VideoItem withPlaybackInfo({required Duration duration}) {
+    return VideoItem(
+      id: id,
+      title: title,
+      path: path,
+      uri: uri,
+      resumeKey: resumeKey,
+      duration: duration,
+      sizeBytes: sizeBytes,
+      resolution: resolution,
+      videoCodec: videoCodec,
+      hdrHint: hdrHint,
+      audioCodec: audioCodec,
+      audioProfile: audioProfile,
+      audioChannels: audioChannels,
+      subtitleUri: subtitleUri,
+      httpHeaders: httpHeaders,
+      allowSelfSigned: allowSelfSigned,
+    );
+  }
 
   String? get videoCodecLabel {
     final label = formatVideoCodec(videoCodec);
@@ -87,5 +109,27 @@ class VideoItem {
     }
     return '${minutes.toString().padLeft(2, '0')}:'
         '${seconds.toString().padLeft(2, '0')}';
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'title': title,
+        'path': path,
+        'uri': uri,
+        'resumeKey': resumeKey,
+        'durationMs': duration.inMilliseconds,
+        'sizeBytes': sizeBytes,
+      };
+
+  factory VideoItem.fromJson(Map<String, dynamic> json) {
+    return VideoItem(
+      id: json['id'] as String? ?? '',
+      title: json['title'] as String? ?? '',
+      path: json['path'] as String?,
+      uri: json['uri'] as String?,
+      resumeKey: json['resumeKey'] as String?,
+      duration: Duration(milliseconds: (json['durationMs'] as num?)?.toInt() ?? 0),
+      sizeBytes: (json['sizeBytes'] as num?)?.toInt(),
+    );
   }
 }

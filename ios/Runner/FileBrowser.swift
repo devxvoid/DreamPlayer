@@ -21,6 +21,12 @@ final class FileBrowser: NSObject {
 
     private static let bookmarksKey = "dreamplayer.folderBookmarks"
 
+    /// Security-scoped bookmarks for videos imported into the library, keyed by
+    /// their file path. The library re-resolves (and starts access on) a path
+    /// via `resolveImportedPath` before playback so Files-app picks stay
+    /// readable across launches.
+    private static let importedKey = "dreamplayer.importedVideos"
+
     /// URLs currently resolved from bookmarks with an active security scope.
     private var activeSecurityScopedURLs: [URL] = []
     private var pickerCompletion: FlutterResult?
@@ -53,6 +59,9 @@ final class FileBrowser: NSObject {
             result(listDirectory(path))
         case "pickFolder":
             presentFolderPicker(result)
+        case "resolveImportedPath":
+            let path = (call.arguments as? [String: Any])?["path"] as? String ?? ""
+            result(resolveImportedPath(path))
         case "removeBookmark":
             let bookmarkId = (call.arguments as? [String: Any])?["bookmarkId"] as? String
             if let bookmarkId {
@@ -207,6 +216,21 @@ final class FileBrowser: NSObject {
         top.present(picker, animated: true)
     }
 
+    // MARK: - Imported videos
+
+    /// Re-grants security-scoped access to an imported video's file path (the
+    /// grant is remembered as a bookmark at import time). Called by the library
+    /// before pushing the player.
+    private func resolveImportedPath(_ path: String) -> Bool {
+        guard let data = loadImported()[path], let url = resolve(data) else { return false }
+        startAccess(url)
+        return true
+    }
+
+    private func loadImported() -> [String: Data] {
+        UserDefaults.standard.dictionary(forKey: Self.importedKey) as? [String: Data] ?? [:]
+    }
+
     private func topViewController() -> UIViewController? {
         let scene = UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
@@ -237,7 +261,7 @@ extension FileBrowser: UIDocumentPickerDelegate {
         guard let completion = pickerCompletion else { return }
         pickerCompletion = nil
         guard let url = urls.first else {
-            completion(FlutterError(code: "no_file", message: "No folder was selected", details: nil))
+            completion(FlutterError(code: "no_file", message: "No file was selected", details: nil))
             return
         }
         startAccess(url)
