@@ -50,4 +50,28 @@ void main() {
       expect(entry.resumeKey, isNull);
     });
   });
+
+  group('FileEntry Files home root (iOS)', () {
+    test('fromMap surfaces the isFilesHome flag', () {
+      final entry = FileEntry.fromMap({
+        'name': 'Files',
+        'path': 'dreamplayer/files-home',
+        'isDirectory': true,
+        'size': 0,
+        'isFilesHome': true,
+      });
+      expect(entry.isFilesHome, isTrue);
+      expect(entry.path, 'dreamplayer/files-home');
+    });
+
+    test('ordinary entries default to isFilesHome false', () {
+      final entry = FileEntry.fromMap({
+        'name': 'Documents',
+        'path': '/private/var/Documents',
+        'isDirectory': true,
+        'size': 0,
+      });
+      expect(entry.isFilesHome, isFalse);
+    });
+  });
 }

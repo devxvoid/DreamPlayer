@@ -101,26 +101,38 @@ class _FileBrowserScreenState extends State<FileBrowserScreen>
 
   Future<void> _openEntry(FileEntry entry) async {
     if (entry.isDirectory) {
+      if (entry.isFilesHome) {
+        // iOS: the virtual "Files" root — open the system Files-app home and
+        // play whatever video the user picks.
+        final picked = await _service.openFilesHome();
+        if (picked == null || !mounted) return;
+        _playVideo(picked);
+        return;
+      }
       setState(() => _loading = true);
       await _load(entry.path);
     } else {
-      // Bookmarked-tree videos come back as content:// URIs (no real file
-      // path), so hand those to the player's `uri` field.
-      final isContentUri = entry.path.startsWith('content://');
-      Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => PlayerScreen(video: VideoItem(
-            id: 'file_${DateTime.now().microsecondsSinceEpoch}',
-            title: entry.name,
-            path: isContentUri ? null : entry.path,
-            uri: isContentUri ? entry.path : null,
-            resumeKey: entry.resumeKey,
-            duration: Duration.zero,
-            sizeBytes: entry.size,
-          )),
-        ),
-      );
+      _playVideo(entry);
     }
+  }
+
+  void _playVideo(FileEntry entry) {
+    // Bookmarked-tree videos come back as content:// URIs (no real file
+    // path), so hand those to the player's `uri` field.
+    final isContentUri = entry.path.startsWith('content://');
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => PlayerScreen(video: VideoItem(
+          id: 'file_${DateTime.now().microsecondsSinceEpoch}',
+          title: entry.name,
+          path: isContentUri ? null : entry.path,
+          uri: isContentUri ? entry.path : null,
+          resumeKey: entry.resumeKey,
+          duration: Duration.zero,
+          sizeBytes: entry.size,
+        )),
+      ),
+    );
   }
 
   Future<void> _goUp() async {

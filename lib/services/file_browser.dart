@@ -9,6 +9,7 @@ class FileEntry {
     required this.size,
     this.bookmarkId,
     this.resumeKey,
+    this.isFilesHome = false,
   });
 
   final String name;
@@ -23,6 +24,10 @@ class FileEntry {
   /// inside a bookmarked folder (iOS). Falls back to [path]/[uri] when null.
   final String? resumeKey;
 
+  /// True for the virtual "Files" root (iOS): tapping it opens the system
+  /// document picker — the real Files-app home — instead of listing a path.
+  final bool isFilesHome;
+
   factory FileEntry.fromMap(Map<dynamic, dynamic> map) {
     return FileEntry(
       name: (map['name'] as String?) ?? '',
@@ -31,6 +36,7 @@ class FileEntry {
       size: (map['size'] as num?)?.toInt() ?? 0,
       bookmarkId: map['bookmarkId'] as String?,
       resumeKey: map['resumeKey'] as String?,
+      isFilesHome: (map['isFilesHome'] as bool?) ?? false,
     );
   }
 }
@@ -81,6 +87,15 @@ class FileBrowserService {
   /// future sessions, or null if the user cancelled.
   Future<FileEntry?> pickFolder() async {
     final result = await _channel.invokeMapMethod<dynamic, dynamic>('pickFolder');
+    if (result == null) return null;
+    return FileEntry.fromMap(result);
+  }
+
+  /// iOS only: presents the system document picker — the Files-app home
+  /// (iCloud Drive, On My iPad, Downloads, providers). Returns the picked
+  /// video, imported (bookmarked) for future sessions, or null if cancelled.
+  Future<FileEntry?> openFilesHome() async {
+    final result = await _channel.invokeMapMethod<dynamic, dynamic>('openFilesHome');
     if (result == null) return null;
     return FileEntry.fromMap(result);
   }

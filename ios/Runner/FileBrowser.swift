@@ -21,6 +21,11 @@ final class FileBrowser: NSObject {
 
     private static let bookmarksKey = "dreamplayer.folderBookmarks"
 
+    /// Synthetic path of the virtual "Files" root. Tapping it opens the system
+    /// document picker (the real Files-app home), so it is never listed — Dart
+    /// routes it to `openFilesHome` via the `isFilesHome` flag.
+    static let filesHomePath = "dreamplayer/files-home"
+
     /// Security-scoped bookmarks for videos imported into the library, keyed by
     /// their file path. The library re-resolves (and starts access on) a path
     /// via `resolveImportedPath` before playback so Files-app picks stay
@@ -35,8 +40,14 @@ final class FileBrowser: NSObject {
     /// they stay stable even when the provider remounts at a different path.
     private var bookmarkRoots: [String: URL] = [:]
     private var pickerCompletion: FlutterResult?
+    private var pickerMode: PickerMode = .folder
 
     private override init() { super.init() }
+
+    /// What the currently presented system picker returns.
+    private enum PickerMode {
+        case folder, file
+    }
 
     static func register(with messenger: FlutterBinaryMessenger) {
         let channel = FlutterMethodChannel(name: channelName, binaryMessenger: messenger)
@@ -64,6 +75,8 @@ final class FileBrowser: NSObject {
             result(listDirectory(path))
         case "pickFolder":
             presentFolderPicker(result)
+        case "openFilesHome":
+            presentFilePicker(result)
         case "resolveImportedPath":
             let path = (call.arguments as? [String: Any])?["path"] as? String ?? ""
             result(resolveImportedPath(path))
@@ -87,9 +100,17 @@ final class FileBrowser: NSObject {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
     }
 
-    /// Documents folder + every bookmarked folder the user picked before.
+    /// Virtual "Files" root (opens the system Files-app home via the document
+    /// picker) + the app's Documents folder + every bookmarked folder.
     private func storageRoots() -> [[String: Any]] {
-        var roots = [entryMap(documentsURL, isDirectory: true)]
+        var roots: [[String: Any]] = [[
+            "name": "Files",
+            "path": Self.filesHomePath,
+            "isDirectory": true,
+            "size": 0,
+            "isFilesHome": true,
+        ]]
+        roots.append(entryMap(documentsURL, isDirectory: true))
         roots.append(contentsOf: resolvedBookmarkEntries())
         return roots
     }
@@ -219,8 +240,21 @@ final class FileBrowser: NSObject {
     // MARK: - Folder picker
 
     private func presentFolderPicker(_ result: @escaping FlutterResult) {
+        presentPicker(result, mode: .folder, contentTypes: [.folder])
+    }
+
+    /// Presents the system document picker (the Files-app home: iCloud Drive,
+    /// On My iPad, Downloads, providers...). The picked video is imported
+    /// (bookmarked for future sessions) and returned for playback.
+    private func presentFilePicker(_ result: @escaping FlutterResult) {
+        presentPicker(result, mode: .file, contentTypes: [.movie])
+    }
+
+    private func presentPicker(_ result: @escaping FlutterResult,
+                               mode: PickerMode,
+                               contentTypes: [UTType]) {
         guard pickerCompletion == nil else {
-            result(FlutterError(code: "busy", message: "A folder picker is already open", details: nil))
+            result(FlutterError(code: "busy", message: "A picker is already open", details: nil))
             return
         }
         guard let top = topViewController() else {
@@ -228,7 +262,8 @@ final class FileBrowser: NSObject {
             return
         }
         pickerCompletion = result
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder])
+        pickerMode = mode
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: contentTypes)
         picker.allowsMultipleSelection = false
         picker.delegate = self
         top.present(picker, animated: true)
@@ -281,6 +316,19 @@ final class FileBrowser: NSObject {
         UserDefaults.standard.dictionary(forKey: Self.importedKey) as? [String: Data] ?? [:]
     }
 
+    /// Remembers [url] as an imported video (keyed by path) so its security
+    /// scope can be re-granted later via `resolveImportedPath`.
+    private func importFile(_ url: URL) {
+        guard let data = try? url.bookmarkData(options: .minimalBookmark) else { return }
+        var imported = loadImported()
+        imported[url.path] = data
+        saveImported(imported)
+    }
+
+    private func saveImported(_ imported: [String: Data]) {
+        UserDefaults.standard.set(imported, forKey: Self.importedKey)
+    }
+
     private func topViewController() -> UIViewController? {
         let scene = UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
@@ -315,13 +363,21 @@ extension FileBrowser: UIDocumentPickerDelegate {
             return
         }
         startAccess(url)
-        let bookmarkId = UUID().uuidString
-        if let data = try? url.bookmarkData(options: .minimalBookmark) {
-            var bookmarks = loadBookmarks()
-            bookmarks[bookmarkId] = data
-            saveBookmarks(bookmarks)
+        switch pickerMode {
+        case .folder:
+            let bookmarkId = UUID().uuidString
+            if let data = try? url.bookmarkData(options: .minimalBookmark) {
+                var bookmarks = loadBookmarks()
+                bookmarks[bookmarkId] = data
+                saveBookmarks(bookmarks)
+            }
+            completion(entryMap(url, isDirectory: true, bookmarkId: bookmarkId))
+        case .file:
+            // Import the picked video (bookmark it) so it stays readable across
+            // launches and continue-watching card taps can re-grant its scope.
+            importFile(url)
+            completion(entryMap(url, isDirectory: false))
         }
-        completion(entryMap(url, isDirectory: true, bookmarkId: bookmarkId))
     }
 
     func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
