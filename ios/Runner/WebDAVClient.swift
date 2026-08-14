@@ -277,7 +277,7 @@ final class WebDAVClient: NSObject {
             )
             let code = response.statusCode
             // 207 (Multi-Status) is the success code for PROPFIND.
-            if code == 207 || code == 200 { return ["ok": true, "error": nil] }
+            if code == 207 || code == 200 { return ["ok": true] }
             if code == 404 {
                 // PROPFIND on a bare host/port with no dav root -> 404; a GET
                 // probe distinguishes "server up but no dav here".
@@ -285,7 +285,7 @@ final class WebDAVClient: NSObject {
                     url: probe, username: username, password: password,
                     depth: 0, allowSelfSigned: allowSelfSigned, method: "GET"
                 )
-                if (200...399).contains(r2.statusCode) { return ["ok": true, "error": nil] }
+                if (200...399).contains(r2.statusCode) { return ["ok": true] }
                 return ["ok": false, "error": "HTTP \(r2.statusCode)"]
             }
             return ["ok": false, "error": "HTTP \(code)"]
@@ -305,7 +305,7 @@ final class WebDAVClient: NSObject {
             depth: 1, allowSelfSigned: server.allowSelfSigned
         )
         let code = response.statusCode
-        guard code == 207 || code == 200 else { throw WebDAVError("HTTP \(code)") }
+        guard code == 207 || code == 200 else { throw WebDAVError(message: "HTTP \(code)") }
         let basePath = URL(string: base)?.path ?? ""
         return parseMultistatus(data, basePath: basePath, requestedPath: root ? "/" : path)
     }
