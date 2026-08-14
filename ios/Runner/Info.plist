@@ -239,6 +239,8 @@
 		<string>_smb._tcp</string>
 		<string>_workstation._tcp</string>
 		<string>_smb._udp</string>
+		<string>_jellyfin._tcp</string>
+		<string>_emby._tcp</string>
 	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>

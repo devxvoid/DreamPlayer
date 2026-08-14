@@ -5,9 +5,11 @@ import '../app.dart' show appRouteObserver;
 import '../models/video_item.dart';
 import '../services/continue_watching.dart';
 import '../services/file_browser.dart';
+import '../services/jellyfin_client.dart';
 import '../services/webdav_client.dart';
 import '../widgets/video_card.dart';
 import 'file_browser_screen.dart';
+import 'jellyfin_screen.dart';
 import 'player_screen.dart';
 import 'webdav_screen.dart';
 
@@ -27,6 +29,8 @@ class _HomeScreenState extends State<HomeScreen>
   /// "Continue watching": videos with a saved resume position, most recently
   /// played first (persisted via [ContinueWatchingStore]).
   List<ContinueWatchingEntry> _entries = const [];
+
+  final JellyfinClient _client = JellyfinClient();
 
   @override
   void initState() {
@@ -123,9 +127,11 @@ class _HomeScreenState extends State<HomeScreen>
     if (!mounted) return;
     final video = await _restoreWebDavSource(entry.video);
     if (!mounted) return;
+    final restored = await _restoreJellyfinSource(video);
+    if (!mounted) return;
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => PlayerScreen(video: video),
+        builder: (_) => PlayerScreen(video: restored),
       ),
     );
     // Resume positions may have changed while playing — refresh on return.
@@ -177,6 +183,41 @@ class _HomeScreenState extends State<HomeScreen>
     } on PlatformException {
       return video;
     }
+  }
+
+  /// Jellyfin stream URLs embed the session's `api_key`, which rotates on
+  /// re-login. Rebuild the URL from the stable resume key
+  /// (`jellyfin:<host>/<item>`) against the current saved server + token.
+  Future<VideoItem> _restoreJellyfinSource(VideoItem video) async {
+    final key = video.resumeKey;
+    if (key == null || !key.startsWith('jellyfin:')) return video;
+    final rest = key.substring('jellyfin:'.length);
+    final slash = rest.indexOf('/');
+    if (slash <= 0) return video;
+    final host = rest.substring(0, slash);
+    final itemId = rest.substring(slash + 1);
+    if (host.isEmpty || itemId.isEmpty) return video;
+    final servers = await _client.loadServers();
+    JellyfinServer? server;
+    for (final s in servers) {
+      if (s.urlHost == host) {
+        server = s;
+        break;
+      }
+    }
+    if (server == null || !server.isAuthenticated) return video;
+    final item = JellyfinItem(id: itemId, name: video.title);
+    return VideoItem(
+      id: video.id,
+      title: video.title,
+      uri: _client.streamUrl(server, item),
+      resumeKey: key,
+      duration: video.duration,
+      sizeBytes: video.sizeBytes,
+      allowSelfSigned: server.allowSelfSigned,
+      jellyfinServerId: server.urlHost,
+      jellyfinItemId: itemId,
+    );
   }
 
   @override
@@ -270,6 +311,12 @@ class _HomeScreenState extends State<HomeScreen>
               onTap: () => Navigator.of(context).pop('webdav'),
             ),
             ListTile(
+              leading: const Icon(Icons.live_tv_outlined),
+              title: const Text('Jellyfin'),
+              subtitle: const Text('Jellyfin / Emby media server'),
+              onTap: () => Navigator.of(context).pop('jellyfin'),
+            ),
+            ListTile(
               leading: const Icon(Icons.storage_outlined),
               title: const Text('Internal storage'),
               subtitle: const Text('Browse files on this device'),
@@ -290,6 +337,10 @@ class _HomeScreenState extends State<HomeScreen>
       case 'webdav':
         await Navigator.of(context).push(
           MaterialPageRoute<void>(builder: (_) => const WebDavScreen()),
+        );
+      case 'jellyfin':
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => const JellyfinScreen()),
         );
       case 'storage':
         await Navigator.of(context).push(

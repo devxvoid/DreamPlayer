@@ -8,6 +8,7 @@ enum PlaybackSource {
   cxSmb('CX SMB'),
   filesSmb('Files / SMB'),
   smb('SMB'),
+  jellyfin('Jellyfin'),
   files('Files'),
   network('Network');
 
@@ -34,6 +35,8 @@ class VideoItem {
     this.subtitleUri,
     this.httpHeaders = const {},
     this.allowSelfSigned = false,
+    this.jellyfinServerId,
+    this.jellyfinItemId,
   });
 
   final String id;
@@ -49,8 +52,12 @@ class VideoItem {
   /// Only applied for HTTP(S) sources.
   final Map<String, String> httpHeaders;
 
-  /// Trusts any certificate for this source (self-signed WebDAV servers).
+  /// Trusts any certificate for this source (self-signed WebDAV/Jellyfin servers).
   final bool allowSelfSigned;
+
+  /// Jellyfin identifiers for the stable resume key (`jellyfin:<host>/<item>`).
+  final String? jellyfinServerId;
+  final String? jellyfinItemId;
 
   /// Stable identifier for the resume feature, for sources whose [path]/[uri]
   /// rotate between sessions (e.g. iPad SMB per-file token URLs). Falls back to
@@ -79,6 +86,7 @@ class VideoItem {
   /// - `cx:…` → CX Explorer SMB handoff (Android "Open with")
   /// - `folderbookmark:…` → iOS picked folder (Files app / NAS share)
   /// - `smb:…` → legacy in-app SMB
+  /// - `jellyfin:…` → Jellyfin/Emby server
   /// - `content://` → Android "Open with"/bookmarked-tree URI
   /// - `file://` / plain path → on-device file
   /// - other http(s) URL → generic network source
@@ -89,6 +97,7 @@ class VideoItem {
       if (key.startsWith('cx:')) return PlaybackSource.cxSmb;
       if (key.startsWith('folderbookmark:')) return PlaybackSource.filesSmb;
       if (key.startsWith('smb:')) return PlaybackSource.smb;
+      if (key.startsWith('jellyfin:')) return PlaybackSource.jellyfin;
     }
     final u = uri;
     if (u != null) {
@@ -124,6 +133,8 @@ class VideoItem {
       subtitleUri: subtitleUri,
       httpHeaders: httpHeaders,
       allowSelfSigned: allowSelfSigned,
+      jellyfinServerId: jellyfinServerId,
+      jellyfinItemId: jellyfinItemId,
     );
   }
 

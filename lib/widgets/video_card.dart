@@ -222,6 +222,8 @@ Color _sourceColor(PlaybackSource source) {
       return const Color(0xFF6A1B9A);
     case PlaybackSource.smb:
       return const Color(0xFF6D4C41);
+    case PlaybackSource.jellyfin:
+      return const Color(0xFF9C27B0);
     case PlaybackSource.files:
       return const Color(0xFF00695C);
     case PlaybackSource.network:
