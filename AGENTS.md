@@ -108,9 +108,16 @@ A video player app supporting:
     `engine.$subtitleCues` and its `AetherPlayerView` does NOT paint them, so
     `AvPlayerView` draws its own `SubtitleOverlayView` (text + PGS/DVB bitmap
     cues positioned against the aspect-fit video rect; `zPosition = 1000` above
-    the re-attached video layer). Sibling sidecar files (SRT/ASS/VTT) auto-pair
-    as `ExternalSubtitleTrack`s (best filename match `isDefault`, id =
-    `externalSubtitleTrackIDBase` + ordinal) — like Android.
+    the re-attached video layer). **Portrait PGS fix (2026-08)**: the
+    `videoRect(in:)` aspect-fit branches were swapped, so in portrait it returned
+    a ~2.5×-wide rect and bitmap cues rendered oversized/off-screen; now the
+    view-wider-than-video case fills height (bars left/right) and the
+    view-taller case fills width (bars top/bottom). `show(image:)` also maps the
+    cue's normalized `position` through `SubtitleImage.canvasSize` (width-aligned,
+    center-anchored) per the engine's contract, so cropped rips with a taller
+    canvas than the video still land correctly. Sibling sidecar files (SRT/ASS/
+    VTT) auto-pair as `ExternalSubtitleTrack`s (best filename match `isDefault`,
+    id = `externalSubtitleTrackIDBase` + ordinal) — like Android.
   - A Documents-folder file browser (`ios/Runner/FileBrowser.swift`, same
     `dreamplayer/files` contract) plus
     `UIFileSharingEnabled`/`LSSupportsOpeningDocumentsInPlace` mean videos are

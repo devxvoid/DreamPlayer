@@ -54,12 +54,32 @@ private final class SubtitleOverlayView: UIView {
         imageView.isHidden = false
         label.isHidden = true
         let p = image.position
-        imageView.frame = CGRect(
-            x: videoRect.minX + p.minX * videoRect.width,
-            y: videoRect.minY + p.minY * videoRect.height,
-            width: p.width * videoRect.width,
-            height: p.height * videoRect.height
-        )
+        // `position` is normalized [0,1] against the subtitle canvas (usually
+        // the coded video). A cropped rip can carry a taller canvas than the
+        // video, so map canvas -> video width-aligned and center-anchored,
+        // mirroring the engine's own SubtitleFrameCompositor mapping.
+        let c = image.canvasSize
+        let frame = CGRect(origin: .zero, size: videoRect.size)
+        let r: CGRect
+        if c.width > 0, c.height > 0 {
+            let px = p.minX * c.width
+            let py = p.minY * c.height
+            let scale = frame.width / c.width
+            r = CGRect(
+                x: px * scale,
+                y: frame.height / 2 + (py - c.height / 2) * scale,
+                width: p.width * c.width * scale,
+                height: p.height * c.height * scale
+            )
+        } else {
+            r = CGRect(
+                x: p.minX * frame.width,
+                y: p.minY * frame.height,
+                width: p.width * frame.width,
+                height: p.height * frame.height
+            )
+        }
+        imageView.frame = r.offsetBy(dx: videoRect.minX, dy: videoRect.minY)
     }
 
     func clear() {
@@ -728,11 +748,13 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         let aspect = CGFloat(videoWidth) / CGFloat(videoHeight)
         let viewAspect = bounds.width / max(bounds.height, 1)
         if viewAspect > aspect {
-            let h = bounds.width / aspect
-            return CGRect(x: bounds.minX, y: bounds.midY - h / 2, width: bounds.width, height: h)
-        } else {
+            // View is wider than the video: fills the height, bars left/right.
             let w = bounds.height * aspect
             return CGRect(x: bounds.midX - w / 2, y: bounds.minY, width: w, height: bounds.height)
+        } else {
+            // View is taller than the video: fills the width, bars top/bottom.
+            let h = bounds.width / aspect
+            return CGRect(x: bounds.minX, y: bounds.midY - h / 2, width: bounds.width, height: h)
         }
     }
 
