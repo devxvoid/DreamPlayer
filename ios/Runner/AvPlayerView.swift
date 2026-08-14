@@ -307,6 +307,10 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         let uri = args?["uri"] as? String
         let subtitleUri = args?["subtitleUri"] as? String
         let startMs = (args?["startPositionMs"] as? NSNumber)?.int64Value ?? 0
+        // HTTP request headers (e.g. WebDAV Basic auth) + per-server self-signed
+        // opt-in, both per media item at open time (same contract as Android).
+        let httpHeaders = (args?["headers"] as? [String: String]) ?? [:]
+        let allowSelfSigned = (args?["allowSelfSigned"] as? Bool) ?? false
 
         // SMB streams arrive as `dreamplayersmb://<token>.<ext>` (see
         // SMBClient.openShare): resolve the token to the live SMBConnection
@@ -315,6 +319,10 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         // the engine's native SMB path (AetherEngineSMB).
         var source: MediaSource?
         var localURL: URL?
+        // WebDAV source pending construction: `makeByteRangeSource` does a
+        // blocking size probe, so it must run off the main thread — the async
+        // load task below builds it.
+        var webDAVSource: (url: URL, headers: [String: String], allowSelfSigned: Bool)?
         smbToken = nil
         isSMBStream = false
         if let path, !path.isEmpty {
@@ -338,6 +346,20 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                 BufferedSMBReader(source: connection),
                 formatHint: nil
             )
+        } else if let uri, let u = URL(string: uri),
+                  (u.scheme?.lowercased() == "http" || u.scheme?.lowercased() == "https"),
+                  !httpHeaders.isEmpty || allowSelfSigned {
+            // WebDAV playback: auth headers AND self-signed HTTPS can't go
+            // through AetherEngine's own HTTP stack (no headers API, and its
+            // TLS validation can't be bypassed), so serve the stream as a
+            // custom ByteRangeSource — each read is an independent HTTP Range
+            // request carrying the Authorization header on the permissive or
+            // default-trust session. Wrapped in BufferedSMBReader for the same
+            // read-ahead reason as SMB (the loopback producer starves on
+            // per-read network round-trips). The source is stateless per read,
+            // so the engine's internal reload on audio-track switch is safe.
+            localURL = u
+            webDAVSource = (u, httpHeaders, allowSelfSigned)
         } else if let uri, let u = URL(string: uri) {
             localURL = u
             source = .url(u)
@@ -391,7 +413,28 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         Task { @MainActor [weak self] in
             guard let self, let engine = self.engine else { return }
             do {
-                let probe = try await engine.load(source: source!, startPosition: startPosition, options: options)
+                if let (webURL, webHeaders, webAllowSelfSigned) = webDAVSource {
+                    // Size probe is a blocking URLSession round-trip; keep it
+                    // off the main actor.
+                    let byteSource = try await Task.detached(priority: .userInitiated) {
+                        try WebDAVClient.shared.makeByteRangeSource(
+                            url: webURL,
+                            headers: webHeaders,
+                            allowSelfSigned: webAllowSelfSigned
+                        )
+                    }.value
+                    source = .custom(
+                        BufferedSMBReader(source: byteSource),
+                        formatHint: nil
+                    )
+                }
+                guard let finalSource = source else {
+                    self.lastError = "Missing media source"
+                    self.emit()
+                    return
+                }
+                self.lastSource = finalSource
+                let probe = try await engine.load(source: finalSource, startPosition: startPosition, options: options)
                 if let probe {
                     self.videoCodecName = probe.videoCodecName
                     self.videoWidth = Int(probe.videoWidth)
