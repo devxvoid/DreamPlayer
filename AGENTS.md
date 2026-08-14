@@ -115,7 +115,15 @@ A video player app supporting:
     view-taller case fills width (bars top/bottom). `show(image:)` also maps the
     cue's normalized `position` through `SubtitleImage.canvasSize` (width-aligned,
     center-anchored) per the engine's contract, so cropped rips with a taller
-    canvas than the video still land correctly. Sibling sidecar files (SRT/ASS/
+    canvas than the video still land correctly. **Cue anchoring (2026-08)**: all
+    positioning moved INTO `SubtitleOverlayView` (it keeps the current cue + the
+    coded `videoSize`); `layoutSubviews` recomputes the aspect-fit video rect and
+    repositions the active cue on every bounds change, so text AND bitmap cues hug
+    the video's bottom edge and stay put through rotation — before, the text label
+    was Auto-Layout-pinned to the overlay (screen) bottom, so it sat in the
+    letterbox bar at the edge of the screen in both orientations. Text cues are
+    centered on the video rect, bottom-anchored 12 pt above it, capped to the
+    rect's width. Sibling sidecar files (SRT/ASS/
     VTT) auto-pair as `ExternalSubtitleTrack`s (best filename match `isDefault`,
     id = `externalSubtitleTrackIDBase` + ordinal) — like Android.
   - A Documents-folder file browser (`ios/Runner/FileBrowser.swift`, same

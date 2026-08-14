@@ -7,11 +7,16 @@ import UIKit
 
 /// Subtitle overlay drawn by the host (AetherEngine decodes cues into
 /// `engine.$subtitleCues`; the engine's `AetherPlayerView` does not paint them).
-/// Text cues render in a label near the bottom; bitmap cues (PGS / DVB) render
-/// in an image view positioned against the aspect-fit video rect.
+/// Text and bitmap cues are positioned against the aspect-fit video rect, and
+/// `layoutSubviews` re-runs on rotation/resize so a cue keeps hugging the video
+/// even mid-cue instead of drifting to the letterbox edge.
 private final class SubtitleOverlayView: UIView {
     private let label = UILabel()
     private let imageView = UIImageView()
+    /// Coded video size (points-independent) used to compute the aspect-fit rect.
+    fileprivate var videoSize: CGSize = .zero
+    private var activeText: String?
+    private var activeImage: SubtitleImage?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -27,39 +32,86 @@ private final class SubtitleOverlayView: UIView {
         label.numberOfLines = 0
         label.shadowColor = .black
         label.shadowOffset = CGSize(width: 1, height: 1)
-        label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
 
         imageView.isHidden = true
         imageView.contentMode = .scaleToFill
         addSubview(imageView)
-
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
-            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -24),
-        ])
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func show(text: String) {
-        label.text = text
-        label.isHidden = text.isEmpty
-        imageView.isHidden = true
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        positionActiveCue()
     }
 
-    func show(image: SubtitleImage, videoRect: CGRect) {
+    func show(text: String) {
+        activeText = text.isEmpty ? nil : text
+        activeImage = nil
+        label.text = text
+        imageView.isHidden = true
+        setNeedsLayout()
+    }
+
+    func show(image: SubtitleImage) {
+        activeImage = image
+        activeText = nil
         imageView.image = UIImage(cgImage: image.cgImage)
         imageView.isHidden = false
         label.isHidden = true
+        setNeedsLayout()
+    }
+
+    func clear() {
+        activeText = nil
+        activeImage = nil
+        label.isHidden = true
+        imageView.isHidden = true
+    }
+
+    private func positionActiveCue() {
+        if let image = activeImage {
+            position(image: image)
+        } else if let text = activeText {
+            position(text: text)
+        } else {
+            label.isHidden = true
+            imageView.isHidden = true
+        }
+    }
+
+    private func position(text: String) {
+        guard !text.isEmpty else {
+            label.isHidden = true
+            return
+        }
+        label.isHidden = false
+        imageView.isHidden = true
+        let rect = videoRect(in: bounds)
+        let maxWidth = max(rect.width - 32, 40)
+        let size = label.sizeThatFits(CGSize(width: maxWidth, height: .greatestFiniteMagnitude))
+        let width = min(size.width, maxWidth)
+        label.frame = CGRect(
+            x: rect.midX - width / 2,
+            y: rect.maxY - size.height - 12,
+            width: width,
+            height: size.height
+        )
+    }
+
+    private func position(image: SubtitleImage) {
+        guard imageView.image != nil else { return }
+        imageView.isHidden = false
+        label.isHidden = true
+        let rect = videoRect(in: bounds)
         let p = image.position
         // `position` is normalized [0,1] against the subtitle canvas (usually
         // the coded video). A cropped rip can carry a taller canvas than the
         // video, so map canvas -> video width-aligned and center-anchored,
         // mirroring the engine's own SubtitleFrameCompositor mapping.
         let c = image.canvasSize
-        let frame = CGRect(origin: .zero, size: videoRect.size)
+        let frame = CGRect(origin: .zero, size: rect.size)
         let r: CGRect
         if c.width > 0, c.height > 0 {
             let px = p.minX * c.width
@@ -79,12 +131,23 @@ private final class SubtitleOverlayView: UIView {
                 height: p.height * frame.height
             )
         }
-        imageView.frame = r.offsetBy(dx: videoRect.minX, dy: videoRect.minY)
+        imageView.frame = r.offsetBy(dx: rect.minX, dy: rect.minY)
     }
 
-    func clear() {
-        label.isHidden = true
-        imageView.isHidden = true
+    /// Aspect-fit rect of the video within the overlay's bounds.
+    private func videoRect(in bounds: CGRect) -> CGRect {
+        guard videoSize.width > 0, videoSize.height > 0 else { return bounds }
+        let aspect = videoSize.width / videoSize.height
+        let viewAspect = bounds.width / max(bounds.height, 1)
+        if viewAspect > aspect {
+            // View is wider than the video: fills the height, bars left/right.
+            let w = bounds.height * aspect
+            return CGRect(x: bounds.midX - w / 2, y: bounds.minY, width: w, height: bounds.height)
+        } else {
+            // View is taller than the video: fills the width, bars top/bottom.
+            let h = bounds.width / aspect
+            return CGRect(x: bounds.minX, y: bounds.midY - h / 2, width: bounds.width, height: h)
+        }
     }
 }
 
@@ -728,6 +791,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
 
     private func updateSubtitleOverlay() {
         guard let engine else { return }
+        subtitleOverlay.videoSize = CGSize(width: CGFloat(videoWidth), height: CGFloat(videoHeight))
         let t = engine.sourceTime
         guard let cue = engine.subtitleCues.first(where: { $0.startTime <= t && t < $0.endTime }) else {
             subtitleOverlay.clear()
@@ -739,22 +803,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         case .richText(let runs):
             subtitleOverlay.show(text: runs.map(\.text).joined())
         case .image(let image):
-            subtitleOverlay.show(image: image, videoRect: videoRect(in: subtitleOverlay.bounds))
-        }
-    }
-
-    private func videoRect(in bounds: CGRect) -> CGRect {
-        guard videoWidth > 0, videoHeight > 0 else { return bounds }
-        let aspect = CGFloat(videoWidth) / CGFloat(videoHeight)
-        let viewAspect = bounds.width / max(bounds.height, 1)
-        if viewAspect > aspect {
-            // View is wider than the video: fills the height, bars left/right.
-            let w = bounds.height * aspect
-            return CGRect(x: bounds.midX - w / 2, y: bounds.minY, width: w, height: bounds.height)
-        } else {
-            // View is taller than the video: fills the width, bars top/bottom.
-            let h = bounds.width / aspect
-            return CGRect(x: bounds.minX, y: bounds.midY - h / 2, width: bounds.width, height: h)
+            subtitleOverlay.show(image: image)
         }
     }
 
