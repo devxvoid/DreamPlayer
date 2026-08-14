@@ -33,13 +33,13 @@ jobs:
         run: flutter test
 
       - name: Build universal release APK
-        run: flutter build apk --release
+        run: flutter build apk --release --dart-define=TMDB_API_KEY=${{ secrets.TMDB_API_KEY }}
 
       - name: Build split-per-abi release APKs
-        run: flutter build apk --release --split-per-abi
+        run: flutter build apk --release --split-per-abi --dart-define=TMDB_API_KEY=${{ secrets.TMDB_API_KEY }}
 
       - name: Build app bundle
-        run: flutter build appbundle --release
+        run: flutter build appbundle --release --dart-define=TMDB_API_KEY=${{ secrets.TMDB_API_KEY }}
 
       - name: Rename artifacts with app name and version
         run: |
@@ -83,7 +83,7 @@ jobs:
           flutter pub get
 
       - name: Build unsigned iOS app
-        run: flutter build ios --release --no-codesign
+        run: flutter build ios --release --no-codesign --dart-define=TMDB_API_KEY=${{ secrets.TMDB_API_KEY }}
 
       - name: Package unsigned IPA
         run: |

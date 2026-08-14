@@ -394,8 +394,8 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
                   ? (_errorMessage ??
                       'Couldn\'t fetch metadata from TMDB. Play the video anyway '
                           'or try again in a moment.')
-                  : 'Search TMDB to pick the right movie, or set an API key '
-                      'in Settings → Metadata.',
+                  : 'No TMDB API key is bundled in this build, so metadata is '
+                      'unavailable. Play the video anyway.',
               textAlign: TextAlign.center,
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: colorScheme.onSurfaceVariant,
@@ -664,7 +664,7 @@ class _SearchDialogState extends State<_SearchDialog> {
               Padding(
                 padding: const EdgeInsets.all(16),
                 child: Text(
-                  'Add a TMDB API key in Settings → Metadata to search.',
+                  'TMDB search is unavailable in this build (no API key bundled).',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: colorScheme.error),
                 ),
