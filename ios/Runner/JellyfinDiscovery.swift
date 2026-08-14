@@ -64,7 +64,11 @@ enum JellyfinDiscovery {
                 var buffer = [UInt8](repeating: 0, count: 4096)
                 var src = sockaddr_in()
                 var srcLen = socklen_t(MemoryLayout<sockaddr_in>.size)
-                let n = recvfrom(socketFD, &buffer, buffer.count, 0, &src, &srcLen)
+                let n = withUnsafeMutablePointer(to: &src) {
+                    $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                        recvfrom(socketFD, &buffer, buffer.count, 0, $0, &srcLen)
+                    }
+                }
                 if n > 0 {
                     parse(body: String(data: Data(buffer[0..<n]), encoding: .utf8) ?? "", into: &results)
                 }
@@ -115,8 +119,8 @@ enum JellyfinDiscovery {
     private static func broadcastAddress(for ip: String) -> String {
         var inaddr = in_addr()
         guard inet_pton(AF_INET, ip, &inaddr) == 1 else { return "" }
-        let net = inaddr.s_addr & htonl(0xFFFFFF00)
-        var bc = net | htonl(0x000000FF)
+        let net = inaddr.s_addr & UInt32(0xFFFFFF00).bigEndian
+        var bc = net | UInt32(0x000000FF).bigEndian
         var out = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
         inet_ntop(AF_INET, &bc, &out, socklen_t(INET_ADDRSTRLEN))
         return String(cString: out)
