@@ -17,8 +17,28 @@ class OpenIntent {
         title: title,
         path: path,
         uri: uri,
+        resumeKey: _stableResumeKey(path: path, uri: uri),
         duration: Duration.zero,
       );
+}
+
+/// Derives a resume key that survives between sessions for sources whose
+/// playable URL rotates. Returns null when the regular path/URI fallback is
+/// already stable.
+String? _stableResumeKey({String? path, String? uri}) {
+  // CX Explorer streams SMB videos through its own local HTTP proxy
+  // (`http://127.0.0.1:<port>/SMB/<server>/<share>/<file>`); the port changes
+  // every CX session, so key on the (stable) path portion only.
+  if (uri != null) {
+    final u = Uri.tryParse(uri);
+    if (u != null &&
+        (u.host == '127.0.0.1' || u.host == 'localhost') &&
+        (u.scheme == 'http' || u.scheme == 'https') &&
+        u.path.contains('/SMB/')) {
+      return 'cx:${u.path}';
+    }
+  }
+  return null;
 }
 
 /// Bridges the native `dreamplayer/intent` channel (see `MainActivity.kt`):

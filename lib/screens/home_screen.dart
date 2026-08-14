@@ -115,9 +115,10 @@ class _HomeScreenState extends State<HomeScreen>
 
   void _openVideo(ContinueWatchingEntry entry) async {
     // iOS: re-grant security-scoped access to the picked file if it's outside
-    // the sandbox (the picker's grant expires between launches).
+    // the sandbox (the picker's grant expires between launches). Covers both
+    // per-file imported videos and files inside bookmarked folders.
     if (entry.video.path != null) {
-      await FileBrowserService.instance.resolveImportedPath(entry.video.path!);
+      await FileBrowserService.instance.resolvePath(entry.video.path!);
     }
     if (!mounted) return;
     final video = await _restoreWebDavSource(entry.video);

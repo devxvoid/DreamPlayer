@@ -8,6 +8,7 @@ class FileEntry {
     required this.isDirectory,
     required this.size,
     this.bookmarkId,
+    this.resumeKey,
   });
 
   final String name;
@@ -18,6 +19,10 @@ class FileEntry {
   /// Non-null for folders picked via the system folder picker (bookmarked).
   final String? bookmarkId;
 
+  /// Stable identity for the resume feature, present for files that live
+  /// inside a bookmarked folder (iOS). Falls back to [path]/[uri] when null.
+  final String? resumeKey;
+
   factory FileEntry.fromMap(Map<dynamic, dynamic> map) {
     return FileEntry(
       name: (map['name'] as String?) ?? '',
@@ -25,6 +30,7 @@ class FileEntry {
       isDirectory: (map['isDirectory'] as bool?) ?? false,
       size: (map['size'] as num?)?.toInt() ?? 0,
       bookmarkId: map['bookmarkId'] as String?,
+      resumeKey: map['resumeKey'] as String?,
     );
   }
 }
@@ -83,6 +89,16 @@ class FileBrowserService {
   /// bookmarks). No-op on Android.
   Future<bool> resolveImportedPath(String path) async {
     final result = await _channel.invokeMethod<bool>('resolveImportedPath', {
+      'path': path,
+    });
+    return result ?? true;
+  }
+
+  /// Re-grants native access to [path] whether it's an imported video or lives
+  /// inside a bookmarked folder (iOS re-resolves the folder's security-scoped
+  /// bookmark and starts its scope). No-op on Android.
+  Future<bool> resolvePath(String path) async {
+    final result = await _channel.invokeMethod<bool>('resolvePath', {
       'path': path,
     });
     return result ?? true;

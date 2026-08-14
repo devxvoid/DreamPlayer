@@ -114,6 +114,7 @@ class _FileBrowserScreenState extends State<FileBrowserScreen>
             title: entry.name,
             path: isContentUri ? null : entry.path,
             uri: isContentUri ? entry.path : null,
+            resumeKey: entry.resumeKey,
             duration: Duration.zero,
             sizeBytes: entry.size,
           )),

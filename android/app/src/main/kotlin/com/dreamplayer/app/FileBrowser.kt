@@ -56,6 +56,7 @@ class FileBrowser(private val activity: MainActivity) {
                 }
                 "pickFolder" -> pickFolder(result)
                 "resolveImportedPath" -> result.success(true)
+                "resolvePath" -> result.success(true)
                 "removeBookmark" -> {
                     val id = call.argument<String>("bookmarkId")
                     if (id != null) removeBookmark(id)

@@ -29,6 +29,11 @@ final class FileBrowser: NSObject {
 
     /// URLs currently resolved from bookmarks with an active security scope.
     private var activeSecurityScopedURLs: [URL] = []
+    /// Every stored folder bookmark resolved to its CURRENT URL (id → URL),
+    /// recomputed on each `resolveAllBookmarks()`. Resume keys for files inside
+    /// a bookmarked folder are derived relative to this current mount point, so
+    /// they stay stable even when the provider remounts at a different path.
+    private var bookmarkRoots: [String: URL] = [:]
     private var pickerCompletion: FlutterResult?
 
     private override init() { super.init() }
@@ -62,6 +67,9 @@ final class FileBrowser: NSObject {
         case "resolveImportedPath":
             let path = (call.arguments as? [String: Any])?["path"] as? String ?? ""
             result(resolveImportedPath(path))
+        case "resolvePath":
+            let path = (call.arguments as? [String: Any])?["path"] as? String ?? ""
+            result(resolvePath(path))
         case "removeBookmark":
             let bookmarkId = (call.arguments as? [String: Any])?["bookmarkId"] as? String
             if let bookmarkId {
@@ -109,7 +117,11 @@ final class FileBrowser: NSObject {
             if isDirectory.boolValue {
                 dirs.append(entryMap(entry, isDirectory: true))
             } else if Self.isVideo(entry.lastPathComponent) {
-                files.append(entryMap(entry, isDirectory: false))
+                files.append(entryMap(
+                    entry,
+                    isDirectory: false,
+                    resumeKey: resumeKey(for: entry.path, roots: bookmarkRoots)
+                ))
             }
         }
 
@@ -118,7 +130,7 @@ final class FileBrowser: NSObject {
         return dirs + files
     }
 
-    private func entryMap(_ url: URL, isDirectory: Bool, bookmarkId: String? = nil) -> [String: Any] {
+    private func entryMap(_ url: URL, isDirectory: Bool, bookmarkId: String? = nil, resumeKey: String? = nil) -> [String: Any] {
         let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         var map: [String: Any] = [
             "name": url.lastPathComponent,
@@ -128,6 +140,9 @@ final class FileBrowser: NSObject {
         ]
         if let bookmarkId {
             map["bookmarkId"] = bookmarkId
+        }
+        if let resumeKey {
+            map["resumeKey"] = resumeKey
         }
         return map
     }
@@ -166,10 +181,13 @@ final class FileBrowser: NSObject {
     /// Resolves every stored bookmark and starts its security scope so its
     /// paths are readable this session.
     private func resolveAllBookmarks() {
-        for (_, data) in loadBookmarks() {
+        var roots: [String: URL] = [:]
+        for (id, data) in loadBookmarks() {
             guard let url = resolve(data) else { continue }
+            roots[id] = url
             startAccess(url)
         }
+        bookmarkRoots = roots
     }
 
     /// Resolves a security-scoped bookmark. On iOS the security scope is baked
@@ -225,6 +243,38 @@ final class FileBrowser: NSObject {
         guard let data = loadImported()[path], let url = resolve(data) else { return false }
         startAccess(url)
         return true
+    }
+
+    /// Re-grants security-scoped access to [path] whether it belongs to an
+    /// imported video or lives inside a bookmarked folder (re-resolves the
+    /// folder bookmark and starts its scope). Used when a continue-watching
+    /// card is tapped, since the folder's scope is only kept while browsing.
+    private func resolvePath(_ path: String) -> Bool {
+        if resolveImportedPath(path) { return true }
+        resolveAllBookmarks()
+        for (_, url) in bookmarkRoots {
+            if path == url.path || path.hasPrefix(url.path + "/") {
+                startAccess(url)
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Stable resume identity for a file inside a bookmarked folder:
+    /// `folderbookmark:<bookmarkId>:<path relative to the current mount>`.
+    /// The relative part is computed against the CURRENT (re-resolved) root
+    /// path, so the key survives the provider remounting the share at a
+    /// different location between launches. Files outside bookmarked folders
+    /// get no key (their absolute path is used instead).
+    private func resumeKey(for path: String, roots: [String: URL]) -> String? {
+        for (id, root) in roots {
+            let rootPath = root.path
+            guard path.hasPrefix(rootPath + "/") else { continue }
+            let rel = String(path.dropFirst(rootPath.count))
+            return "folderbookmark:\(id)\(rel)"
+        }
+        return nil
     }
 
     private func loadImported() -> [String: Data] {
