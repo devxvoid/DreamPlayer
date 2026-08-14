@@ -3,6 +3,39 @@
 All notable changes to DreamPlayer are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## 0.1.0
+
+First major release — all of the 0.0.x line's fixes plus the metadata and
+browsing features below.
+
+- **TMDB movie metadata + details screen** — tapping any video (Continue-watching
+  cards, WebDAV/Jellyfin/file-browser listings) now opens a details screen with
+  poster/backdrop art, the real title, year, synopsis, star rating, genres,
+  runtime, and cast. The big **Play/Resume** button labels itself from the saved
+  playhead and is always enabled — a slow or failed lookup shows the real error
+  and never blocks playback. "Fix match" re-pins a wrong auto-match via a TMDB
+  search and "Remove info" clears it; metadata is cached on-device. The API key
+  is build-time only, supplied via `.env` (see below), and is never shown in the
+  app or committed.
+- **Aspect ratio / fit-mode picker** — the player's aspect button offers five
+  modes (Fit, Crop to screen, Stretch to screen, 16:9, 4:3); the choice applies
+  to the native video surface and persists per video, re-applied on play-next.
+- **Jellyfin LAN discovery fix** — modern Jellyfin (10.11+) removed its mDNS/Bonjour
+  responder entirely, so discovery now also runs the proprietary **UDP-7359
+  broadcast probe** (native `MulticastLockManager.kt` on Android /
+  `JellyfinDiscovery.swift` on iOS), with the legacy mDNS scan kept for Emby.
+  The probe holds a Wi-Fi MulticastLock so broadcast frames are not dropped.
+- **Build-time API keys via `.env`** — keys are now supplied with
+  `--dart-define-from-file=.env` (gitignored; `.env.example` committed with
+  placeholders) instead of a tracked file, so no secret ever lands in the repo.
+- **iOS subtitle positioning fixes** — PGS/DVB bitmap cues that rendered
+  oversized/off-screen in portrait are fixed (the aspect-fit video rect is now
+  computed correctly), and all cue positioning moved into the host
+  `SubtitleOverlayView`: text and bitmap cues are anchored to the video's
+  aspect-fit rect — bottom-aligned to the picture, not the screen — and are
+  re-positioned on every rotation/resize, so subtitles stay on the video in
+  portrait, landscape, and after rotating mid-cue.
+
 ## 0.0.8
 
 - **Jellyfin / Emby browsing + playback (Android + iPad)** — the home **+** menu's

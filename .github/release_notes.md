@@ -16,11 +16,11 @@ Not sure which to pick? Grab the **Universal** APK.
 
 ### iOS / iPadOS (sideload)
 
-The `DreamPlayer.ipa` in this release is **unsigned** — Apple only allows app installation through the App Store / TestFlight, so the IPA must be signed with your own (free) Apple ID. It's quick:
+The `DreamPlayer-<version>.ipa` in this release is **unsigned** — Apple only allows app installation through the App Store / TestFlight, so the IPA must be signed with your own (free) Apple ID. It's quick:
 
 1. Install **SideStore** or **AltStore** on your iPhone/iPad ([sidestore.io](https://sidestore.io) / [altstore.io](https://altstore.io)).
-2. Download `DreamPlayer.ipa` from this release.
-3. Open SideStore/AltStore → **+** → select `DreamPlayer.ipa`. It signs it with your Apple ID and installs.
+2. Download `DreamPlayer-<version>.ipa` from this release.
+3. Open SideStore/AltStore → **+** → select `DreamPlayer-<version>.ipa`. It signs it with your Apple ID and installs.
 4. The signature lasts **7 days**; SideStore/AltStore **auto-refresh** it in the background over WiFi — a weekly open is all that's needed.
 
 Notes:
@@ -30,7 +30,7 @@ Notes:
 
 ## Versioning
 
-App version follows the **0.0.x** scheme, bumped per release.
+App version follows **semver**, bumped per release (current major: **0.1.0**).
 
 ## Playing videos from your NAS / SMB share
 
