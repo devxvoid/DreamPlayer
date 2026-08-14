@@ -26,6 +26,7 @@ class VideoCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final source = video.playbackSource;
 
     return Card(
       margin: EdgeInsets.zero,
@@ -74,6 +75,15 @@ class VideoCard extends StatelessWidget {
                       top: 8,
                       right: 8,
                       child: _Badge(label: video.resolution!),
+                    ),
+                  if (source != null)
+                    Positioned(
+                      bottom: 8,
+                      left: 8,
+                      child: _Badge(
+                        label: source.label,
+                        background: _sourceColor(source),
+                      ),
                     ),
                   Positioned(
                     bottom: 8,
@@ -199,5 +209,22 @@ Color _hdrColor(HdrFormat format) {
       return const Color(0xFFEF6C00);
     case HdrFormat.sdr:
       return const Color(0xFF616161);
+  }
+}
+
+Color _sourceColor(PlaybackSource source) {
+  switch (source) {
+    case PlaybackSource.webdav:
+      return const Color(0xFF1565C0);
+    case PlaybackSource.cxSmb:
+      return const Color(0xFFE65100);
+    case PlaybackSource.filesSmb:
+      return const Color(0xFF6A1B9A);
+    case PlaybackSource.smb:
+      return const Color(0xFF6D4C41);
+    case PlaybackSource.files:
+      return const Color(0xFF00695C);
+    case PlaybackSource.network:
+      return const Color(0xFF455A64);
   }
 }

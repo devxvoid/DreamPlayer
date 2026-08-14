@@ -1,6 +1,21 @@
 import '../utils/codec_info.dart';
 import 'hdr_format.dart';
 
+/// Where a video came from, derived from the source-specific [VideoItem]
+/// identifiers so the UI can show where playback is served from.
+enum PlaybackSource {
+  webdav('WebDAV'),
+  cxSmb('CX SMB'),
+  filesSmb('Files / SMB'),
+  smb('SMB'),
+  files('Files'),
+  network('Network');
+
+  const PlaybackSource(this.label);
+
+  final String label;
+}
+
 class VideoItem {
   const VideoItem({
     required this.id,
@@ -57,6 +72,36 @@ class VideoItem {
   HdrFormat get hdrFormat => detectHdrFormat(hdrHint);
 
   String get hdrLabel => hdrFormat.label;
+
+  /// Best-effort origin of this video, derived from the source-specific
+  /// [resumeKey]/[uri]/[path] identifiers:
+  /// - `webdav_…` → WebDAV server
+  /// - `cx:…` → CX Explorer SMB handoff (Android "Open with")
+  /// - `folderbookmark:…` → iOS picked folder (Files app / NAS share)
+  /// - `smb:…` → legacy in-app SMB
+  /// - `content://` → Android "Open with"/bookmarked-tree URI
+  /// - `file://` / plain path → on-device file
+  /// - other http(s) URL → generic network source
+  PlaybackSource? get playbackSource {
+    final key = resumeKey;
+    if (key != null) {
+      if (key.startsWith('webdav_')) return PlaybackSource.webdav;
+      if (key.startsWith('cx:')) return PlaybackSource.cxSmb;
+      if (key.startsWith('folderbookmark:')) return PlaybackSource.filesSmb;
+      if (key.startsWith('smb:')) return PlaybackSource.smb;
+    }
+    final u = uri;
+    if (u != null) {
+      final lower = u.toLowerCase();
+      if (lower.startsWith('content://')) return PlaybackSource.files;
+      if (lower.startsWith('file://')) return PlaybackSource.files;
+      if (lower.startsWith('http://') || lower.startsWith('https://')) {
+        return PlaybackSource.network;
+      }
+    }
+    if (path != null && path!.isNotEmpty) return PlaybackSource.files;
+    return null;
+  }
 
   /// Returns a copy with [duration] replaced. The duration often isn't known
   /// until playback starts (e.g. WebDAV URLs), but the Continue watching card
