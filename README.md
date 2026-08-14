@@ -1,7 +1,7 @@
 # DreamPlayer
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/mangeshghodke/DreamPlayer/main/app_icon.png" width="120" height="120" alt="DreamPlayer icon">
+  <img src="https://raw.githubusercontent.com/mangeshghodke/DreamPlayer/main/app_icon.png" width="200" height="200" alt="DreamPlayer icon">
 </p>
 
 [![License: GPLv3](https://img.shields.io/github/license/mangeshghodke/DreamPlayer?style=flat)](LICENSE)
