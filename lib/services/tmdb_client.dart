@@ -343,9 +343,11 @@ class ParsedFileName {
 
 /// Talks to The Movie Database (TMDB) v3 API over `dart:io` HttpClient.
 class TmdApi {
-  TmdApi({this._apiKey});
+  TmdApi({this.apiKey});
 
-  final String? _apiKey;
+  /// Explicit override; when set, [effectiveApiKey] uses it instead of the
+  /// compile-time default (empty string = force no default, for tests).
+  final String? apiKey;
   static const String _baseUrl = 'https://api.themoviedb.org/3';
 
   static const String prefsKey = 'dreamplayer.tmdbApiKey';
@@ -358,18 +360,19 @@ class TmdApi {
   final HttpClient _client = HttpClient()
     ..connectionTimeout = const Duration(seconds: 15);
 
-  /// Effective key: the one entered in Settings wins; otherwise the
-  /// compile-time default (`--dart-define=TMDB_API_KEY=...` or the key in
-  /// `lib/config/tmdb_api_key.dart`). The build-time default is seeded into
-  /// prefs on first use so the app keeps working on later `flutter run`s that
-  /// omit the define.
+  /// Effective key: an explicit [TmdApi.apiKey] wins (empty = force no
+  /// default); otherwise the compile-time default
+  /// (`--dart-define=TMDB_API_KEY=...`, see `lib/config/tmdb_api_key.dart`).
+  /// The build-time default is seeded into prefs on first use so the app keeps
+  /// working on later `flutter run`s that omit the define.
   Future<String> effectiveApiKey() async {
-    if (_apiKey != null && _apiKey.isNotEmpty) return _apiKey;
+    if (apiKey != null && apiKey!.isNotEmpty) return apiKey!;
     final prefs = await SharedPreferences.getInstance();
     var saved = prefs.getString(prefsKey);
-    if ((saved == null || saved.isEmpty) && tmdbDefaultApiKey.isNotEmpty) {
-      await prefs.setString(prefsKey, tmdbDefaultApiKey);
-      saved = tmdbDefaultApiKey;
+    final defaultKey = apiKey ?? tmdbDefaultApiKey;
+    if ((saved == null || saved.isEmpty) && defaultKey.isNotEmpty) {
+      await prefs.setString(prefsKey, defaultKey);
+      saved = defaultKey;
     }
     if (saved != null && saved.isNotEmpty) return saved;
     return '';

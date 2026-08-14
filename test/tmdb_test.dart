@@ -110,7 +110,7 @@ void main() {
   group('TmdApi effective key', () {
     test('returns the key stored in prefs when the default is empty', () async {
       SharedPreferences.setMockInitialValues({});
-      final api = TmdApi();
+      final api = TmdApi(apiKey: '');
       expect(await api.effectiveApiKey(), isEmpty);
       SharedPreferences.setMockInitialValues({TmdApi.prefsKey: 'abc123'});
       expect(await api.effectiveApiKey(), 'abc123');
