@@ -32,6 +32,32 @@ void main() {
       expect(parsed.title, 'Breaking Bad');
     });
 
+    test('extracts season and episode numbers with labels', () {
+      final parsed = ParsedFileName.parse('House.S02E04.720p.WEB-DL.mkv');
+      expect(parsed.isEpisode, isTrue);
+      expect(parsed.season, 2);
+      expect(parsed.episode, 4);
+      expect(parsed.episodeLabel, 'S02E04');
+      expect(parsed.seasonEpisodeLabel, 'Season 2 · Episode 4');
+    });
+
+    test('parses the short season x episode pattern too', () {
+      final parsed = ParsedFileName.parse('Stranger.Things.1x03.mkv');
+      expect(parsed.isEpisode, isTrue);
+      expect(parsed.season, 1);
+      expect(parsed.episode, 3);
+      expect(parsed.episodeLabel, 'S01E03');
+    });
+
+    test('episode labels are empty for movies', () {
+      final parsed = ParsedFileName.parse('Inception.2010.1080p.mkv');
+      expect(parsed.isEpisode, isFalse);
+      expect(parsed.season, 0);
+      expect(parsed.episode, 0);
+      expect(parsed.episodeLabel, '');
+      expect(parsed.seasonEpisodeLabel, '');
+    });
+
     test('detects season-episode with underscores and brackets', () {
       final parsed = ParsedFileName.parse('Stranger_Things_[S02E04]_1080p.mp4');
       expect(parsed.isEpisode, isTrue);

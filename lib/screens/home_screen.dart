@@ -293,13 +293,17 @@ class _HomeScreenState extends State<HomeScreen>
                                   video.duration.inMilliseconds)
                                 .clamp(0.0, 1.0)
                             : null;
+                        final parsed = ParsedFileName.parse(video.title);
+                        final continueLabel =
+                            'Continue from ${_positionLabel(entry.position)}';
                         return VideoCard(
                           video: video,
                           tmdbMeta: TmdService.instance
                               .metaFor(TmdStore.identityKeyFor(video)),
                           progress: progress,
-                          subtitle: 'Continue from '
-                              '${_positionLabel(entry.position)}',
+                          subtitle: parsed.isEpisode
+                              ? '${parsed.episodeLabel} · $continueLabel'
+                              : continueLabel,
                           onTap: () => _openVideo(entry),
                           onLongPress: () => _removeVideo(entry),
                         );

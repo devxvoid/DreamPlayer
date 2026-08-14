@@ -254,12 +254,29 @@ class ParsedFileName {
     this.year,
     this.isEpisode = false,
     this.seriesName,
+    this.season = 0,
+    this.episode = 0,
   });
 
   final String title;
   final int? year;
   final bool isEpisode;
   final String? seriesName;
+
+  /// Season number parsed from `SxxEyy` / `x.yy` (0 for movies).
+  final int season;
+
+  /// Episode number parsed from `SxxEyy` / `x.yy` (0 for movies).
+  final int episode;
+
+  /// `S02E04`-style label; empty for movies.
+  String get episodeLabel => isEpisode
+      ? 'S${season.toString().padLeft(2, '0')}E${episode.toString().padLeft(2, '0')}'
+      : '';
+
+  /// `Season 2 · Episode 4`; empty for movies.
+  String get seasonEpisodeLabel =>
+      isEpisode ? 'Season $season · Episode $episode' : '';
 
   static final RegExp _yearPattern = RegExp(r'\b(18|19|20)\d{2}\b');
   static final RegExp _episodePattern = RegExp(r'\bS(\d{1,2})E(\d{1,2})\b', caseSensitive: false);
@@ -301,12 +318,18 @@ class ParsedFileName {
 
     var isEpisode = false;
     String? seriesName;
+    var season = 0;
+    var episode = 0;
     if (episodeMatch != null) {
       isEpisode = true;
+      season = int.parse(episodeMatch.group(1)!);
+      episode = int.parse(episodeMatch.group(2)!);
       seriesName = name.substring(0, episodeMatch.start).trim();
       name = name.replaceAll(episodeMatch.group(0)!, ' ');
     } else if (shortEpisodeMatch != null) {
       isEpisode = true;
+      season = int.parse(shortEpisodeMatch.group(1)!);
+      episode = int.parse(shortEpisodeMatch.group(2)!);
       seriesName = name.substring(0, shortEpisodeMatch.start).trim();
       name = name.replaceAll(shortEpisodeMatch.group(0)!, ' ');
     }
@@ -317,6 +340,8 @@ class ParsedFileName {
       year: year,
       isEpisode: isEpisode,
       seriesName: seriesName == null ? null : _cleanName(seriesName),
+      season: season,
+      episode: episode,
     );
   }
 

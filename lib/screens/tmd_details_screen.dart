@@ -29,6 +29,7 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
   late final String _identityKey = TmdStore.identityKeyFor(widget.video);
   late final String _resumeKey =
       widget.video.resumeKey ?? widget.video.path ?? widget.video.uri ?? '';
+  late final ParsedFileName _parsed = ParsedFileName.parse(widget.video.title);
   final TmdService _service = TmdService.instance;
 
   TmdMeta? _meta;
@@ -263,6 +264,14 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          if (_parsed.isEpisode)
+                            Text(
+                              _parsed.seasonEpisodeLabel,
+                              style: theme.textTheme.bodyLarge?.copyWith(
+                                color: colorScheme.onSurfaceVariant,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
                           if (movie.year != null)
                             Text(
                               '${movie.year}',
@@ -275,6 +284,11 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
                             spacing: 6,
                             runSpacing: 6,
                             children: [
+                              if (_parsed.isEpisode)
+                                _FactChip(
+                                  icon: Icons.tag,
+                                  label: _parsed.episodeLabel,
+                                ),
                               if (details?.runtimeMinutes != null)
                                 _FactChip(
                                   icon: Icons.schedule,

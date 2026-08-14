@@ -3,6 +3,19 @@
 All notable changes to DreamPlayer are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## 0.1.1
+
+- **TV series season/episode detection** — the TMDB details screen now shows the
+  detected season and episode (`Season 2 · Episode 4`) with an `S02E04` chip for
+  episode files, and Continue-watching cards label them too
+  (`S02E04 · Continue from m:ss`).
+- **File browser opens details first** — tapping a video in the in-app file
+  browser (Internal storage / bookmarked folders) now opens the TMDB details
+  screen with the folder as its playlist, so Play keeps play-next, instead of
+  jumping straight into the player.
+- **App icon in the repository** — `app_icon.png` at the repo root (the iOS
+  1024px app icon) for use as the GitHub social preview and other branding.
+
 ## 0.1.0
 
 First major release — all of the 0.0.x line's fixes plus the metadata and

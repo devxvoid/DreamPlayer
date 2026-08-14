@@ -26,7 +26,7 @@ A cross-platform video player built with **Flutter**, designed for high-end play
 - **"Open with" integration** — tap any video on the device and open it in DreamPlayer; works with file managers like CX Explorer (including their network-stream handoff via a local HTTP proxy).
 - **WebDAV playback** — browse WebDAV servers and stream videos straight into the player on **both** platforms: add/edit/delete servers with an inline connection test, per-server **self-signed HTTPS** opt-in (default off), and credentials stored encrypted (Android Keystore / iOS Keychain — never plaintext, never sent to Dart).
 - **Jellyfin / Emby browsing + playback** — the home **+** menu adds Jellyfin/Emby servers (with automatic **LAN discovery** via a UDP-7359 probe + mDNS), signs in, and browses libraries → folders → play. Playback direct-plays the Jellyfin URL with your token, reusing the existing HTTP pipeline on both platforms (self-signed HTTPS honors the same opt-in toggle as WebDAV). No password ever reaches the app's Dart code or disk.
-- **Movie metadata (TMDB)** — every video (continue-watching cards, WebDAV/Jellyfin file browsers) opens a details screen with poster/backdrop art, the real title, year, synopsis, star rating, genres, runtime, and cast. "Fix match" lets you re-pin a wrong auto-match; metadata is cached so cards load instantly. The API key is a build-time value only — it is never bundled in the UI or shipped in source.
+- **Movie metadata (TMDB)** — every video (continue-watching cards, WebDAV/Jellyfin/file-browser listings) opens a details screen with poster/backdrop art, the real title, year, synopsis, star rating, genres, runtime, and cast. **TV episodes detect their season/episode** and the details screen + continue-watching cards label them (`Season 2 · Episode 4`, `S02E04`). "Fix match" lets you re-pin a wrong auto-match; metadata is cached so cards load instantly. The API key is a build-time value only — it is never bundled in the UI or shipped in source.
 - **Live codec / resolution overlay** — video codec, audio codec + channel count, resolution, HDR format as the file plays.
 - **Transport controls** — play/pause, seek bar, ±10s, fullscreen, buffering spinner, auto-hiding UI.
 - **Continue watching** — the home library lists every partially-watched video, most recent first, with a progress bar and "Continue from m:ss"; each card carries a **source badge** showing where it plays from (WebDAV, CX SMB, Files/SMB, Files, Network).
@@ -81,10 +81,10 @@ The key is compiled in at build time (never shown in the UI, never committed); t
 
 ## Download
 
-Prebuilt binaries are attached to each [GitHub Release](https://github.com/mangeshghodke/DreamPlayer/releases). The current major release is **0.1.0**; previous releases follow the **0.0.x** line.
+Prebuilt binaries are attached to each [GitHub Release](https://github.com/mangeshghodke/DreamPlayer/releases). The current release is **0.1.1**; previous releases follow the **0.1.0** and **0.0.x** lines.
 
 - **Android** — per-architecture release APKs (`arm64-v8a`, `armeabi-v7a`, `x86_64`) plus a **universal** APK that installs on any device, and the AAB for Google Play.
-- **iOS / iPadOS** — the versioned `DreamPlayer-<version>.ipa` (e.g. `DreamPlayer-0.1.0.ipa`) is **unsigned** (Apple only allows App Store / TestFlight installs), so sideload it with a free Apple ID via **SideStore** or **AltStore** (guide below).
+- **iOS / iPadOS** — the versioned `DreamPlayer-<version>.ipa` (e.g. `DreamPlayer-0.1.1.ipa`) is **unsigned** (Apple only allows App Store / TestFlight installs), so sideload it with a free Apple ID via **SideStore** or **AltStore** (guide below).
 
 ### Installing on iPhone / iPad (SideStore or AltStore)
 

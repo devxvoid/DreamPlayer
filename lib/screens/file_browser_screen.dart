@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../models/video_item.dart';
 import '../services/file_browser.dart';
-import 'player_screen.dart';
+import 'tmd_details_screen.dart';
 
 /// In-app file browser (CX-Explorer style): browse the device's storage and
 /// play any video without importing it into the library.
@@ -116,22 +116,37 @@ class _FileBrowserScreenState extends State<FileBrowserScreen>
     }
   }
 
+  /// Opens a video's details page first (TMDB metadata + Play/Resume button),
+  /// like the WebDAV/Jellyfin browsers. The current folder's videos form the
+  /// play-next playlist, so Play continues to the next episode/file in order.
   void _playVideo(FileEntry entry) {
+    final playlist = <VideoItem>[
+      for (final e in _entries.where((e) => !e.isDirectory)) _toVideoItem(e),
+    ];
+    final playIndex = playlist.indexWhere((v) => v.title == entry.name);
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => TmdDetailsScreen(
+          video: _toVideoItem(entry),
+          playlist: playlist,
+          playlistIndex: playIndex < 0 ? 0 : playIndex,
+        ),
+      ),
+    );
+  }
+
+  VideoItem _toVideoItem(FileEntry entry) {
     // Bookmarked-tree videos come back as content:// URIs (no real file
     // path), so hand those to the player's `uri` field.
     final isContentUri = entry.path.startsWith('content://');
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => PlayerScreen(video: VideoItem(
-          id: 'file_${DateTime.now().microsecondsSinceEpoch}',
-          title: entry.name,
-          path: isContentUri ? null : entry.path,
-          uri: isContentUri ? entry.path : null,
-          resumeKey: entry.resumeKey,
-          duration: Duration.zero,
-          sizeBytes: entry.size,
-        )),
-      ),
+    return VideoItem(
+      id: 'file_${entry.path.hashCode}',
+      title: entry.name,
+      path: isContentUri ? null : entry.path,
+      uri: isContentUri ? entry.path : null,
+      resumeKey: entry.resumeKey,
+      duration: Duration.zero,
+      sizeBytes: entry.size,
     );
   }
 
