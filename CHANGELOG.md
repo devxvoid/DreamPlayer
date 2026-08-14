@@ -3,6 +3,14 @@
 All notable changes to DreamPlayer are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## 0.1.2
+
+- **TMDB metadata works in release builds** — the release workflow now bakes the
+  TMDB API key (from a masked GitHub secret, never committed) into all Android
+  APKs/AAB and the iOS IPA, so movie/TV metadata resolves out of the box. The
+  misleading "add an API key in Settings → Metadata" prompt (that setting no
+  longer exists) was replaced with an accurate no-key message.
+
 ## 0.1.1
 
 - **TV series season/episode detection** — the TMDB details screen now shows the
