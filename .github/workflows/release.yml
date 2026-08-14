@@ -111,10 +111,27 @@ jobs:
         with:
           path: artifacts
 
+      - name: Build release body (changelog entry + install guide)
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v ver="$VERSION" '
+            $0 ~ "^## " ver "$" { insec=1; next }
+            insec && /^## / { exit }
+            insec { print }
+          ' CHANGELOG.md > /tmp/changelog-entry.md
+          {
+            echo "## What's new in DreamPlayer $VERSION"
+            echo
+            cat /tmp/changelog-entry.md
+            echo
+            cat .github/release_notes.md
+          } > /tmp/release-body.md
+          echo "BODY=/tmp/release-body.md" >> "$GITHUB_ENV"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          body_path: .github/release_notes.md
+          body_path: ${{ env.BODY }}
           generate_release_notes: true
           files: |
             artifacts/dreamplayer-android/**/*.apk
