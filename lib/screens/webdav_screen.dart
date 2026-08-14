@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../models/video_item.dart';
 import '../services/webdav_client.dart';
-import 'player_screen.dart';
+import 'tmd_details_screen.dart';
 
 enum _WebDavProtocol { http, https }
 
@@ -137,7 +137,7 @@ class _WebDavScreenState extends State<WebDavScreen> {
 
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => PlayerScreen(
+        builder: (_) => TmdDetailsScreen(
           video: playlist[playIndex],
           playlist: playlist,
           playlistIndex: playIndex,

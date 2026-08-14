@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/video_item.dart';
 import '../services/jellyfin_client.dart';
-import 'player_screen.dart';
+import 'tmd_details_screen.dart';
 
 /// Jellyfin / Emby browser: saved + discovered servers -> libraries -> folders
 /// -> play. Playback streams the direct-play URL (token as `api_key` query
@@ -170,7 +170,7 @@ class _JellyfinScreenState extends State<JellyfinScreen> {
     if (playIndex < 0 || playlist.isEmpty) return;
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => PlayerScreen(
+        builder: (_) => TmdDetailsScreen(
           video: playlist[playIndex],
           playlist: playlist,
           playlistIndex: playIndex,

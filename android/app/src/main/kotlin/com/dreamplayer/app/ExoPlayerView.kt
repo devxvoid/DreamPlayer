@@ -23,6 +23,7 @@ import androidx.media3.exoplayer.LoadControl
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.extractor.DefaultExtractorsFactory
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
@@ -54,9 +55,9 @@ class ExoPlayerView(
     messenger: BinaryMessenger,
 ) : PlatformView {
 
-    private val playerView = PlayerView(context).apply {
+    private val playerView = ForcedAspectPlayerView(context).apply {
         useController = false
-        resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
         setShutterBackgroundColor(android.graphics.Color.BLACK)
     }
 
@@ -349,6 +350,10 @@ class ExoPlayerView(
                     selectSubtitleTrack(index)
                     result.success(null)
                 }
+                "setResizeMode" -> {
+                    applyFitMode(call.argument<Number>("mode")?.toInt() ?: 0)
+                    result.success(null)
+                }
                 "dispose" -> {
                     stopPositionTicker()
                     result.success(null)
@@ -581,6 +586,35 @@ class ExoPlayerView(
 
     override fun getView(): View = playerView
 
+    /// Applies the Dart-side [VideoFitMode] to the surface. Fixed ratios
+    /// (16:9 / 4:3) force the content frame's aspect ratio and zoom-crop into
+    /// it; the others map 1:1 to Media3 resize modes.
+    private fun applyFitMode(mode: Int) {
+        when (mode) {
+            1 -> { // Crop to screen (keeps aspect, fills view)
+                playerView.forcedAspect = null
+                playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+            }
+            2 -> { // Stretch to screen (distorts)
+                playerView.forcedAspect = null
+                playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
+            }
+            3 -> { // 16:9 crop
+                playerView.forcedAspect = 16f / 9f
+                playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+            }
+            4 -> { // 4:3 crop
+                playerView.forcedAspect = 4f / 3f
+                playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+            }
+            else -> { // Fit (letterbox)
+                playerView.forcedAspect = null
+                playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+            }
+        }
+        playerView.applyForced()
+    }
+
     override fun dispose() {
         stopPositionTicker()
         player.removeListener(listener)
@@ -605,5 +639,38 @@ class ExoPlayerView(
         private const val BUFFER_FOR_PLAYBACK_MS = 2_000
         private const val BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 5_000
         private const val TARGET_BUFFER_BYTES = 96 * 1024 * 1024
+    }
+}
+
+/// `PlayerView` whose content frame can be pinned to a fixed aspect ratio
+/// (16:9 / 4:3). Media3 doesn't expose an aspect override on `PlayerView`, but
+/// `onContentAspectRatioChanged` hands us the internal `AspectRatioFrameLayout`
+/// on every video-size change, so we can force its ratio after the fact.
+@UnstableApi
+private class ForcedAspectPlayerView(context: Context) : PlayerView(context) {
+
+    /// When non-null, the content frame is forced to this ratio (and the caller
+    /// typically pairs it with `RESIZE_MODE_ZOOM` so overflow is cropped).
+    var forcedAspect: Float? = null
+
+    private var contentFrame: AspectRatioFrameLayout? = null
+    private var contentAspect: Float = 1f
+
+    override fun onContentAspectRatioChanged(
+        contentFrame: AspectRatioFrameLayout?,
+        contentAspectRatio: Float,
+    ) {
+        super.onContentAspectRatioChanged(contentFrame, contentAspectRatio)
+        this.contentFrame = contentFrame
+        this.contentAspect = contentAspectRatio
+        applyForced()
+    }
+
+    /// Re-applies the forced ratio (or restores the natural one) immediately,
+    /// so switching modes mid-playback relayouts the frame without waiting for
+    /// the next video-size change.
+    fun applyForced() {
+        val frame = contentFrame ?: return
+        frame.setAspectRatio(forcedAspect ?: contentAspect)
     }
 }

@@ -75,6 +75,8 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   List<ExoSubtitleTrack> _subtitleTracks = const [];
   int _selectedSubtitleTrack = -1;
 
+  VideoFitMode _fitMode = VideoFitMode.fit;
+
   /// Last time the resume position was persisted (throttled while playing).
   DateTime _lastResumeSave = DateTime.fromMillisecondsSinceEpoch(0);
 
@@ -118,6 +120,11 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       final exo = ExoPlayerController();
       _exo = exo;
       _exoSub = exo.events.listen(_onExoEvent);
+      try {
+        _fitMode = await FitModeStore.load();
+      } catch (_) {
+        // Persistence unavailable; keep the default fit.
+      }
       if (mounted) setState(() {});
       await _openCurrent();
     } catch (e) {
@@ -159,6 +166,8 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
         httpHeaders: video.httpHeaders,
         allowSelfSigned: video.allowSelfSigned,
       );
+      // Re-apply the user's persisted fit mode to the new session.
+      _exo?.setFitMode(_fitMode);
     } catch (e) {
       if (mounted) {
         setState(() => _error = 'Playback unavailable: $e');
@@ -584,6 +593,74 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     }
   }
 
+  /// Aspect / fit-mode picker: Fit, Crop to screen, Stretch to screen, then the
+  /// fixed ratios (16:9, 4:3). The list is scrollable and height-capped so the
+  /// sheet never overflows in landscape. Choice is applied to the native
+  /// surface and persisted for future sessions.
+  Future<void> _openFitModeSheet() async {
+    _showControls();
+    const order = VideoFitMode.values;
+    final choice = await showModalBottomSheet<int>(
+      context: context,
+      backgroundColor: const Color(0xFF1C1C1E),
+      builder: (sheetContext) => SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.6,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 16, 20, 4),
+                child: Text(
+                  'Aspect ratio',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: order.length,
+                  itemBuilder: (context, i) {
+                    final mode = order[i];
+                    final isSelected = mode == _fitMode;
+                    return ListTile(
+                      leading: Icon(
+                        isSelected
+                            ? Icons.radio_button_checked
+                            : Icons.radio_button_off,
+                        color: isSelected ? Colors.white : Colors.white54,
+                      ),
+                      title: Text(
+                        mode.label,
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      onTap: () => Navigator.of(context).pop(mode.value),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (choice != null) {
+      final mode = VideoFitMode.fromValue(choice);
+      if (mode != _fitMode) {
+        setState(() => _fitMode = mode);
+        _exo?.setFitMode(mode);
+        if (!_inTests) FitModeStore.save(mode);
+      }
+    }
+  }
+
   void _seekBy(Duration delta) {
     _exo?.seekTo(_position + delta);
     _showControls();
@@ -956,7 +1033,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                                   color: _subtitleOn ? Colors.white : Colors.white54,
                                 ),
                                 IconButton(
-                                  onPressed: () {},
+                                  onPressed: _openFitModeSheet,
                                   icon: const Icon(Icons.tune),
                                   color: Colors.white,
                                 ),

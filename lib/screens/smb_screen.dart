@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../models/video_item.dart';
 import '../services/smb_client.dart';
-import 'player_screen.dart';
+import 'tmd_details_screen.dart';
 
 /// SMB / LAN-share browser: saved servers -> shares -> folders -> videos.
 /// Playback streams through the native SMB client (local proxy URL on iOS),
@@ -244,7 +244,7 @@ class _SmbScreenState extends State<SmbScreen> {
 
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => PlayerScreen(
+        builder: (_) => TmdDetailsScreen(
           video: playlist[playIndex],
           playlist: playlist,
           playlistIndex: playIndex,

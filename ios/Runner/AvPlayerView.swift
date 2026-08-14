@@ -227,6 +227,10 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                     let index = (args?["index"] as? NSNumber)?.intValue ?? -1
                     self.selectSubtitleTrack(index)
                     result(nil)
+                case "setResizeMode":
+                    let mode = (args?["mode"] as? NSNumber)?.intValue ?? 0
+                    self.setResizeMode(mode)
+                    result(nil)
                 case "dispose":
                     self.teardownAll()
                     result(nil)
@@ -535,6 +539,31 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             lastError = String(describing: error)
             emit()
         }
+    }
+
+    // MARK: - Fit / zoom mode
+
+    /// Maps the Dart-side [VideoFitMode] to AVPlayerLayer videoGravity. The
+    /// layer lives inside AetherEngine's `AetherPlayerView`; we locate it via
+    /// the view hierarchy. Fixed ratios (16:9 / 4:3) are approximated with
+    /// `.resizeAspectFill` (crop) — exact fixed-ratio boxes need the engine's
+    /// own layout hooks, revisit on-device on the iPad.
+    private func setResizeMode(_ mode: Int) {
+        guard let playerLayer = findPlayerLayer() else { return }
+        let gravity: AVLayerVideoGravity
+        switch mode {
+        case 1, 3, 4: gravity = .resizeAspectFill // crop / fixed ratios
+        case 2: gravity = .resize // stretch
+        default: gravity = .resizeAspect // fit
+        }
+        if playerLayer.videoGravity != gravity {
+            playerLayer.videoGravity = gravity
+        }
+    }
+
+    private func findPlayerLayer() -> AVPlayerLayer? {
+        if let layer = container.layer as? AVPlayerLayer { return layer }
+        return container.layer.sublayers?.lazy.compactMap { $0 as? AVPlayerLayer }.first
     }
 
     // MARK: - Track selection

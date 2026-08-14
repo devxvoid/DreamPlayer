@@ -6,11 +6,12 @@ import '../models/video_item.dart';
 import '../services/continue_watching.dart';
 import '../services/file_browser.dart';
 import '../services/jellyfin_client.dart';
+import '../services/tmdb_client.dart';
 import '../services/webdav_client.dart';
 import '../widgets/video_card.dart';
 import 'file_browser_screen.dart';
 import 'jellyfin_screen.dart';
-import 'player_screen.dart';
+import 'tmd_details_screen.dart';
 import 'webdav_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -39,7 +40,13 @@ class _HomeScreenState extends State<HomeScreen>
     widget.refreshTick?.addListener(_loadLibrary);
     // Reload whenever the persisted list changes (e.g. a save or remove).
     ContinueWatchingStore.changes.addListener(_loadLibrary);
+    // Update cards when TMDB metadata resolves for a visible entry.
+    TmdService.instance.addListener(_onMetadataChanged);
     _loadLibrary();
+  }
+
+  void _onMetadataChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
@@ -56,6 +63,7 @@ class _HomeScreenState extends State<HomeScreen>
     appRouteObserver.unsubscribe(this);
     widget.refreshTick?.removeListener(_loadLibrary);
     ContinueWatchingStore.changes.removeListener(_loadLibrary);
+    TmdService.instance.removeListener(_onMetadataChanged);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -76,14 +84,26 @@ class _HomeScreenState extends State<HomeScreen>
 
   Future<void> _loadLibrary() async {
     final entries = await ContinueWatchingStore.load();
-    for (final e in entries) {
-      debugPrint(
-        'DREAM_HOME entry title=${e.video.title} '
-        'dur=${e.video.duration.inSeconds}s',
-      );
-    }
     if (mounted) {
       setState(() => _entries = entries);
+    }
+    _resolveMetadata(entries);
+  }
+
+  /// Best-effort TMDB lookups so cards can show poster art and real titles
+  /// without waiting for a tap.
+  Future<void> _resolveMetadata(List<ContinueWatchingEntry> entries) async {
+    final service = TmdService.instance;
+    await service.ensureLoaded();
+    for (final e in entries) {
+      final video = e.video;
+      final key = TmdStore.identityKeyFor(video);
+      if (service.metaFor(key) != null) continue;
+      try {
+        await service.resolve(video);
+      } catch (_) {
+        // Network failures are non-fatal; the card just stays a placeholder.
+      }
     }
   }
 
@@ -129,9 +149,10 @@ class _HomeScreenState extends State<HomeScreen>
     if (!mounted) return;
     final restored = await _restoreJellyfinSource(video);
     if (!mounted) return;
+    // Open the details page first; Play launches the player from there.
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => PlayerScreen(video: restored),
+        builder: (_) => TmdDetailsScreen(video: restored),
       ),
     );
     // Resume positions may have changed while playing — refresh on return.
@@ -274,6 +295,8 @@ class _HomeScreenState extends State<HomeScreen>
                             : null;
                         return VideoCard(
                           video: video,
+                          tmdbMeta: TmdService.instance
+                              .metaFor(TmdStore.identityKeyFor(video)),
                           progress: progress,
                           subtitle: 'Continue from '
                               '${_positionLabel(entry.position)}',

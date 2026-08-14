@@ -37,7 +37,7 @@ jobs:
 
       # --- Unsigned build (always produced so you can inspect the app) ---
       - name: Build unsigned iOS app
-        run: flutter build ios --release --no-codesign
+        run: flutter build ios --release --no-codesign --dart-define=TMDB_API_KEY=${{ secrets.TMDB_API_KEY }}
 
       - name: Package unsigned IPA
         run: |
@@ -82,7 +82,7 @@ jobs:
         env:
           HAVE_CERT: ${{ secrets.IOS_CERT_BASE64 }}
           HAVE_PROFILE: ${{ secrets.IOS_PROFILE_BASE64 }}
-        run: flutter build ipa --release
+        run: flutter build ipa --release --dart-define=TMDB_API_KEY=${{ secrets.TMDB_API_KEY }}
 
       - name: Upload signed IPA
         if: ${{ env.HAVE_CERT != '' && env.HAVE_PROFILE != '' }}

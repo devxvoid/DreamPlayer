@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/hdr_format.dart';
 import '../models/video_item.dart';
+import '../services/tmdb_client.dart';
 
 class VideoCard extends StatelessWidget {
   const VideoCard({
@@ -11,6 +12,7 @@ class VideoCard extends StatelessWidget {
     this.onLongPress,
     this.progress,
     this.subtitle,
+    this.tmdbMeta,
   });
 
   final VideoItem video;
@@ -22,6 +24,9 @@ class VideoCard extends StatelessWidget {
 
   /// Optional label shown under the title, e.g. "Continue from 12:34".
   final String? subtitle;
+
+  /// TMDB metadata (poster/backdrop art, real title, year) when resolved.
+  final TmdMeta? tmdbMeta;
 
   @override
   Widget build(BuildContext context) {
@@ -61,6 +66,15 @@ class VideoCard extends StatelessWidget {
                       ),
                     ),
                   ),
+                  if (tmdbMeta?.movie.backdropUrl() != null)
+                    Image.network(
+                      tmdbMeta!.movie.backdropUrl()!,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                      loadingBuilder: (context, child, progress) => progress == null
+                          ? child
+                          : const SizedBox.shrink(),
+                    ),
                   if (video.hdrFormat != HdrFormat.sdr)
                     Positioned(
                       top: 8,
@@ -113,7 +127,9 @@ class VideoCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      video.title,
+                      (tmdbMeta?.movie.title.isNotEmpty ?? false)
+                          ? tmdbMeta!.movie.title
+                          : video.title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.titleSmall?.copyWith(
@@ -133,10 +149,10 @@ class VideoCard extends StatelessWidget {
                               ?.copyWith(color: colorScheme.onSurfaceVariant),
                         ),
                       )
-                    else if (video.audioCodecLabel != null)
+                    else
                       Flexible(
                         child: Text(
-                          video.audioCodecLabel!,
+                          _subtitleLine(),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context)
@@ -153,6 +169,15 @@ class VideoCard extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  /// Line under the title when there is no explicit subtitle: year + codec.
+  String _subtitleLine() {
+    final parts = <String>[
+      if (tmdbMeta?.movie.year != null) '${tmdbMeta!.movie.year}',
+      if (video.audioCodecLabel != null) video.audioCodecLabel!,
+    ];
+    return parts.join(' · ');
   }
 }
 

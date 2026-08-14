@@ -36,6 +36,10 @@ migrate_working_dir/
 # Symbolication related
 app.*.symbols
 
+# Local secrets (never commit): TMDB API key passed via
+# `--dart-define-from-file=local/tmdb_key.json`
+/local/tmdb_key.json
+
 # Obfuscation related
 app.*.map.json
 

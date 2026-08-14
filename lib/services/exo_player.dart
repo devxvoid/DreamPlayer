@@ -3,8 +3,63 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 const String exoPlayerViewType = 'dreamplayer/exo_player';
+
+/// How the video fills the playback view.
+///
+/// Maps to Media3 `AspectRatioFrameLayout` resize modes on Android and AVPlayer
+/// `videoGravity` on iOS.
+enum VideoFitMode {
+  /// Letterbox: whole frame visible, black bars where the aspect differs.
+  fit(0),
+
+  /// Crop to fill: fills the view, keeps aspect, cuts off overflow.
+  crop(1),
+
+  /// Stretch: distorts the frame to fill the view exactly.
+  stretch(2),
+
+  /// Crop to a fixed 16:9 box (zoomed in from the source aspect).
+  ratio16x9(3),
+
+  /// Crop to a fixed 4:3 box.
+  ratio4x3(4);
+
+  const VideoFitMode(this.value);
+
+  /// Stable id sent over the method channel.
+  final int value;
+
+  String get label => switch (this) {
+        fit => 'Fit',
+        crop => 'Crop to screen',
+        stretch => 'Stretch to screen',
+        ratio16x9 => '16:9',
+        ratio4x3 => '4:3',
+      };
+
+  static VideoFitMode fromValue(int? value) => VideoFitMode.values
+      .firstWhere((m) => m.value == value, orElse: () => VideoFitMode.fit);
+}
+
+/// Persists the user's chosen [VideoFitMode] across playback sessions.
+class FitModeStore {
+  FitModeStore._();
+
+  static const String _prefsKey = 'dreamplayer.fitMode';
+
+  static Future<VideoFitMode> load() async {
+    final prefs = await SharedPreferences.getInstance();
+    return VideoFitMode.fromValue(prefs.getInt(_prefsKey));
+  }
+
+  static Future<void> save(VideoFitMode mode) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_prefsKey, mode.value);
+  }
+}
 
 /// A single audio track exposed by the native ExoPlayer, for the track picker.
 @immutable
@@ -275,6 +330,10 @@ class ExoPlayerController {
 
   Future<void> selectSubtitleTrack(int index) =>
       _send('setSubtitleTrack', {'index': index});
+
+  /// Sets how the video fills the view (fit/crop/stretch/fixed ratio).
+  Future<void> setFitMode(VideoFitMode mode) =>
+      _send('setResizeMode', {'mode': mode.value});
 
   Future<void> disposeNative() => _send('dispose');
 
