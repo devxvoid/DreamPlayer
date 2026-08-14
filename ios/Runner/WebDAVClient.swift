@@ -307,7 +307,7 @@ final class WebDAVClient: NSObject {
         let code = response.statusCode
         guard code == 207 || code == 200 else { throw WebDAVError(message: "HTTP \(code)") }
         let basePath = URL(string: base)?.path ?? ""
-        return parseMultistatus(data, basePath: basePath, requestedPath: root ? "/" : path)
+        return try parseMultistatus(data, basePath: basePath, requestedPath: root ? "/" : path)
     }
 
     /// Sends a WebDAV request (PROPFIND by default) with Basic auth and returns
@@ -339,11 +339,22 @@ final class WebDAVClient: NSObject {
 
     /// Parses a `multistatus` (207) body into entry maps. `basePath` is the
     /// server root path; hrefs are normalized to paths relative to it.
-    private func parseMultistatus(_ data: Data, basePath: String, requestedPath: String) -> [[String: Any]] {
+    private func parseMultistatus(_ data: Data, basePath: String, requestedPath: String) throws -> [[String: Any]] {
         let parser = XMLParser(data: data)
+        // WebDAV servers (Apache mod_dav, nginx, Nextcloud, Synology…) emit
+        // prefixed elements (`<D:response xmlns:D="DAV:">`). With the default
+        // `shouldProcessNamespaces = false`, Foundation reports `elementName`
+        // as `"D:response"` (prefix included), so the local-name matches in
+        // `MultistatusParser` never fire and the list silently comes back
+        // empty. Turn on namespace processing to get `"response"`, `"href"`,
+        // `"collection"` regardless of prefix.
+        parser.shouldProcessNamespaces = true
         let delegate = MultistatusParser()
         parser.delegate = delegate
-        parser.parse()
+        guard parser.parse() else {
+            let reason = parser.parserError?.localizedDescription ?? "unknown XML error"
+            throw WebDAVError(message: "The server returned a response that could not be parsed: \(reason)")
+        }
         var entries: [[String: Any]] = []
         for builder in delegate.builders {
             if let entry = entry(from: builder, basePath: basePath, requestedPath: requestedPath) {
