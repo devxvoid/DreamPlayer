@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show MethodChannel;
 import 'package:multicast_dns/multicast_dns.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -414,59 +415,107 @@ class JellyfinClient {
   }
 
   // ---------------------------------------------------------------------------
-  // mDNS discovery (_jellyfin._tcp / _emby._tcp)
+  // Discovery: Jellyfin UDP-7359 broadcast probe + mDNS (_jellyfin._tcp /
+  // _emby._tcp for legacy Emby — Jellyfin removed its mDNS responder, so the
+  // broadcast probe is the reliable path for a modern server).
   // ---------------------------------------------------------------------------
 
-  /// Scans the local network for Jellyfin/Emby servers and probes each found
-  /// address for its public info. Returns reachable servers (unauth'd).
+  /// Scans the local network for Jellyfin/Emby servers. Returns reachable
+  /// servers (unauth'd).
   Future<List<JellyfinServer>> discoverServers() async {
-    final resolver = MDnsClient();
-    final found = <String, (String, int)>{};
+    final probeResults = <String, String>{}; // url -> server name (7359 probe)
+    final mdnsResults = <String, (String, int)>{}; // address:port (mDNS)
+    var lockHeld = false;
     try {
-      await resolver.start().timeout(const Duration(seconds: 3));
-      for (final service in const ['_jellyfin._tcp', '_emby._tcp']) {
+      lockHeld = await _multicastAcquired();
+      final probe = await _jellyfinProbe();
+      debugPrint('jellyfin: 7359 probe returned ${probe.length} hit(s)');
+      for (final hit in probe) {
+        final url = hit['address'] as String?;
+        if (url == null || url.isEmpty) continue;
+        final name = hit['name'] as String? ?? url;
+        probeResults[url] = name;
+      }
+    } catch (_) {}
+
+    try {
+      final resolver = MDnsClient();
+      try {
+        await resolver.start().timeout(const Duration(seconds: 3));
+        for (final service in const ['_jellyfin._tcp', '_emby._tcp']) {
+          try {
+            await for (final ptr
+                in resolver.lookup<PtrResourceRecord>(
+                      ResourceRecordQuery.serverPointer(service),
+                      timeout: const Duration(seconds: 2),
+                    )) {
+              await _resolveService(resolver, ptr.name, mdnsResults);
+              await _resolveService(resolver, ptr.domainName, mdnsResults);
+            }
+          } catch (_) {}
+        }
+      } catch (_) {
+        // Multicast may be unavailable (Android Wi-Fi, no network). Return what
+        // was found so far — manual add remains the fallback.
+      } finally {
+        if (lockHeld) {
+          await _multicastReleased();
+        }
         try {
-          await for (final ptr
-              in resolver.lookup<PtrResourceRecord>(
-                    ResourceRecordQuery.serverPointer(service),
-                    timeout: const Duration(seconds: 2),
-                  )) {
-            await _resolveService(resolver, ptr.name, found);
-            await _resolveService(resolver, ptr.domainName, found);
-          }
+          resolver.stop();
         } catch (_) {}
       }
-    } catch (_) {
-      // Multicast may be unavailable (Android Wi-Fi, no network). Return what
-      // was found so far — manual add remains the fallback.
-    } finally {
-      try {
-        resolver.stop();
-      } catch (_) {}
-    }
+    } catch (_) {}
 
     final servers = <JellyfinServer>[];
     final seen = <String>{};
-    for (final (address, port) in found.values) {
+    for (final entry in probeResults.entries) {
+      if (seen.add(entry.key)) {
+        servers.add(JellyfinServer(
+          name: entry.value,
+          url: entry.key,
+          autoDiscovered: true,
+        ));
+      }
+    }
+    for (final (address, port) in mdnsResults.values) {
       final url = 'http://$address:$port';
-      try {
-        final info = await testConnection(url).timeout(
-          const Duration(seconds: 3),
-          onTimeout: () => throw const JellyfinException('timeout'),
-        );
-        if (seen.add('${info.serverName}@$url')) {
+      if (seen.add(url)) {
+        try {
+          final info = await testConnection(url).timeout(
+            const Duration(seconds: 3),
+            onTimeout: () => throw const JellyfinException('timeout'),
+          );
           servers.add(JellyfinServer(
             name: info.serverName,
             url: url,
             autoDiscovered: true,
           ));
+        } catch (_) {
+          // Unreachable/unauth'd probe — skip.
         }
-      } catch (_) {
-        // Unreachable/unauth'd probe — skip.
       }
     }
     servers.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     return servers;
+  }
+
+  /// Runs the native UDP-7359 broadcast probe ("who is JellyfinServer?") on
+  /// Android (`MulticastLockManager.kt`) / iOS (`JellyfinDiscovery.swift`).
+  /// Returns [{address, name, id}].
+  static Future<List<Map<dynamic, dynamic>>> _jellyfinProbe() async {
+    if (!kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.iOS)) {
+      try {
+        final res =
+            await _multicastChannel.invokeListMethod<dynamic>('discoverJellyfin');
+        if (res != null) {
+          return res.whereType<Map<dynamic, dynamic>>().toList();
+        }
+      } catch (_) {}
+    }
+    return const [];
   }
 
   /// Resolves the SRV + A records for an mDNS service instance name and records
@@ -502,6 +551,28 @@ class JellyfinClient {
           }
         } catch (_) {}
       }
+    } catch (_) {}
+  }
+
+  static final MethodChannel _multicastChannel =
+      MethodChannel('dreamplayer/multicast');
+
+  /// Holds the Android Wi-Fi MulticastLock for the duration of an mDNS scan.
+  /// Without it the Wi-Fi driver drops multicast frames so discovery finds
+  /// nothing. Non-Android platforms (no channel registered) report false.
+  static Future<bool> _multicastAcquired() async {
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      try {
+        await _multicastChannel.invokeMethod<void>('acquire');
+        return true;
+      } catch (_) {}
+    }
+    return false;
+  }
+
+  static Future<void> _multicastReleased() async {
+    try {
+      await _multicastChannel.invokeMethod<void>('release');
     } catch (_) {}
   }
 

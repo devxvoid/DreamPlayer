@@ -18,6 +18,7 @@
 		A1B2C3D50000000000000007 /* SMBClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000007 /* SMBClient.swift */; };
 		A1B2C3D5000000000000000E /* BufferedSMBReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000000000000D /* BufferedSMBReader.swift */; };
 		A1B2C3D5000000000000000F /* WebDAVClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000000000000E /* WebDAVClient.swift */; };
+		A1B2C3D50000000000000010 /* JellyfinDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000000000000F /* JellyfinDiscovery.swift */; };
 		78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */ = {isa = PBXBuildFile; productRef = 78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */; };
 		A1B2C3D40000000000000006 /* AetherEngine in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D40000000000000005 /* AetherEngine */; };
 		A1B2C3D50000000000000009 /* AMSMB2 in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4000000000000000B /* AMSMB2 */; };
@@ -67,6 +68,7 @@
 		A1B2C3D40000000000000007 /* SMBClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SMBClient.swift; sourceTree = "<group>"; };
 		A1B2C3D4000000000000000D /* BufferedSMBReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BufferedSMBReader.swift; sourceTree = "<group>"; };
 		A1B2C3D4000000000000000E /* WebDAVClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebDAVClient.swift; sourceTree = "<group>"; };
+		A1B2C3D4000000000000000F /* JellyfinDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JellyfinDiscovery.swift; sourceTree = "<group>"; };
 		78E0A7A72DC9AD7400C4905E /* FlutterGeneratedPluginSwiftPackage */ = {isa = PBXFileReference; lastKnownFileType = wrapper; name = FlutterGeneratedPluginSwiftPackage; path = Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage; sourceTree = "<group>"; };
 		7AFA3C8E1D35360C0083082E /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Release.xcconfig; path = Flutter/Release.xcconfig; sourceTree = "<group>"; };
 		9740EEB21CF90195004384FC /* Debug.xcconfig */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xcconfig; name = Debug.xcconfig; path = Flutter/Debug.xcconfig; sourceTree = "<group>"; };
@@ -149,6 +151,7 @@
 				A1B2C3D40000000000000007 /* SMBClient.swift */,
 				A1B2C3D4000000000000000D /* BufferedSMBReader.swift */,
 				A1B2C3D4000000000000000E /* WebDAVClient.swift */,
+				A1B2C3D4000000000000000F /* JellyfinDiscovery.swift */,
 				74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */,
 			);
 			path = Runner;
@@ -321,6 +324,7 @@
 				A1B2C3D50000000000000007 /* SMBClient.swift in Sources */,
 				A1B2C3D5000000000000000E /* BufferedSMBReader.swift in Sources */,
 				A1B2C3D5000000000000000F /* WebDAVClient.swift in Sources */,
+				A1B2C3D50000000000000010 /* JellyfinDiscovery.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
