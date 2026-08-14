@@ -21,11 +21,13 @@ A cross-platform video player built with **Flutter**, designed for high-end play
 - **Audio track selection** — pick any audio track mid-playback; the sheet shows the full track name and channels (e.g. `DTS-HD MA 5.1`).
 - **Subtitles — embedded + sideloaded with a full track picker** — every subtitle file sitting next to the video (SRT, SSA/ASS, WebVTT, TTML, SAMI, MicroDVD, MPL2, SubViewer) auto-attaches and the best match auto-selects; the CC button opens a picker over embedded container tracks plus all sideloaded files, with Off. Non-UTF-8 sidecars are re-encoded automatically.
 - **NAS / LAN playback** — stream files from network shares via **CX Explorer → "Open with"** on Android (CX serves them over a local HTTP proxy at full speed) and via the **Files app → "Open with"** on iPad. The in-app SMB browser existed on iPad (AMSMB2) but is hidden from the home screen (2026-08): switching audio tracks on an SMB stream could crash the app, and the picker/Open-with paths cover local + NAS workflows without it. See the **[SMB / NAS playback tutorial](docs/tutorials/play-smb-nas-videos.md)** ([video walkthrough](https://youtube.com/shorts/a7oR1yxGz2o)).
-- **In-app file browser** — browse the whole device (Android storage / iPad Files app folders) and play any video, no import needed.
+- **In-app file browser** — browse the whole device and play any video, no import needed: Android internal + SD storage, and on iPad a **Files** root that opens the system Files-app home (iCloud Drive, On My iPad, Downloads, other providers), plus the app's Documents folder and bookmarked folders.
 - **"Open with" integration** — tap any video on the device and open it in DreamPlayer; works with file managers like CX Explorer (including their network-stream handoff via a local HTTP proxy).
+- **WebDAV playback** — browse WebDAV servers and stream videos straight into the player on **both** platforms: add/edit/delete servers with an inline connection test, per-server **self-signed HTTPS** opt-in (default off), and credentials stored encrypted (Android Keystore / iOS Keychain — never plaintext, never sent to Dart).
 - **Live codec / resolution overlay** — video codec, audio codec + channel count, resolution, HDR format as the file plays.
 - **Transport controls** — play/pause, seek bar, ±10s, fullscreen, buffering spinner, auto-hiding UI.
-- **Resume playback** — a video stopped mid-way continues from where you left off on the next open (bookmarked while playing / on pause / on background; cleared when it plays to the end). Works for local files and "Open with" files.
+- **Continue watching** — the home library lists every partially-watched video, most recent first, with a progress bar and "Continue from m:ss"; each card carries a **source badge** showing where it plays from (WebDAV, CX SMB, Files/SMB, Files, Network).
+- **Resume playback** — a video stopped mid-way continues from where you left off on the next open (bookmarked while playing / on pause / on background; cleared when it plays to the end). Resume keys stay stable across sessions even for rotating network URLs (`cx:` for CX SMB handoffs, `folderbookmark:` for iOS bookmarked folders).
 - **Replay after end (iOS)** — the replay button and scrubber pull-back work even after playback reaches the end, by reloading the last-opened source.
 - **Native refresh rate** — selects the display's highest refresh rate (e.g. 120 Hz) at startup.
 
@@ -41,6 +43,7 @@ A cross-platform video player built with **Flutter**, designed for high-end play
 | Subtitles | Media3 subtitle stack + custom SAMI/MicroDVD/MPL2/SubViewer parsers; auto-paired siblings from the video's folder |
 | NAS playback (iPad) | Via Files app → "Open with" + bookmarked folders (in-app SMB browser hidden 2026-08 — see Roadmap) |
 | NAS playback (Android) | Via CX Explorer → "Open with" (CX streams over a local HTTP proxy) |
+| WebDAV | In-app server list + folder browsing + streaming (Android `WebDAVClient.kt` / iOS `WebDAVClient.swift`); encrypted credentials; per-server self-signed HTTPS toggle |
 | HDR output | Hybrid-composition PlatformView keeps its own SurfaceFlinger layer → real HDR to the display |
 | Reference architecture | [Nova Video Player](https://github.com/nova-video-player/aos-AVP) |
 | Permissions | `permission_handler` (runtime `READ_MEDIA_VIDEO`); `MANAGE_EXTERNAL_STORAGE` for the file browser |
@@ -101,32 +104,40 @@ lib/
     display_refresh_rate.dart   # high refresh rate selection
     exo_player.dart             # ExoPlayerController + ExoPlayerView platform view
     resume_store.dart           # per-video resume position store (shared_preferences)
+    continue_watching.dart      # continue-watching list (shared_preferences JSON)
     file_browser.dart           # file-browser channel wrapper
+    webdav_client.dart          # WebDAV channel wrapper + WebDavServer model
     open_intent.dart            # "Open with" intent bridge
     smb_client.dart             # SMB channel wrapper (ipad in-app shares; hidden from the UI)
   screens/
-    home_screen.dart            # library (empty state until scanning lands)
+    home_screen.dart            # Continue watching grid + **+** source menu (WebDAV / storage / folder)
     player_screen.dart          # ExoPlayer/AetherEngine playback + live chips + controls + subtitle/audio pickers
     file_browser_screen.dart    # in-app device file browser
+    webdav_screen.dart          # WebDAV server list → folders → play (self-signed toggle)
     smb_screen.dart             # in-app SMB share browser (hidden from the UI 2026-08)
     settings_screen.dart        # settings
   widgets/
-    video_card.dart             # library card with HDR/audio badges
+    video_card.dart             # library card with HDR/audio/source badges
     format_chip.dart            # colored codec/HDR chip
 android/app/src/main/kotlin/com/dreamplayer/app/
   ExoPlayerView.kt              # native PlayerView platform view + channels
   SubtitleFormats.kt            # subtitle MIME map + sibling auto-pairing + charset handling
   DreamSubtitleParserFactory.kt # SAMI/MicroDVD/MPL2/SubViewer parsers
   FileBrowser.kt                # device storage browsing channel
+  WebDAVClient.kt               # WebDAV browse/test channel (encrypted credentials)
   MainActivity.kt               # registers platform views + intent handling
 ios/Runner/
   AvPlayerView.swift            # AetherEngine platform view + channels; host SubtitleOverlayView; SMB via AetherEngineSMB custom source (unused — entry hidden)
+  BufferedSMBReader.swift       # read-ahead sliding-window IOReader (32 MiB) for SMB/WebDAV playback
   SMBClient.swift               # SMB client (channel dreamplayer/smb): AMSMB2 browse + AetherEngineSMB playback connections (unused — entry hidden)
-  FileBrowser.swift             # Documents-folder + picked-folder browsing channel
+  WebDAVClient.swift            # WebDAV browse/test channel (Keychain credentials)
+  FileBrowser.swift             # Files-app home + Documents + bookmarked-folder browsing channel
   IntentBridge.swift            # "Open with" intent channel
 test/
   widget_test.dart              # shell/navigation/overflow tests
   codec_info_test.dart          # HDR + codec formatting tests
+  resume_key_test.dart          # stable resume keys (CX SMB, bookmarked folders)
+  playback_source_test.dart     # continue-watching source badges
 ```
 
 ## Roadmap
@@ -136,6 +147,8 @@ test/
 - [x] Remove mpv/media_kit (cannot output Dolby Vision)
 - [x] Subtitles: embedded + sideloaded with a full track picker (SRT, ASS, VTT, TTML, SAMI, MicroDVD, MPL2, SubViewer)
 - [x] iOS/iPad playback (AetherEngine; FFmpeg demux/decode + native DV/HDR path)
+- [x] WebDAV browsing + playback (Android + iPad; self-signed HTTPS opt-in; encrypted credentials)
+- [x] Continue watching with source badges (WebDAV / CX SMB / Files/SMB / Files / Network)
 - [~] In-app SMB/LAN playback on iPad (AMSMB2 browse + stream) — **hidden 2026-08**: switching audio tracks on an SMB stream could crash the app; NAS files reach the app via CX/Files "Open with" instead. Code stays in the tree as a rebuild blueprint.
 - [ ] MediaStore scanning for the library
 - [x] GitHub Releases (Android APKs for all ABIs + universal; unsigned iOS IPA)
