@@ -20,6 +20,8 @@ A cross-platform video player built with **Flutter**, designed for high-end play
 ## Features
 
 - **Dolby Vision playback** — DV P8 verified on-device: decoded by the Qualcomm hardware `c2.qti.dv.decoder` at 4K 3840×2160@60 fps with zero dropped frames and correct colors.
+- **Hardware video decode on any SoC** — video always decodes on the device's hardware codec (`c2.qti.*`/`OMX.qcom.*` on Qualcomm, `c2.mtk.*` on MediaTek, `c2.samsung.*` on Samsung Exynos — the app never names a vendor); FFmpeg is retained as an **audio-only** fallback (DTS, DTS-HD, TrueHD, FLAC, E-AC3). This fixed 4K HDR HEVC stutter + washed-out colors that a mis-ordered FFmpeg video renderer caused on every phone.
+- **Graceful Dolby Vision on non-DV devices** — DV P7/P8 (HEVC-based) play as **HDR10** through the HEVC hardware decoder; DV Profile 5 shows a clean *"This device cannot decode Dolby Vision Profile 5"* message instead of pink/green garbage. HDR10/HDR10+ also render correctly on **HDR-capable but DV-less** phones (e.g. Redmi Note 10) and are auto-tone-mapped on SDR-only panels.
 - **Brighter HDR (Android EDR ramp)** — on OnePlus/OxygenOS the player engages the display's real HDR mode (window `COLOR_MODE_HDR` + 5.0 HDR headroom + consumer-side surface dataspace), so bright PQ/HDR10/HDR10+/DV highlights no longer clip flat to white; verified on-device via SurfaceFlinger (`current hdr/sdr ratio > 1.0`).
 - **HDR on-screen display** — live chips for Dolby Vision, HDR10+, HDR10, HLG, SDR.
 - **All major audio codecs** — DTS, DTS-HD, E-AC3, AC3, TrueHD, AAC, and more via Media3 `FFmpegAudioRenderer` (FLAC and E-AC3 work around buggy platform decoders).
@@ -46,7 +48,7 @@ A cross-platform video player built with **Flutter**, designed for high-end play
 | Framework | Flutter (stable 3.44.x) |
 | Playback engine (Android) | ExoPlayer / Media3 in a native `SurfaceView` PlatformView |
 | Playback engine (iOS/iPad) | AetherEngine in a native `AVPlayerView` PlatformView (FFmpeg demux/decode + native path for DV/HDR) |
-| Video decode | Android MediaCodec (hardware DV/HEVC/AVC; `c2.qti.dv.decoder` on device) |
+| Video decode | Android MediaCodec (hardware DV/HEVC/AVC — vendor-agnostic: Qualcomm `c2.qti.*`/`OMX.qcom.*`, MediaTek `c2.mtk.*`, Exynos `c2.samsung.*`; FFmpeg is audio-only fallback) |
 | Audio decode | Media3 `FFmpegAudioRenderer` extension (`libmedia3ext.so`) |
 | Subtitles | Media3 subtitle stack + custom SAMI/MicroDVD/MPL2/SubViewer parsers; auto-paired siblings from the video's folder; host-drawn text + PGS/DVB cues anchored to the video |
 | NAS playback (iPad) | Via Files app → "Open with" + bookmarked folders (in-app SMB browser hidden 2026-08 — see Roadmap) |
@@ -86,7 +88,7 @@ The key is compiled in at build time (never shown in the UI, never committed); t
 
 ## Download
 
-Prebuilt binaries are attached to each [GitHub Release](https://github.com/mangeshghodke/DreamPlayer/releases). The current release is **0.1.3**; previous releases follow the **0.1.x** and **0.0.x** lines.
+Prebuilt binaries are attached to each [GitHub Release](https://github.com/mangeshghodke/DreamPlayer/releases). The current release is **0.1.4**; previous releases follow the **0.1.x** and **0.0.x** lines.
 
 - **Android** — per-architecture release APKs (`arm64-v8a`, `armeabi-v7a`, `x86_64`) plus a **universal** APK that installs on any device, and the AAB for Google Play.
 - **iOS / iPadOS** — the versioned `DreamPlayer-<version>.ipa` (e.g. `DreamPlayer-0.1.1.ipa`) is **unsigned** (Apple only allows App Store / TestFlight installs), so sideload it with a free Apple ID via **SideStore** or **AltStore** (guide below).
@@ -146,6 +148,7 @@ lib/
     format_chip.dart            # colored codec/HDR chip
 android/app/src/main/kotlin/com/dreamplayer/app/
   ExoPlayerView.kt              # native PlayerView platform view + channels
+  DreamRenderersFactory.kt      # hardware video decode + FFmpeg audio fallback
   SubtitleFormats.kt            # subtitle MIME map + sibling auto-pairing + charset handling
   DreamSubtitleParserFactory.kt # SAMI/MicroDVD/MPL2/SubViewer parsers
   FileBrowser.kt                # device storage browsing channel

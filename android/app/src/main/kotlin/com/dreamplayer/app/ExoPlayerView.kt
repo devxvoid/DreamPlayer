@@ -3,6 +3,7 @@ package com.dreamplayer.app
 import android.app.Activity
 import android.content.Context
 import android.content.pm.ActivityInfo
+import android.media.MediaCodecList
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -36,7 +37,7 @@ import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.StandardMessageCodec
 import io.flutter.plugin.platform.PlatformView
 import io.flutter.plugin.platform.PlatformViewFactory
-import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
+import com.dreamplayer.app.DreamRenderersFactory
 import okhttp3.OkHttpClient
 import java.io.File
 import java.security.SecureRandom
@@ -91,6 +92,26 @@ class ExoPlayerView(
                     requiresSecureDecoder,
                     requiresTunnelingDecoder,
                 ).filterNot { it.name.contains("dolby", ignoreCase = true) }
+            // Dolby Vision on devices WITHOUT a DV decoder: DV P7/P8 streams are
+            // HEVC Main10 underneath (the base layer a DV decoder plays anyway —
+            // the RPU enhancement layer is optional and ignored for display).
+            // Devices like the Redmi Note 10 have no `video/dolby-vision` codec,
+            // so Media3 drops the video track entirely (audio-only playback).
+            // Route those through the HEVC hardware decoder to play the HDR10
+            // base layer. P5 (IPTPQc2, not HEVC) will fail to decode — that's
+            // surfaced as a normal playback error.
+            mimeType == MimeTypes.VIDEO_DOLBY_VISION ->
+                MediaCodecSelector.DEFAULT.getDecoderInfos(
+                    mimeType,
+                    requiresSecureDecoder,
+                    requiresTunnelingDecoder,
+                ).ifEmpty {
+                    MediaCodecSelector.DEFAULT.getDecoderInfos(
+                        MimeTypes.VIDEO_H265,
+                        requiresSecureDecoder,
+                        requiresTunnelingDecoder,
+                    )
+                }
             else -> MediaCodecSelector.DEFAULT.getDecoderInfos(
                 mimeType,
                 requiresSecureDecoder,
@@ -162,7 +183,7 @@ class ExoPlayerView(
     private val player: ExoPlayer = ExoPlayer.Builder(activity)
         .setMediaSourceFactory(mediaSourceFactory)
         .setRenderersFactory(
-            NextRenderersFactory(activity)
+            DreamRenderersFactory(activity)
                 .apply {
                     setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
                     setEnableDecoderFallback(true)
@@ -231,6 +252,40 @@ class ExoPlayerView(
         }
     }
 
+    /// Whether this device ships a `video/dolby-vision` decoder (checked once —
+    /// DV-capable hardware like the OnePlus's `c2.qti.dv.decoder`; absent on
+    /// e.g. the Redmi Note 10).
+    private val hasDvDecoder: Boolean by lazy {
+        MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.any { info ->
+            !info.isEncoder && info.supportedTypes.contains(MimeTypes.VIDEO_DOLBY_VISION)
+        }
+    }
+
+    /// Media3 reports DV tracks as `dvhe.<profile>.<level>` (mp4 sample entry
+    /// + DOVI config), e.g. `dvhe.05.09` for Profile 5 Level 9.
+    private fun isDvProfile5(codecs: String?): Boolean =
+        codecs?.let { Regex("dv(?:he|h1|av)\\.05\\.").containsMatchIn(it) } == true
+
+    /// Set once when a P5 stream is rejected on a DV-less device; reset on
+    /// open() so a subsequent non-P5 file plays normally.
+    private var dvRejectionShown = false
+
+    /// Dolby Vision Profile 5 (IPTPQc2 color) cannot be rendered by a plain
+    /// HEVC decoder: on devices without a `video/dolby-vision` codec it comes
+    /// out pink/green (see [mediaCodecSelector] — P7/P8 base layers ARE HDR10
+    /// HEVC and fall back correctly; P5 is not). Detect it as soon as the video
+    /// format is known and fail with a clear message instead of garbage frames.
+    /// Returns the error fields to surface, or null to keep normal playback.
+    private fun dvP5Rejection(): Pair<String, String>? {
+        if (hasDvDecoder || dvRejectionShown) return null
+        if (!isDvProfile5(player.videoFormat?.codecs)) return null
+        dvRejectionShown = true
+        player.stop()
+        return "UnsupportedDolbyVisionProfile5" to
+            ("This device cannot decode Dolby Vision Profile 5. Play the HDR10 or " +
+                "SDR version of this video, or use a device with Dolby Vision support.")
+    }
+
     init {
         playerView.player = player
         player.addListener(listener)
@@ -254,6 +309,9 @@ class ExoPlayerView(
                     httpDataSourceFactory.setPermissive(
                         call.argument<Boolean>("allowSelfSigned") ?: false,
                     )
+                    // A new media item: allow DV P5 rejection to fire again if
+                    // this one is also Profile 5 on a DV-less device.
+                    dvRejectionShown = false
                     val mediaItem = MediaItem.Builder()
                         .apply {
                             when {
@@ -584,7 +642,24 @@ class ExoPlayerView(
     /// ours was `forceClientComposition=true clientType=UNSUPPORTDATASPACE` and
     /// stuck at 1.0 until this call).
     private fun applyHdrHeadroom(desired: Float, colorTransfer: Int) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        // The whole HDR window pipeline needs the API 33+ surface APIs: the
+        // window color mode alone (API 26) does NOT tag the video layer as HDR
+        // — without the TIRAMISU `setDataSpace(SurfaceControl, Int)` call the
+        // SurfaceFlinger layer still reports `dataspace=UNKNOWN (0) hdr
+        // metadata types=0` (verified on a Redmi Note 10, API 31 / MIUI), so
+        // the PQ video is composited as SDR inside an HDR-mode window →
+        // washed-out colors + a client-composed path that stutters 4K60.
+        // Where the tag cannot be set, stay in the default color mode and let
+        // SurfaceFlinger auto-tone-map HDR→SDR (correct, if not boosted).
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        // SDR-only panels must NOT be pushed into COLOR_MODE_HDR or given a PQ
+        // dataspace: on non-HDR displays Android's SurfaceFlinger tone-maps
+        // HDR→SDR itself, and forcing the HDR window color mode / surface
+        // dataspace on such a panel would break that conversion (washed-out or
+        // wrong colors). Only engage the headroom path when the panel actually
+        // reports an HDR capability.
+        val display = activity.display ?: return
+        if (display.hdrCapabilities?.supportedHdrTypes?.isNotEmpty() != true) return
         val window = activity.window ?: return
         val mode =
             if (desired > 1.0f) ActivityInfo.COLOR_MODE_HDR else ActivityInfo.COLOR_MODE_DEFAULT
@@ -592,28 +667,30 @@ class ExoPlayerView(
             window.colorMode = mode
             android.util.Log.d("DreamPlayerHDR", "setColorMode($mode)")
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && desired != hdrHeadroomSet) {
+        if (desired != hdrHeadroomSet) {
             window.setDesiredHdrHeadroom(desired)
             android.util.Log.d("DreamPlayerHDR", "setDesiredHdrHeadroom($desired)")
             hdrHeadroomSet = desired
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val sv = playerView.videoSurfaceView as? android.view.SurfaceView
-            val sc = sv?.surfaceControl
-            if (sc != null && sc.isValid) {
-                val dataSpace =
-                    when {
-                        desired > 1.0f && colorTransfer == C.COLOR_TRANSFER_HLG ->
-                            0x12060000 // HAL_DATASPACE_BT2020_HLG
-                        desired > 1.0f -> 0x10C00000 // HAL_DATASPACE_BT2020_PQ
-                        else -> 0
-                    }
-                SurfaceControl.Transaction().setDataSpace(sc, dataSpace).apply()
-                android.util.Log.d(
-                    "DreamPlayerHDR",
-                    "setSurfaceDataSpace(0x${Integer.toHexString(dataSpace)})",
-                )
-            }
+        // The two-arg `SurfaceControl.Transaction.setDataSpace(SurfaceControl, Int)`
+        // overload is API 33+ (Tiramisu) — the single-arg `setDataSpace(Int)` is API 29.
+        // On API 29-32 (e.g. Android 12 devices) the two-arg overload does not exist and
+        // would throw NoSuchMethodError (verified on a Redmi Note 10, API 31 / MIUI).
+        val sv = playerView.videoSurfaceView as? android.view.SurfaceView
+        val sc = sv?.surfaceControl
+        if (sc != null && sc.isValid) {
+            val dataSpace =
+                when {
+                    desired > 1.0f && colorTransfer == C.COLOR_TRANSFER_HLG ->
+                        0x12060000 // HAL_DATASPACE_BT2020_HLG
+                    desired > 1.0f -> 0x10C00000 // HAL_DATASPACE_BT2020_PQ
+                    else -> 0
+                }
+            SurfaceControl.Transaction().setDataSpace(sc, dataSpace).apply()
+            android.util.Log.d(
+                "DreamPlayerHDR",
+                "setSurfaceDataSpace(0x${Integer.toHexString(dataSpace)})",
+            )
         }
     }
 
@@ -679,7 +756,16 @@ class ExoPlayerView(
         errorMessage: String? = null,
         errorCause: String? = null,
     ) {
-        sink?.success(stateMap(errorCodeName, errorMessage, errorCause))
+        var name = errorCodeName
+        var message = errorMessage
+        if (name == null) {
+            val dv = dvP5Rejection()
+            if (dv != null) {
+                name = dv.first
+                message = dv.second
+            }
+        }
+        sink?.success(stateMap(name, message, errorCause))
     }
 
     override fun getView(): View = playerView

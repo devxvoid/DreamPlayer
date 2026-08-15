@@ -54,7 +54,35 @@ A video player app supporting:
   engages the EDR boost — `current hdr/sdr ratio` stuck at 1.0). Verified
   on-device with the HDR10+ "lake" clip: `desired hdr/sdr ratio=5.0` on the
   window layer, SDR UI dimmed, video layer device-composited with the ratio
-  ramping, no more white clipping.
+  ramping, no more white clipping. **API-gate gotcha (2026-08, Redmi Note 10 /
+  MIUI API 31)**: the two-arg `SurfaceControl.Transaction.setDataSpace(
+  SurfaceControl, Int)` overload is **API 33+** — the single-arg
+  `setDataSpace(Int)` is API 29, and the target-surface overload does NOT exist
+  on API 29-32. Guarding the block with `SDK_INT >= Q` still compiled and R8
+  kept the call, so on Android 12 devices it crashed at open with
+  `NoSuchMethodError: setDataSpace(Landroid/view/SurfaceControl;I)`. Guard the
+  two-arg overload with `SDK_INT >= TIRAMISU` (same gate as
+  `setDesiredHdrHeadroom`).
+  **Non-DV / non-HDR devices (2026-08, Redmi Note 10 — HDR10 yes, DV no)**:
+  three behaviors keep DV/HDR correct across phones:
+  (1) **DV P7/P8 → HEVC fallback**: `mediaCodecSelector` in `ExoPlayerView.kt`
+  returns `video/dolby-vision` decoder infos when a DV decoder exists, otherwise
+  the **HEVC** (`MimeTypes.VIDEO_H265`) decoder infos — P7/P8 base layers ARE
+  HDR10 HEVC, so on DV-less devices they play as HDR10 (verified on-device:
+  `Dolby-Core-Universe-Lossless-Uhd` decodes via `qcom.decoder.hevc` with
+  `setColorMode(2)` engaged). (2) **DV Profile 5 rejection**: P5 (IPTPQc2 color,
+  streaming/web rips like `dolby-vision-people`, codec string `dvhe.05.<level>`)
+  is NOT HDR10 HEVC and renders pink/green on any DV-less device — `emit()` calls
+  `dvP5Rejection()` (lazy `MediaCodecList` check for `video/dolby-vision`;
+  `dvRejectionShown` latch reset on `open()`) which `player.stop()`s and surfaces
+  `error=UnsupportedDolbyVisionProfile5` → Dart `_friendlyError` shows "This
+  device cannot decode Dolby Vision Profile 5…" (verified end-to-end on Redmi via
+  uiautomator dump). (3) **SDR-only panels**: `applyHdrHeadroom` early-returns
+  when `display.hdrCapabilities?.supportedHdrTypes` is empty — pushing an SDR
+  panel into `COLOR_MODE_HDR`/PQ dataspace would break SurfaceFlinger's automatic
+  HDR→SDR tone mapping (washed-out colors). `Display.isHdrSupported` is API 34;
+  use `hdrCapabilities?.supportedHdrTypes?.isNotEmpty() != true` (API 24+), and
+  note `HdrCapabilities` has no `isHdrSupported` in the android-37 stub.
 
 - **iOS/iPad playback via AetherEngine (2026-08)** — the raw **AVPlayer**
   platform view was swapped for an **AetherEngine**-backed one
@@ -252,6 +280,7 @@ A video player app supporting:
 - **Audio track selection** (mute button replaced): the bottom bar's first button opens an "Audio tracks" bottom sheet listing every audio track from the native Media3 `currentTracks` (language · codec · channels · bitrate), with the active track check-marked. Picking a track calls `setAudioTrack` → native `TrackSelectionParameters` override → `onTracksChanged` re-emits → the top-bar audio chip (live codec + channel count) updates automatically. Native plumbing in `android/.../ExoPlayerView.kt` (`buildAudioTracks`, `selectAudioTrack`), pushed on every event as `audioTracks`/`selectedAudioTrack`; Dart model `ExoAudioTrack` in `lib/services/exo_player.dart`. Verified on-device: Sonic (DTS-HD MA + FLAC) switches DTS-HD → FLAC and the chip follows.
   - **Full track names**: the sheet prefers the container-provided track `label` (e.g. `DTS-HD MA 5.1`, `Commentary`) and appends the channel count unless the name already carries it; otherwise it composes `languageName(lang) · codec · channels`. `ExoAudioTrack` gained a `label` field; ISO-639 codes map to full English names via `languageName()` in `codec_info.dart`.
 - **FLAC via FFmpeg + E-AC3 decoder workaround**: a custom `MediaCodecSelector` in `ExoPlayerView.kt` does two things: (1) returns no decoder for `audio/flac` so FLAC falls through to the bundled FFmpeg renderer — the platform MediaCodec FLAC decoder on some devices (incl. this OnePlus) allocates fixed 32 KiB input buffers and large FLAC frames (24-bit multichannel ~54 KiB) die with `DecoderInputBuffer$InsufficientCapacityException: Buffer too small`; (2) skips any `c2.dolby.eac3.decoder` for `audio/eac3`/`audio/eac3-joc` — on this OnePlus the codec2 resource manager repeatedly releases that hardware decoder as soon as it starts, so Media3's audio renderer spins in an endless re-init loop and **no AudioTrack is ever created (silent playback)**. With the Dolby component excluded, the AOSP software E-AC3 decoder is used and the renderer is stable. Verified on-device: Sonic FLAC plays continuously; an E-AC3 (Dolby Atmos, 5.1) track plays with an active AudioTrack (48 kHz, channelMask `0x3f`, no churn, no errors).
+- **NextRenderersFactory killed hardware video decode — root cause of 4K60 lag + washed-out HDR (2026-08, Redmi Note 10)**: the app originally built the player with nextlib's `NextRenderersFactory` (`io.github.anilbeesetti.nextlib:media3ext`, pulled in for its FFmpeg audio). Its `buildVideoRenderers` calls `super` then inserts `FfmpegVideoRenderer` at **index 0** — *before* `MediaCodecVideoRenderer` — and `FfmpegLibrary.supportsFormat` claims `video/hevc`, so **every HEVC file decoded in FFmpeg software**: 4K60 stuttered (Snapdragon 678 cannot software-decode it) and colors were washed out because the FFmpeg GL output carries no HDR dataspace (SF composite: `dataspace 0x0`, `hdr metadata types=0`). Diagnosed by A/B against moneytoo's Just Player (`com.brouken.player`), which uses the **stock** `DefaultRenderersFactory` (`setExtensionRendererMode(mPrefs.decoderPriority)` + `setMapDV7ToHevc`, zero manual HDR code): same file, same `OMX.qcom.video.decoder.hevc`, its layer composited `BT2020_ITU_PQ hdr metadata types=1`. Fix: new `DreamRenderersFactory` (`android/.../DreamRenderersFactory.kt`) — a `DefaultRenderersFactory` subclass that overrides **only** `buildAudioRenderers` to append nextlib's `FfmpegAudioRenderer` **at the end** (audio fallback for DTS/TrueHD/FLAC; stock reflection for `androidx.media3.decoder.ffmpeg.*` finds nothing in the APK, so no video extensions load). Video stays on stock `MediaCodecVideoRenderer`. Verified on Redmi: Sony 4K60 → `[OMX.qcom.video.decoder.hevc] setting surface generation` (hardware session), SF layer `dataspace=BT2020_ITU_PQ hdr metadata types=1` — byte-for-byte the Just Player profile. Note: on API 26–32 the `TIRAMISU` gate keeps `applyHdrHeadroom` off, so SF auto-tone-maps HDR→SDR (correct for a 500-nit HDR10 panel).
 - **Subtitles — embedded + sideloaded with a full track picker**:
   - **Sibling auto-pairing** (`android/.../SubtitleFormats.kt` `findSiblingSubtitles`): on open, scans the video's folder and attaches **every** subtitle file as a Media3 `SubtitleConfiguration` (exact-filename-prefix match wins; ordered best-match first). The best match carries `SELECTION_FLAG_DEFAULT` so it's auto-selected; all others remain selectable in the picker. An explicitly passed `subtitleUri` still wins over pairing.
   - **`open()` path fix**: `lib/services/exo_player.dart` `open()` now sends `path` even when a `uri` is present — intent-opened files were dropping the path, so sibling pairing never fired. Verified on-device.
@@ -377,6 +406,7 @@ adb shell dumpsys SurfaceFlinger | grep -a activeMode                           
 - **Android**: `flutter_displaymode` selects the display's highest refresh rate at app startup (`lib/services/display_refresh_rate.dart`). Many Android devices default apps to 60 Hz even on 90/120/144 Hz panels. Verified: panel runs 120 Hz during animations, 60 Hz when idle.
 - **iOS/iPad Pro**: ProMotion 120 Hz is unlocked via `CADisableMinimumFrameDurationOnPhone = true` in `ios/Runner/Info.plist` (already set).
 - **Playback cadence**: ExoPlayer renders at the video's FPS onto the platform-view SurfaceView. Revisit frame pacing once smoothness is assessed on-device.
+- **DEBUG BUILDS JITTER — always judge smoothness on a RELEASE build (2026-08, Redmi Note 10)**: 4K60 HDR playback in the **debug** APK showed periodic dropped frames while moneytoo's Just Player (release) was buttery smooth — but the ExoPlayer `DecoderCounters` showed `rendered=60fps steady, droppedBuffer=0` and SF `--latency` cadence was clean (0 double/triple frame gaps over 60 s; the only inevitable artefact is the 59.94-on-60 Hz beat, ~1 double frame per 16.7 s, present in both apps). The jitter was Flutter **debug-mode** overhead (JIT VM + hybrid-composition platform-view per-frame cost), not the decode/render path. Installing the **release** APK made it play as smooth as Just Player (user-verified). When the user reports "dropped frames" against a debug install, first re-test with `flutter build apk --release --dart-define-from-file=.env` + `flutter install` before touching the player code. Same rule as the `flutter run --release` comment below.
 
 ## Project layout
 

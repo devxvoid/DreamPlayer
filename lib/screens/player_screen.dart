@@ -223,6 +223,12 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       case 'error_code_io_cleartext_not_permitted':
         return 'Plain HTTP is blocked for this source. Use HTTPS if the '
             'server supports it.';
+      case 'UnsupportedDolbyVisionProfile5':
+        return e.errorMessage?.isNotEmpty == true
+            ? e.errorMessage!
+            : 'This device cannot decode Dolby Vision Profile 5. Play the '
+                'HDR10 or SDR version of the file, or watch it on a Dolby '
+                'Vision-capable device.';
       default:
         final detail = e.errorMessage?.isNotEmpty == true
             ? '\n${e.errorMessage}'
