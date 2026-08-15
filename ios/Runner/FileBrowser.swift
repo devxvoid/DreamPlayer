@@ -110,7 +110,7 @@ final class FileBrowser: NSObject {
             "size": 0,
             "isFilesHome": true,
         ]]
-        roots.append(entryMap(documentsURL, isDirectory: true))
+        roots.append(Self.entryMap(documentsURL, isDirectory: true))
         roots.append(contentsOf: resolvedBookmarkEntries())
         return roots
     }
@@ -220,7 +220,7 @@ final class FileBrowser: NSObject {
         for (id, data) in loadBookmarks() {
             guard let url = resolve(data),
                   FileManager.default.fileExists(atPath: url.path) else { continue }
-            entries.append(entryMap(url, isDirectory: true, bookmarkId: id))
+            entries.append(Self.entryMap(url, isDirectory: true, bookmarkId: id))
         }
         return entries
     }
@@ -397,12 +397,12 @@ extension FileBrowser: UIDocumentPickerDelegate {
                 bookmarks[bookmarkId] = data
                 saveBookmarks(bookmarks)
             }
-            completion(entryMap(url, isDirectory: true, bookmarkId: bookmarkId))
+            completion(Self.entryMap(url, isDirectory: true, bookmarkId: bookmarkId))
         case .file:
             // Import the picked video (bookmark it) so it stays readable across
             // launches and continue-watching card taps can re-grant its scope.
             importFile(url)
-            completion(entryMap(url, isDirectory: false))
+            completion(Self.entryMap(url, isDirectory: false))
         }
     }
 
