@@ -72,7 +72,7 @@ final class FileBrowser: NSObject {
                 result(FlutterError(code: "bad_args", message: "Missing path", details: nil))
                 return
             }
-            result(listDirectory(path))
+            listDirectory(path, result: result)
         case "pickFolder":
             presentFolderPicker(result)
         case "openFilesHome":
@@ -117,10 +117,24 @@ final class FileBrowser: NSObject {
 
     // MARK: - Listing
 
-    private func listDirectory(_ path: String) -> [[String: Any]] {
-        // Re-resolve bookmarks first so any security scope covering the listed
-        // path is active (needed after an app restart).
+    /// Lists [path] off the main thread. On a bookmarked network share (SMB via
+    /// Files "Connect to Server") every attribute read is a round trip to the
+    /// NAS, so scanning synchronously on the platform main thread froze the UI
+    /// for the whole listing (the Dart spinner couldn't even animate).
+    /// Bookmark resolution touches shared state, so it stays on the main thread;
+    /// only the scan itself is moved to a background queue.
+    private func listDirectory(_ path: String, result: @escaping FlutterResult) {
         resolveAllBookmarks()
+        let roots = bookmarkRoots
+        DispatchQueue.global(qos: .userInitiated).async {
+            let entries = Self.scanDirectory(path, roots: roots)
+            DispatchQueue.main.async {
+                result(entries)
+            }
+        }
+    }
+
+    private static func scanDirectory(_ path: String, roots: [String: URL]) -> [[String: Any]] {
         let url = URL(fileURLWithPath: path)
         guard let entries = try? FileManager.default.contentsOfDirectory(
             at: url,
@@ -133,31 +147,43 @@ final class FileBrowser: NSObject {
         var dirs: [[String: Any]] = []
         var files: [[String: Any]] = []
         for entry in entries {
-            var isDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: entry.path, isDirectory: &isDirectory) else { continue }
-            if isDirectory.boolValue {
+            // Prefetched by `includingPropertiesForKeys` above, so these reads
+            // hit the URL metadata cache instead of re-stat'ing every file (a
+            // per-file network round trip on an SMB share). If the share failed
+            // to populate the prefetched value, fall back to a single stat.
+            let values = try? entry.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
+            var isDirectory = values?.isDirectory
+            if isDirectory == nil {
+                var flag: ObjCBool = false
+                if FileManager.default.fileExists(atPath: entry.path, isDirectory: &flag) {
+                    isDirectory = flag.boolValue
+                }
+            }
+            guard let isDirectory else { continue }
+            if isDirectory {
                 dirs.append(entryMap(entry, isDirectory: true))
-            } else if Self.isVideo(entry.lastPathComponent) {
+            } else if isVideo(entry.lastPathComponent) {
                 files.append(entryMap(
                     entry,
                     isDirectory: false,
-                    resumeKey: resumeKey(for: entry.path, roots: bookmarkRoots)
+                    size: values?.fileSize ?? 0,
+                    resumeKey: resumeKey(for: entry.path, roots: roots)
                 ))
             }
         }
 
-        dirs.sort { Self.name($0) < Self.name($1) }
-        files.sort { Self.name($0) < Self.name($1) }
+        dirs.sort { name($0) < name($1) }
+        files.sort { name($0) < name($1) }
         return dirs + files
     }
 
-    private func entryMap(_ url: URL, isDirectory: Bool, bookmarkId: String? = nil, resumeKey: String? = nil) -> [String: Any] {
-        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+    private static func entryMap(_ url: URL, isDirectory: Bool, size: Int? = nil, bookmarkId: String? = nil, resumeKey: String? = nil) -> [String: Any] {
+        let fileSize = size ?? ((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
         var map: [String: Any] = [
             "name": url.lastPathComponent,
             "path": url.path,
             "isDirectory": isDirectory,
-            "size": isDirectory ? 0 : size,
+            "size": isDirectory ? 0 : fileSize,
         ]
         if let bookmarkId {
             map["bookmarkId"] = bookmarkId
@@ -302,7 +328,7 @@ final class FileBrowser: NSObject {
     /// path, so the key survives the provider remounting the share at a
     /// different location between launches. Files outside bookmarked folders
     /// get no key (their absolute path is used instead).
-    private func resumeKey(for path: String, roots: [String: URL]) -> String? {
+    private static func resumeKey(for path: String, roots: [String: URL]) -> String? {
         for (id, root) in roots {
             let rootPath = root.path
             guard path.hasPrefix(rootPath + "/") else { continue }
