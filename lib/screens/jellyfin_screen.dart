@@ -325,22 +325,24 @@ class _JellyfinScreenState extends State<JellyfinScreen> {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.cloud_off_outlined, size: 64),
-              const SizedBox(height: 16),
-              Text(
-                'Error: $_error',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-              const SizedBox(height: 16),
-              FilledButton(
-                onPressed: _atBrowseRoot ? _loadServers : _goUp,
-                child: const Text('Retry'),
-              ),
-            ],
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.cloud_off_outlined, size: 64),
+                const SizedBox(height: 16),
+                Text(
+                  'Error: $_error',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+                const SizedBox(height: 16),
+                FilledButton(
+                  onPressed: _atBrowseRoot ? _loadServers : _goUp,
+                  child: const Text('Retry'),
+                ),
+              ],
+            ),
           ),
         ),
       );
@@ -373,36 +375,40 @@ class _JellyfinScreenState extends State<JellyfinScreen> {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.live_tv_outlined, size: 64),
-              const SizedBox(height: 16),
-              Text(
-                'Add your Jellyfin or Emby server to browse and play your '
-                'media library',
-                textAlign: TextAlign.center,
-                style: theme.textTheme.titleMedium,
-              ),
-              const SizedBox(height: 16),
-              FilledButton.icon(
-                onPressed: _addServer,
-                icon: const Icon(Icons.add),
-                label: const Text('Add server'),
-              ),
-              const SizedBox(height: 8),
-              TextButton.icon(
-                onPressed: _scanning ? null : _scanNetwork,
-                icon: _scanning
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.wifi_find),
-                label: Text(_scanning ? 'Scanning\u2026' : 'Scan local network'),
-              ),
-            ],
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.live_tv_outlined, size: 64),
+                const SizedBox(height: 16),
+                Text(
+                  'Add your Jellyfin or Emby server to browse and play your '
+                  'media library',
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.titleMedium,
+                ),
+                const SizedBox(height: 16),
+                FilledButton.icon(
+                  onPressed: _addServer,
+                  icon: const Icon(Icons.add),
+                  label: const Text('Add server'),
+                ),
+                const SizedBox(height: 8),
+                TextButton.icon(
+                  onPressed: _scanning ? null : _scanNetwork,
+                  icon: _scanning
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.wifi_find),
+                  label: Text(
+                    _scanning ? 'Scanning\u2026' : 'Scan local network',
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       );
@@ -838,35 +844,37 @@ class _LoginDialogState extends State<_LoginDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       title: Text('Sign in — ${widget.serverName}'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(widget.url, style: Theme.of(context).textTheme.bodySmall),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _username,
-            autofocus: true,
-            decoration: const InputDecoration(
-              labelText: 'Username',
-              hintText: 'admin',
-            ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _password,
-            obscureText: true,
-            decoration: const InputDecoration(labelText: 'Password'),
-            onSubmitted: (_) => _submit(),
-          ),
-          if (_error != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 12),
-              child: Text(
-                _error!,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(widget.url, style: Theme.of(context).textTheme.bodySmall),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _username,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: 'Username',
+                hintText: 'admin',
               ),
             ),
-        ],
+            const SizedBox(height: 12),
+            TextField(
+              controller: _password,
+              obscureText: true,
+              decoration: const InputDecoration(labelText: 'Password'),
+              onSubmitted: (_) => _submit(),
+            ),
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Text(
+                  _error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ),
+          ],
+        ),
       ),
       actions: [
         TextButton(
