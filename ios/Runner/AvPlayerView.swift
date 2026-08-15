@@ -287,6 +287,12 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                     result(nil)
                 case "getAudioTracks":
                     result(self.audioTrackMaps())
+                case "getState":
+                    // Push a fresh snapshot to the event stream and return the
+                    // current state; Dart uses it after a background/foreground
+                    // cycle to decide whether to reopen the media.
+                    self.emit()
+                    result(self.stateMap())
                 case "setAudioTrack":
                     let index = (args?["index"] as? NSNumber)?.intValue ?? -1
                     if self.isSMBStream {
@@ -690,8 +696,8 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         tickTimer = nil
     }
 
-    private func emit() {
-        guard let sink = eventSink, let engine else { return }
+    private func stateMap() -> [String: Any] {
+        guard let engine else { return [:] }
         let state = engine.state
 
         let st: Int
@@ -749,7 +755,12 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             "selectedSubtitleTrack": selectedSubtitle,
             "error": lastError ?? "",
         ]
-        sink(map)
+        return map
+    }
+
+    private func emit() {
+        guard let sink = eventSink else { return }
+        sink(stateMap())
     }
 
     private func audioTrackMaps() -> [[String: Any]] {

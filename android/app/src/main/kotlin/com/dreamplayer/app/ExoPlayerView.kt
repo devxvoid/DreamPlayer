@@ -342,6 +342,14 @@ class ExoPlayerView(
                 "getAudioTracks" -> {
                     result.success(buildAudioTracks())
                 }
+                // Pushes a fresh snapshot to the event stream and returns the
+                // current state. Dart uses it after a background/foreground
+                // cycle to detect whether the platform view was recreated
+                // (player reset to IDLE) so it can reopen the media.
+                "getState" -> {
+                    emit()
+                    result.success(stateMap())
+                }
                 "setAudioTrack" -> {
                     val index = call.argument<Number>("index")?.toInt() ?: -1
                     selectAudioTrack(index)
@@ -609,12 +617,11 @@ class ExoPlayerView(
         }
     }
 
-    private fun emit(
+    private fun stateMap(
         errorCodeName: String? = null,
         errorMessage: String? = null,
         errorCause: String? = null,
-    ) {
-        val s = sink ?: return
+    ): Map<String, Any?> {
         val videoFormat = player.videoFormat
         val audioFormat = player.audioFormat
         val videoSize = player.videoSize
@@ -664,7 +671,15 @@ class ExoPlayerView(
         map["error"] = errorCodeName
         map["errorMessage"] = errorMessage
         map["errorCause"] = errorCause
-        s.success(map)
+        return map
+    }
+
+    private fun emit(
+        errorCodeName: String? = null,
+        errorMessage: String? = null,
+        errorCause: String? = null,
+    ) {
+        sink?.success(stateMap(errorCodeName, errorMessage, errorCause))
     }
 
     override fun getView(): View = playerView

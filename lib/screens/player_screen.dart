@@ -48,6 +48,12 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   bool _playing = false;
   bool _buffering = false;
   bool _completed = false;
+
+  /// True once a media has loaded on this screen (video size/codecs/duration
+  /// seen). Survives a native state reset (IDLE event after the platform view
+  /// is recreated on unlock) so [didChangeAppLifecycleState] can detect that
+  /// the media was lost and reopen it.
+  bool _hadMedia = false;
   String? _error;
 
   bool _dragging = false;
@@ -248,6 +254,11 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     if (e.videoWidth > 0 && e.videoHeight > 0) {
       _liveResolution = '${e.videoWidth}x${e.videoHeight}';
     }
+    if (e.videoWidth > 0 ||
+        e.durationMs > 0 ||
+        (e.videoCodecs != null && e.videoCodecs!.isNotEmpty)) {
+      _hadMedia = true;
+    }
     if (e.audioMime != null || e.audioCodecs != null) {
       _liveAudioCodec = formatMedia3Audio(e.audioMime, e.audioCodecs);
       if (e.audioChannels > 0) _liveAudioChannelCount = e.audioChannels;
@@ -294,8 +305,54 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     // so "continue where I stopped" works even if playback was mid-way.
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden ||
         state == AppLifecycleState.detached) {
       _saveResume(_position);
+    }
+    // Stop audio while the screen is locked / the app is backgrounded.
+    // Android destroys the video surface while locked, so pausing keeps the
+    // playhead stable; `_reopenAfterBackground` resumes it on unlock.
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      _exo?.pause();
+    }
+    if (state == AppLifecycleState.resumed) {
+      _reopenAfterBackground();
+    }
+  }
+
+  /// Media3 `Player.STATE_IDLE`: the native player lost its media (e.g. the
+  /// platform view was recreated while the device was locked).
+  static const int _nativeStateIdle = 1;
+
+  /// After the device unlocks, verify the native player still has the media
+  /// loaded. Android destroys the video surface while locked, and may recreate
+  /// the whole platform view (a fresh ExoPlayer, reset to IDLE). If the media
+  /// is gone, reopen from the saved resume position; otherwise just continue
+  /// playing from where we paused on background.
+  Future<void> _reopenAfterBackground() async {
+    final exo = _exo;
+    if (exo == null || _inTests) return;
+    // Give the surface / platform view a moment to be recreated on resume.
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    if (!mounted || _exo != exo) return;
+    var state = await exo.getState();
+    if (!mounted) return;
+    if (state == null) {
+      // Platform view not attached yet; retry once before giving up.
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+      if (!mounted) return;
+      state = await exo.getState();
+      if (!mounted || state == null) return;
+    }
+    // Guard on media having been loaded (and not already finished) so a freshly
+    // opened screen or an ended movie isn't spuriously reopened.
+    if (state.state == _nativeStateIdle && _hadMedia && !_completed) {
+      // `open` autoplays and re-applies the saved resume position.
+      await _openCurrent();
+    } else {
+      // The media survived; we paused on background, so continue playing.
+      await exo.play();
     }
   }
 

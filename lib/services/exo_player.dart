@@ -316,6 +316,26 @@ class ExoPlayerController {
 
   Future<void> pause() => _send('pause');
 
+  /// Queries the native player's current state directly, instead of relying on
+  /// the last pushed event. Returns null when the platform view isn't attached
+  /// (e.g. mid background/foreground surface recreation) — callers can retry.
+  Future<ExoPlayerEvent?> getState() async {
+    final channel = _method;
+    if (channel == null) return _latest;
+    try {
+      final raw = await channel.invokeMethod<Map<dynamic, dynamic>>('getState');
+      if (raw is Map) {
+        final event = ExoPlayerEvent.fromMap(raw);
+        _latest = event;
+        return event;
+      }
+    } catch (_) {
+      // Channel torn down while the view is being recreated; not attached yet.
+      return null;
+    }
+    return _latest;
+  }
+
   Future<void> seekTo(Duration position) =>
       _send('seekTo', {'positionMs': position.inMilliseconds});
 
