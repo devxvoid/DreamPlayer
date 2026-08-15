@@ -3,6 +3,30 @@
 All notable changes to DreamPlayer are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## 0.1.3
+
+- **Brighter HDR (Android EDR ramp)** — OnePlus/OxygenOS only engages the
+  display's HDR mode when the window asks for headroom. The player now sets
+  `COLOR_MODE_HDR` + `setDesiredHdrHeadroom(5.0)` on the activity window and
+  the video surface's consumer-side dataspace via `SurfaceControl`, so PQ/HDR
+  content no longer clips bright highlights flat to white — verified on-device
+  with the HDR10+ "lake" clip (`current hdr/sdr ratio > 1.0`, device
+  composition instead of a client-composition fallback).
+- **Resume survives device lock/unlock (Android)** — locking the phone
+  destroys the video surface; the player now pauses on background (saving the
+  position) and, on resume, checks the native player's live state via a new
+  `getState` channel method (Android + iOS): if the media was lost it reopens
+  at the saved position instead of showing a dead screen.
+- **Stability fixes** — relaunching from the launcher after unlock no longer
+  pushes an empty player screen; TMDB details no longer overflows in landscape
+  (regression-tested); the Jellyfin server list no longer overflows at short
+  viewports; iOS network-share folder listing is much faster (background scan,
+  no per-entry re-stat round-trips).
+- **Play-next removed** — the player and details screens no longer chain
+  sibling videos as a playlist; each video plays on its own (fixes a build
+  failure and simplifies the transport state).
+- **Settings footer** — "Made with ❤️ by Mangesh Ghodke".
+
 ## 0.1.2
 
 - **TMDB metadata works in release builds** — the release workflow now bakes the

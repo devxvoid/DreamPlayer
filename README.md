@@ -20,10 +20,11 @@ A cross-platform video player built with **Flutter**, designed for high-end play
 ## Features
 
 - **Dolby Vision playback** — DV P8 verified on-device: decoded by the Qualcomm hardware `c2.qti.dv.decoder` at 4K 3840×2160@60 fps with zero dropped frames and correct colors.
+- **Brighter HDR (Android EDR ramp)** — on OnePlus/OxygenOS the player engages the display's real HDR mode (window `COLOR_MODE_HDR` + 5.0 HDR headroom + consumer-side surface dataspace), so bright PQ/HDR10/HDR10+/DV highlights no longer clip flat to white; verified on-device via SurfaceFlinger (`current hdr/sdr ratio > 1.0`).
 - **HDR on-screen display** — live chips for Dolby Vision, HDR10+, HDR10, HLG, SDR.
 - **All major audio codecs** — DTS, DTS-HD, E-AC3, AC3, TrueHD, AAC, and more via Media3 `FFmpegAudioRenderer` (FLAC and E-AC3 work around buggy platform decoders).
 - **Audio track selection** — pick any audio track mid-playback; the sheet shows the full track name and channels (e.g. `DTS-HD MA 5.1`).
-- **Aspect ratio / fit-mode picker** — Fit, Crop to screen, Stretch to screen, 16:9, or 4:3 from the player's aspect button; the choice persists per video and is re-applied on play-next.
+- **Aspect ratio / fit-mode picker** — Fit, Crop to screen, Stretch to screen, 16:9, or 4:3 from the player's aspect button; the choice persists per video and is re-applied on every open.
 - **Subtitles — embedded + sideloaded with a full track picker** — every subtitle file sitting next to the video (SRT, SSA/ASS, WebVTT, TTML, SAMI, MicroDVD, MPL2, SubViewer) auto-attaches and the best match auto-selects; the CC button opens a picker over embedded container tracks plus all sideloaded files, with Off. Non-UTF-8 sidecars are re-encoded automatically. Cues are drawn by the host on both platforms and anchored to the video itself, so text and PGS/DVB bitmap subtitles hug the picture (not the screen edge) in portrait, landscape, and through rotation.
 - **NAS / LAN playback** — stream files from network shares via **CX Explorer → "Open with"** on Android (CX serves them over a local HTTP proxy at full speed) and via the **Files app → "Open with"** on iPad. The in-app SMB browser existed on iPad (AMSMB2) but is hidden from the home screen (2026-08): switching audio tracks on an SMB stream could crash the app, and the picker/Open-with paths cover local + NAS workflows without it. See the **[SMB / NAS playback tutorial](docs/tutorials/play-smb-nas-videos.md)** ([video walkthrough](https://youtube.com/shorts/a7oR1yxGz2o)).
 - **In-app file browser** — browse the whole device and play any video, no import needed: Android internal + SD storage, and on iPad a **Files** root that opens the system Files-app home (iCloud Drive, On My iPad, Downloads, other providers), plus the app's Documents folder and bookmarked folders.
@@ -34,7 +35,7 @@ A cross-platform video player built with **Flutter**, designed for high-end play
 - **Live codec / resolution overlay** — video codec, audio codec + channel count, resolution, HDR format as the file plays.
 - **Transport controls** — play/pause, seek bar, ±10s, fullscreen, buffering spinner, auto-hiding UI.
 - **Continue watching** — the home library lists every partially-watched video, most recent first, with a progress bar and "Continue from m:ss"; each card carries a **source badge** showing where it plays from (WebDAV, CX SMB, Files/SMB, Files, Network).
-- **Resume playback** — a video stopped mid-way continues from where you left off on the next open (bookmarked while playing / on pause / on background; cleared when it plays to the end). Resume keys stay stable across sessions even for rotating network URLs (`cx:` for CX SMB handoffs, `folderbookmark:` for iOS bookmarked folders).
+- **Resume playback** — a video stopped mid-way continues from where you left off on the next open (bookmarked while playing / on pause / on background; cleared when it plays to the end). Resume keys stay stable across sessions even for rotating network URLs (`cx:` for CX SMB handoffs, `folderbookmark:` for iOS bookmarked folders). Locking/unlocking the phone mid-playback is handled too — the player pauses on background and reopens at the saved position if the platform view was destroyed on unlock.
 - **Replay after end (iOS)** — the replay button and scrubber pull-back work even after playback reaches the end, by reloading the last-opened source.
 - **Native refresh rate** — selects the display's highest refresh rate (e.g. 120 Hz) at startup.
 
@@ -85,7 +86,7 @@ The key is compiled in at build time (never shown in the UI, never committed); t
 
 ## Download
 
-Prebuilt binaries are attached to each [GitHub Release](https://github.com/mangeshghodke/DreamPlayer/releases). The current release is **0.1.2**; previous releases follow the **0.1.x** and **0.0.x** lines.
+Prebuilt binaries are attached to each [GitHub Release](https://github.com/mangeshghodke/DreamPlayer/releases). The current release is **0.1.3**; previous releases follow the **0.1.x** and **0.0.x** lines.
 
 - **Android** — per-architecture release APKs (`arm64-v8a`, `armeabi-v7a`, `x86_64`) plus a **universal** APK that installs on any device, and the AAB for Google Play.
 - **iOS / iPadOS** — the versioned `DreamPlayer-<version>.ipa` (e.g. `DreamPlayer-0.1.1.ipa`) is **unsigned** (Apple only allows App Store / TestFlight installs), so sideload it with a free Apple ID via **SideStore** or **AltStore** (guide below).
