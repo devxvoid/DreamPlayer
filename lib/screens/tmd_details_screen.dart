@@ -11,15 +11,9 @@ class TmdDetailsScreen extends StatefulWidget {
   const TmdDetailsScreen({
     super.key,
     required this.video,
-    this.playlist = const [],
-    this.playlistIndex = 0,
   });
 
   final VideoItem video;
-
-  /// Optional sibling playlist (play-next in the folder) handed to the player.
-  final List<VideoItem> playlist;
-  final int playlistIndex;
 
   @override
   State<TmdDetailsScreen> createState() => _TmdDetailsScreenState();
@@ -152,11 +146,7 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
   Future<void> _play() async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => PlayerScreen(
-          video: widget.video,
-          playlist: widget.playlist,
-          playlistIndex: widget.playlistIndex,
-        ),
+        builder: (_) => PlayerScreen(video: widget.video),
       ),
     );
     // The playhead may have moved (or the video finished) — refresh the label.
@@ -326,26 +316,33 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
                   style: theme.textTheme.bodyMedium?.copyWith(height: 1.5),
                 ),
                 const SizedBox(height: 20),
-                Row(
+                Wrap(
+                  alignment: WrapAlignment.spaceBetween,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 8,
+                  runSpacing: 0,
                   children: [
-                    Expanded(
-                      child: Text(
-                        'Cast',
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
+                    Text(
+                      'Cast',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    Wrap(
+                      spacing: 0,
+                      children: [
+                        TextButton(
+                          onPressed: _removeInfo,
+                          style: TextButton.styleFrom(
+                            foregroundColor: theme.colorScheme.error,
+                          ),
+                          child: const Text('Remove info'),
                         ),
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: _removeInfo,
-                      style: TextButton.styleFrom(
-                        foregroundColor: theme.colorScheme.error,
-                      ),
-                      child: const Text('Remove info'),
-                    ),
-                    TextButton(
-                      onPressed: _fixMatch,
-                      child: const Text('Fix match'),
+                        TextButton(
+                          onPressed: _fixMatch,
+                          child: const Text('Fix match'),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -372,7 +369,7 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
   Widget _buildNoMatch(ThemeData theme) {
     final colorScheme = theme.colorScheme;
     return Center(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.all(32),
         child: Column(
           mainAxisSize: MainAxisSize.min,
