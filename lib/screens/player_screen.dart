@@ -256,6 +256,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     _liveHdr = detectMedia3HdrFormat(
       colorTransfer: e.colorTransfer,
       videoCodecs: _liveVideoCodecRaw,
+      isHdr10Plus: e.isHdr10Plus,
     );
     if (e.videoWidth > 0 && e.videoHeight > 0) {
       _liveResolution = '${e.videoWidth}x${e.videoHeight}';

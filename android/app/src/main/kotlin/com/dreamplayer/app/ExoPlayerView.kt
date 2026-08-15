@@ -4,6 +4,8 @@ import android.app.Activity
 import android.content.Context
 import android.content.pm.ActivityInfo
 import android.media.MediaCodecList
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -286,6 +288,162 @@ class ExoPlayerView(
                 "SDR version of this video, or use a device with Dolby Vision support.")
     }
 
+    /// Whether the current video carries ST 2094-40 (HDR10+) dynamic metadata,
+    /// found by probing the bitstream — Media3's format info cannot tell HDR10+
+    /// from HDR10 (both are PQ transfer). Best-effort: a probe failure just
+    /// leaves this false and the content plays with the plain HDR10 label.
+    @Volatile private var hdr10PlusContent = false
+
+    /// Scans the first video samples for an HDR10+ SEI (ITU-T T.35 user data,
+    /// country 0xB5 / provider 0x003C = ST 2094-40) on a background thread and
+    /// flips [hdr10PlusContent], re-emitting the event map so the UI upgrades
+    /// the label from HDR10 to HDR10+. Never blocks playback or the main thread.
+    private fun probeHdr10Plus(path: String?, uri: String?, headers: Map<String, String>) {
+        Thread {
+            try {
+                if (scanForHdr10Plus(path, uri, headers) && !hdr10PlusContent) {
+                    hdr10PlusContent = true
+                    handler.post { emit() }
+                }
+            } catch (_: Throwable) {
+                // Best-effort probe; never let it affect playback.
+            }
+        }.apply { isDaemon = true }.start()
+    }
+
+    private fun scanForHdr10Plus(
+        path: String?,
+        uri: String?,
+        headers: Map<String, String>,
+    ): Boolean {
+        val extractor = MediaExtractor()
+        try {
+            when {
+                path != null -> extractor.setDataSource(path)
+                uri != null -> {
+                    val u = android.net.Uri.parse(uri)
+                    when (u.scheme) {
+                        "file" -> u.path?.let { extractor.setDataSource(it) } ?: return false
+                        "content" -> extractor.setDataSource(activity, u, null)
+                        else -> extractor.setDataSource(activity, u, headers.ifEmpty { null })
+                    }
+                }
+                else -> return false
+            }
+            var videoTrack = -1
+            for (i in 0 until extractor.trackCount) {
+                val mime = extractor.getTrackFormat(i).getString(MediaFormat.KEY_MIME)
+                if (mime?.startsWith("video/") == true) {
+                    videoTrack = i
+                    break
+                }
+            }
+            if (videoTrack < 0) return false
+            extractor.selectTrack(videoTrack)
+            val buffer = ByteArray(512 * 1024)
+            var samples = 0
+            while (samples < 256) {
+                val size = extractor.readSampleData(java.nio.ByteBuffer.wrap(buffer), 0)
+                if (size <= 0) break
+                if (sampleHasHdr10PlusSei(buffer, size)) return true
+                samples++
+                val timeUs = extractor.sampleTime
+                if (timeUs > 0 && timeUs > 4_000_000L) break
+                extractor.advance()
+            }
+            return false
+        } catch (_: Exception) {
+            return false
+        } finally {
+            extractor.release()
+        }
+    }
+
+    /// Scans one encoded video sample for the HDR10+ SEI. Samples are usually
+    /// AVCC length-prefixed NAL units; Annex-B (00 00 01 start codes, e.g. TS)
+    /// is handled too.
+    private fun sampleHasHdr10PlusSei(buf: ByteArray, size: Int): Boolean {
+        val annexB = (size >= 4 && buf[0] == 0.toByte() && buf[1] == 0.toByte() &&
+            buf[2] == 1.toByte()) ||
+            (size >= 5 && buf[0] == 0.toByte() && buf[1] == 0.toByte() &&
+                buf[2] == 0.toByte() && buf[3] == 1.toByte())
+        if (annexB) {
+            var i = nextStartCode(buf, size, 0)
+            while (i >= 0) {
+                val nalData = i + if (i + 3 < size && buf[i + 2] == 1.toByte()) 3 else 4
+                val next = nextStartCode(buf, size, nalData)
+                val nalEnd = if (next < 0) size else next
+                if (nalHasHdr10PlusSei(buf, nalData, nalEnd - nalData)) return true
+                i = next
+            }
+            return false
+        }
+        var off = 0
+        while (off + 4 <= size) {
+            val len = ((buf[off].toInt() and 0xFF) shl 24) or
+                ((buf[off + 1].toInt() and 0xFF) shl 16) or
+                ((buf[off + 2].toInt() and 0xFF) shl 8) or
+                (buf[off + 3].toInt() and 0xFF)
+            off += 4
+            if (len <= 0 || off + len > size) break
+            if (nalHasHdr10PlusSei(buf, off, len)) return true
+            off += len
+        }
+        return false
+    }
+
+    private fun nextStartCode(buf: ByteArray, size: Int, from: Int): Int {
+        var i = from
+        while (i + 2 < size) {
+            if (buf[i] == 0.toByte() && buf[i + 1] == 0.toByte() && buf[i + 2] == 1.toByte()) {
+                return i
+            }
+            i++
+        }
+        return -1
+    }
+
+    /// True when this HEVC NAL unit is a SEI carrying ITU-T T.35 user data with
+    /// country code 0xB5 and provider code 0x003C — the ST 2094-40 (HDR10+)
+    /// dynamic-metadata signal. (Provider 0x0040 is Dolby Vision's ST 2094-20,
+    /// which is handled by the codec check instead.)
+    private fun nalHasHdr10PlusSei(buf: ByteArray, start: Int, len: Int): Boolean {
+        if (len < 2) return false
+        val nalType = ((buf[start].toInt() and 0xFF) shr 1) and 0x3F
+        if (nalType != 39 && nalType != 40) return false // prefix/suffix SEI
+        val end = start + len
+        var i = start + 2
+        while (i + 1 < end) {
+            var payloadType = 0
+            while (i < end && (buf[i].toInt() and 0xFF) == 0xFF) {
+                payloadType += 255
+                i++
+            }
+            if (i >= end) return false
+            payloadType += buf[i].toInt() and 0xFF
+            i++
+            var payloadSize = 0
+            while (i < end && (buf[i].toInt() and 0xFF) == 0xFF) {
+                payloadSize += 255
+                i++
+            }
+            if (i >= end) return false
+            payloadSize += buf[i].toInt() and 0xFF
+            i++
+            if (payloadType == 4 && payloadSize >= 3 &&
+                i + 3 <= end &&
+                (buf[i].toInt() and 0xFF) == 0xB5 &&
+                (buf[i + 1].toInt() and 0xFF) == 0x00 &&
+                (buf[i + 2].toInt() and 0xFF) == 0x3C
+            ) {
+                return true
+            }
+            i += payloadSize
+            if (i > end) return false
+        }
+        return false
+    }
+
     init {
         playerView.player = player
         player.addListener(listener)
@@ -312,6 +470,7 @@ class ExoPlayerView(
                     // A new media item: allow DV P5 rejection to fire again if
                     // this one is also Profile 5 on a DV-less device.
                     dvRejectionShown = false
+                    hdr10PlusContent = false
                     val mediaItem = MediaItem.Builder()
                         .apply {
                             when {
@@ -372,6 +531,7 @@ class ExoPlayerView(
                     if (startMs > 0L) player.seekTo(startMs)
                     player.play()
                     subtitleOn = currentSubtitle != null
+                    probeHdr10Plus(path, uri, headers)
                     result.success(null)
                 }
                 "play" -> {
@@ -728,6 +888,7 @@ class ExoPlayerView(
         map["videoWidth"] = videoSize.width
         map["videoHeight"] = videoSize.height
         map["colorTransfer"] = colorTransfer
+        map["isHdr10Plus"] = hdr10PlusContent
         map["audioCodecs"] = audioFormat?.codecs
         map["audioMime"] = audioFormat?.sampleMimeType
         map["audioChannels"] = audioFormat?.channelCount

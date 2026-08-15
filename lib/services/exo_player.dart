@@ -166,6 +166,7 @@ class ExoPlayerEvent {
     this.videoWidth = 0,
     this.videoHeight = 0,
     this.colorTransfer,
+    this.isHdr10Plus = false,
     this.audioCodecs,
     this.audioMime,
     this.audioChannels = 0,
@@ -192,6 +193,11 @@ class ExoPlayerEvent {
   final int videoWidth;
   final int videoHeight;
   final int? colorTransfer;
+
+  /// True when the native side found ST 2094-40 (HDR10+) dynamic metadata in
+  /// the video bitstream. Media3's format info can't tell HDR10+ from HDR10
+  /// (both are PQ transfer), so this is a separate bitstream probe result.
+  final bool isHdr10Plus;
   final String? audioCodecs;
   final String? audioMime;
   final int audioChannels;
@@ -235,6 +241,7 @@ class ExoPlayerEvent {
       colorTransfer: m['colorTransfer'] is num
           ? (m['colorTransfer'] as num).toInt()
           : null,
+      isHdr10Plus: m['isHdr10Plus'] == true,
       audioCodecs: m['audioCodecs'] as String?,
       audioMime: m['audioMime'] as String?,
       audioChannels: asInt(m['audioChannels']),

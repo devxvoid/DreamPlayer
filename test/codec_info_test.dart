@@ -30,6 +30,23 @@ void main() {
     test('SDR hint stays SDR', () {
       expect(detectHdrFormat('SDR'), HdrFormat.sdr);
     });
+
+    test('safe on full titles (no false positives)', () {
+      expect(detectHdrFormat('Adventure Time.S01E03.mkv'), HdrFormat.sdr);
+      expect(detectHdrFormat('Dave 2021.1080p.mkv'), HdrFormat.sdr);
+      expect(detectHdrFormat('DVD Rip.mkv'), HdrFormat.sdr);
+      expect(detectHdrFormat('The.Office.S09.720p.mkv'), HdrFormat.sdr);
+    });
+
+    test('title-style hints still detect', () {
+      expect(detectHdrFormat('hdr10+test_lake_2021_02_01.mp4'),
+          HdrFormat.hdr10plus);
+      expect(detectHdrFormat('dolby-vision-people.mp4'),
+          HdrFormat.dolbyVision);
+      expect(detectHdrFormat('Movie.2023.2160p.HDR10.mkv'), HdrFormat.hdr10);
+      expect(detectHdrFormat('Cooking.Show.4K.HLG.ts'), HdrFormat.hlg);
+      expect(detectHdrFormat('HDR10Plus.Remux.mkv'), HdrFormat.hdr10plus);
+    });
   });
 
   group('formatAudioCodec', () {

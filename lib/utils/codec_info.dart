@@ -1,20 +1,37 @@
 import '../models/hdr_format.dart';
 
+/// Detects the HDR format from a title/filename hint (`HDR10+`, `Dolby
+/// Vision`, `HLG`, ...).
+///
+/// Markers are matched as whole tokens, so feeding it a full title is safe:
+/// `DV P8` is Dolby Vision but `Adventure.mkv` stays SDR (the old substring
+/// test would have flagged any name containing "dv"). `+` is kept glued to
+/// its number (`HDR10+`), and underscore/dash/dot/space are word separators.
 HdrFormat detectHdrFormat(String? hint) {
   if (hint == null || hint.isEmpty) return HdrFormat.sdr;
-  final raw = hint.toLowerCase().replaceAll(RegExp(r'[\s\-_.]+'), '');
-  if (raw.contains('dolby') ||
-      raw.contains('dovi') ||
-      raw.contains('dv') ||
-      raw.contains('profile5') ||
-      raw.contains('profile7') ||
-      raw.contains('profile8')) {
+  final normalized = hint.toLowerCase().replaceAll('+', ' plus ').replaceAll('_', ' ').replaceAll('-', ' ');
+  final tokens = normalized
+      .split(RegExp(r'[^a-z0-9]+'))
+      .where((t) => t.isNotEmpty)
+      .toList();
+  final joined = tokens.join(' ');
+  if (tokens.any((t) => t == 'dv' || t == 'dovi' || t == 'dolby') ||
+      joined.contains('profile 5') ||
+      joined.contains('profile 7') ||
+      joined.contains('profile 8') ||
+      joined.contains('profile5') ||
+      joined.contains('profile7') ||
+      joined.contains('profile8') ||
+      tokens.any((t) =>
+          t.startsWith('dvhe') || t.startsWith('dvh1') || t.startsWith('dvav'))) {
     return HdrFormat.dolbyVision;
   }
-  if (raw.contains('hdr10+') || raw.contains('hdr10plus')) {
+  if (joined.contains('hdr10 plus') ||
+      tokens.any((t) => t.contains('hdr10plus') || t.startsWith('hdr10p'))) {
     return HdrFormat.hdr10plus;
   }
-  if (raw.contains('hdr')) return HdrFormat.hdr10;
+  if (tokens.any((t) => t == 'hdr' || t == 'hdr10')) return HdrFormat.hdr10;
+  if (tokens.any((t) => t == 'hlg')) return HdrFormat.hlg;
   return HdrFormat.sdr;
 }
 
@@ -184,9 +201,16 @@ String formatSubtitle(String? mime, String? codecs) {
 /// color transfer function decides HDR10 (ST2084/PQ) vs HLG. Media3's
 /// `Format.colorInfo.colorTransfer` uses the Android `MediaFormat` constants
 /// (ST2084 = 6, HLG = 7).
-HdrFormat detectMedia3HdrFormat({int? colorTransfer, String? videoCodecs}) {
+HdrFormat detectMedia3HdrFormat({
+  int? colorTransfer,
+  String? videoCodecs,
+  bool isHdr10Plus = false,
+}) {
   final codec = (videoCodecs ?? '').toLowerCase();
   if (codec.startsWith('dv')) return HdrFormat.dolbyVision;
+  // ST 2094-40 dynamic metadata found in the bitstream → HDR10+, even though
+  // the transfer function is the same PQ used by plain HDR10.
+  if (isHdr10Plus) return HdrFormat.hdr10plus;
   switch (colorTransfer) {
     case 6:
       return HdrFormat.hdr10;

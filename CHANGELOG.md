@@ -3,6 +3,43 @@
 All notable changes to DreamPlayer are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## 0.1.5
+
+- **HDR10+ detected from the real bitstream (Android)** — Media3's format info
+  can't tell HDR10+ from HDR10 (both use the same PQ transfer function), so the
+  player now probes the video's first samples with `MediaExtractor` on a
+  background thread, scanning for the ST 2094-40 SEI (ITU-T T.35 user data,
+  country `0xB5` / provider `0x003C`, AVCC + Annex-B NAL framing). When found,
+  the top-bar chip upgrades to the amber **HDR10+** label. Verified on-device:
+  the HDR10+ "lake" file shows HDR10+, while SDR content is never labeled HDR.
+- **PNG HDR badge overlay removed** — the transient bottom-right Dolby Vision /
+  HDR10 / HDR10+ / HLG logo that popped in and faded out is gone; the live
+  top-bar chip is now the single HDR indicator (it already showed the same
+  information).
+- **Safe filename-hint parsing** — the hint detector is token-aware, so a full
+  title like `Adventure.mkv` can never be misread as Dolby Vision (the old
+  substring check tripped on any name containing "dv"); hints are still never
+  wired from titles, so labels reflect only the actual content.
+
+## 0.1.4
+
+- **Hardware video decode everywhere (fixes washed-out HDR + 4K HEVC stutter)** —
+  the app previously built the player with NextRenderersFactory, which inserted
+  `FfmpegVideoRenderer` *before* the MediaCodec renderer and claimed
+  `video/hevc`, so every HEVC file decoded in FFmpeg **software**: 4K60
+  stuttered and colors were washed out (the FFmpeg GL output carries no HDR
+  dataspace). A new `DreamRenderersFactory` overrides only the audio renderers
+  (appending the FFmpeg audio renderer for DTS/TrueHD/FLAC) and leaves video on
+  the hardware decoder — vendor-agnostic (`c2.qti` / `c2.mtk` / `c2.samsung`).
+  Verified on a Redmi Note 10: Sony 4K60 decoded by `OMX.qcom.video.decoder.hevc`
+  with the same `BT2020_ITU_PQ` + `hdr metadata types=1` surface profile as
+  Just Player.
+- **Dolby Vision Profile 5 rejection on DV-less devices** — P5 (IPTPQc2 color)
+  renders pink/green without a `video/dolby-vision` decoder, so the player now
+  stops it with a friendly "This device cannot decode Dolby Vision Profile 5"
+  error instead of garbage frames. P7/P8 keep playing as HDR10 via the HEVC
+  fallback.
+
 ## 0.1.3
 
 - **Brighter HDR (Android EDR ramp)** — OnePlus/OxygenOS only engages the
