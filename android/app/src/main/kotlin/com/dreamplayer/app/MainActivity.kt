@@ -16,7 +16,7 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         flutterEngine.platformViewsController.registry.registerViewFactory(
             "dreamplayer/exo_player",
-            ExoPlayerViewFactory(flutterEngine.dartExecutor.binaryMessenger),
+            ExoPlayerViewFactory(this, flutterEngine.dartExecutor.binaryMessenger),
         )
         fileBrowser = FileBrowser(this)
         fileBrowser!!.configure(

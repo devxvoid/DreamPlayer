@@ -1,8 +1,12 @@
 package com.dreamplayer.app
 
+import android.app.Activity
 import android.content.Context
+import android.content.pm.ActivityInfo
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.view.SurfaceControl
 import android.view.View
 import androidx.media3.common.C
 import androidx.media3.common.Format
@@ -41,25 +45,31 @@ import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager
 
 @UnstableApi
-class ExoPlayerViewFactory(private val messenger: BinaryMessenger) :
-    PlatformViewFactory(StandardMessageCodec.INSTANCE) {
+class ExoPlayerViewFactory(
+    private val activity: Activity,
+    private val messenger: BinaryMessenger,
+) : PlatformViewFactory(StandardMessageCodec.INSTANCE) {
     override fun create(context: Context, viewId: Int, args: Any?): PlatformView {
-        return ExoPlayerView(context, viewId, messenger)
+        return ExoPlayerView(activity, viewId, messenger)
     }
 }
 
 @UnstableApi
 class ExoPlayerView(
-    context: Context,
+    private val activity: Activity,
     viewId: Int,
     messenger: BinaryMessenger,
 ) : PlatformView {
 
-    private val playerView = ForcedAspectPlayerView(context).apply {
+    private val playerView = ForcedAspectPlayerView(activity).apply {
         useController = false
         resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
         setShutterBackgroundColor(android.graphics.Color.BLACK)
     }
+
+    /// Last value handed to `Window.setDesiredHdrHeadroom`, to avoid re-setting
+    /// the same ratio on every emit.
+    private var hdrHeadroomSet = 1.0f
 
     /// Some devices allocate only 32 KiB input buffers for the MediaCodec FLAC
     /// decoder, which is too small for large FLAC frames (e.g. 24-bit
@@ -137,7 +147,7 @@ class ExoPlayerView(
     }
 
     private val dataSourceFactory = DefaultDataSource.Factory(
-        context,
+        activity,
         httpDataSourceFactory,
     )
 
@@ -149,10 +159,10 @@ class ExoPlayerView(
         subtitleParserFactory,
     )
 
-    private val player: ExoPlayer = ExoPlayer.Builder(context)
+    private val player: ExoPlayer = ExoPlayer.Builder(activity)
         .setMediaSourceFactory(mediaSourceFactory)
         .setRenderersFactory(
-            NextRenderersFactory(context)
+            NextRenderersFactory(activity)
                 .apply {
                     setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
                     setEnableDecoderFallback(true)
@@ -279,7 +289,7 @@ class ExoPlayerView(
                                         val originalUri = android.net.Uri.fromFile(sub)
                                         // Media3's parsers decode UTF-8 only;
                                         // re-encode CP1252/CP1251 etc. to UTF-8.
-                                        val utf8Uri = SubtitleFormats.toUtf8(context, originalUri)
+                                        val utf8Uri = SubtitleFormats.toUtf8(activity, originalUri)
                                         val name = sub.name
                                         val language = SubtitleFormats.languageFromFileName(name)
                                         MediaItem.SubtitleConfiguration.Builder(utf8Uri)
@@ -538,6 +548,67 @@ class ExoPlayerView(
         }
     }
 
+    /// Requests HDR headroom from the display pipeline (Android 13+). On
+    /// OnePlus/OxygenOS the display's HDR mode only engages when the WINDOW
+    /// asks for headroom: with the default the panel keeps the SDR UI undimmed
+    /// and squeezes PQ highlights, so bright HDR skies clip flat to white.
+    /// `Window.setDesiredHdrHeadroom` puts the request on the activity's window
+    /// layer — Nova does exactly this (its dump shows `desired hdr/sdr
+    /// ratio=5.0` on the PlayerActivity window layer with the SDR UI dimmed to
+    /// ~0.68, while the SurfaceView API puts the ratio on the video layer where
+    /// OPLUS ignores it for the EDR ramp; verified on-device with the HDR10+
+    /// "lake" test clip).
+    ///
+    /// The window must ALSO be switched to `COLOR_MODE_HDR`. Nova calls
+    /// `window.setColorMode(COLOR_MODE_HDR)` the moment HDR capabilities are
+    /// detected, and OPLUS gates the headroom/EDR ramp on the window layer
+    /// actually being in HDR color mode — Nova's window layer is DISPLAY_P3
+    /// (0x188a0000) with the ratio; ours stayed at the default V0_SRGB until
+    /// this was added, which is why the headroom call alone had no visible
+    /// effect on the "lake" clip.
+    ///
+    /// Finally the video surface's dataspace is set CONSUMER-side via
+    /// `SurfaceControl.Transaction.setDataSpace` (Nova's `setSurfaceDataSpace`).
+    /// Without it, OPLUS HWC reports `UNSUPPORTDATASPACE` for the BT2020_PQ
+    /// layer and SF falls back to client composition, which never engages the
+    /// EDR boost — the `current hdr/sdr ratio` stays 1.0 (verified in dumpsys:
+    /// Nova's video layer is device-composited with the ratio ramping at 1.468;
+    /// ours was `forceClientComposition=true clientType=UNSUPPORTDATASPACE` and
+    /// stuck at 1.0 until this call).
+    private fun applyHdrHeadroom(desired: Float, colorTransfer: Int) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val window = activity.window ?: return
+        val mode =
+            if (desired > 1.0f) ActivityInfo.COLOR_MODE_HDR else ActivityInfo.COLOR_MODE_DEFAULT
+        if (window.colorMode != mode) {
+            window.colorMode = mode
+            android.util.Log.d("DreamPlayerHDR", "setColorMode($mode)")
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && desired != hdrHeadroomSet) {
+            window.setDesiredHdrHeadroom(desired)
+            android.util.Log.d("DreamPlayerHDR", "setDesiredHdrHeadroom($desired)")
+            hdrHeadroomSet = desired
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val sv = playerView.videoSurfaceView as? android.view.SurfaceView
+            val sc = sv?.surfaceControl
+            if (sc != null && sc.isValid) {
+                val dataSpace =
+                    when {
+                        desired > 1.0f && colorTransfer == C.COLOR_TRANSFER_HLG ->
+                            0x12060000 // HAL_DATASPACE_BT2020_HLG
+                        desired > 1.0f -> 0x10C00000 // HAL_DATASPACE_BT2020_PQ
+                        else -> 0
+                    }
+                SurfaceControl.Transaction().setDataSpace(sc, dataSpace).apply()
+                android.util.Log.d(
+                    "DreamPlayerHDR",
+                    "setSurfaceDataSpace(0x${Integer.toHexString(dataSpace)})",
+                )
+            }
+        }
+    }
+
     private fun emit(
         errorCodeName: String? = null,
         errorMessage: String? = null,
@@ -548,6 +619,18 @@ class ExoPlayerView(
         val audioFormat = player.audioFormat
         val videoSize = player.videoSize
         val state = player.playbackState
+
+        // Engage the display's HDR tone map (see [applyHdrHeadroom]) whenever
+        // the current video is HDR (PQ or HLG transfer — includes the DV base
+        // layer); fall back to 1.0 (no boost) for SDR content.
+        val colorTransfer = videoFormat?.colorInfo?.colorTransfer
+        applyHdrHeadroom(
+            when (colorTransfer) {
+                C.COLOR_TRANSFER_ST2084, C.COLOR_TRANSFER_HLG -> 5.0f
+                else -> 1.0f
+            },
+            colorTransfer ?: -1,
+        )
 
         val map = HashMap<String, Any?>()
         map["state"] = state
@@ -560,7 +643,7 @@ class ExoPlayerView(
         map["videoMime"] = videoFormat?.sampleMimeType
         map["videoWidth"] = videoSize.width
         map["videoHeight"] = videoSize.height
-        map["colorTransfer"] = videoFormat?.colorInfo?.colorTransfer
+        map["colorTransfer"] = colorTransfer
         map["audioCodecs"] = audioFormat?.codecs
         map["audioMime"] = audioFormat?.sampleMimeType
         map["audioChannels"] = audioFormat?.channelCount
