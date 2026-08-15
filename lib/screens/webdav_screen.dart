@@ -114,7 +114,7 @@ class _WebDavScreenState extends State<WebDavScreen> {
     if (!mounted) return;
 
     final base = server.url.replaceAll(RegExp(r'/+$'), '');
-    // Playlist = every video in this folder (play-next-episode in a folder).
+    // Playlist = every video in this folder; used to find the tapped entry.
     final videos = _entries.where((e) => !e.isDirectory).toList();
     final playlist = [
       for (final v in videos)
@@ -137,11 +137,7 @@ class _WebDavScreenState extends State<WebDavScreen> {
 
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => TmdDetailsScreen(
-          video: playlist[playIndex],
-          playlist: playlist,
-          playlistIndex: playIndex,
-        ),
+        builder: (_) => TmdDetailsScreen(video: playlist[playIndex]),
       ),
     );
   }

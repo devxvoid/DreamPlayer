@@ -117,20 +117,11 @@ class _FileBrowserScreenState extends State<FileBrowserScreen>
   }
 
   /// Opens a video's details page first (TMDB metadata + Play/Resume button),
-  /// like the WebDAV/Jellyfin browsers. The current folder's videos form the
-  /// play-next playlist, so Play continues to the next episode/file in order.
+  /// like the WebDAV/Jellyfin browsers.
   void _playVideo(FileEntry entry) {
-    final playlist = <VideoItem>[
-      for (final e in _entries.where((e) => !e.isDirectory)) _toVideoItem(e),
-    ];
-    final playIndex = playlist.indexWhere((v) => v.title == entry.name);
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => TmdDetailsScreen(
-          video: _toVideoItem(entry),
-          playlist: playlist,
-          playlistIndex: playIndex < 0 ? 0 : playIndex,
-        ),
+        builder: (_) => TmdDetailsScreen(video: _toVideoItem(entry)),
       ),
     );
   }

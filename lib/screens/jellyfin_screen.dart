@@ -170,11 +170,7 @@ class _JellyfinScreenState extends State<JellyfinScreen> {
     if (playIndex < 0 || playlist.isEmpty) return;
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => TmdDetailsScreen(
-          video: playlist[playIndex],
-          playlist: playlist,
-          playlistIndex: playIndex,
-        ),
+        builder: (_) => TmdDetailsScreen(video: playlist[playIndex]),
       ),
     );
   }

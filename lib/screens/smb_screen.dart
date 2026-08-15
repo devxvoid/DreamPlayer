@@ -244,11 +244,7 @@ class _SmbScreenState extends State<SmbScreen> {
 
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => TmdDetailsScreen(
-          video: playlist[playIndex],
-          playlist: playlist,
-          playlistIndex: playIndex,
-        ),
+        builder: (_) => TmdDetailsScreen(video: playlist[playIndex]),
       ),
     );
     // Playback session over: tear down the SMB streams and disconnect.

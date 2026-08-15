@@ -20,16 +20,9 @@ class PlayerScreen extends StatefulWidget {
   const PlayerScreen({
     super.key,
     required this.video,
-    this.playlist = const [],
-    this.playlistIndex = 0,
   });
 
   final VideoItem video;
-
-  /// Optional ordered list of videos (e.g. the other videos in the same folder)
-  /// for auto-advance to the next episode when one ends.
-  final List<VideoItem> playlist;
-  final int playlistIndex;
 
   @override
   State<PlayerScreen> createState() => _PlayerScreenState();
@@ -40,10 +33,8 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   ExoPlayerController? _exo;
   StreamSubscription<ExoPlayerEvent>? _exoSub;
 
-  /// The video currently on screen; follows [PlayerScreen.video] on first load
-  /// and advances through [PlayerScreen.playlist] on end.
-  late VideoItem _current = widget.video;
-  late int _playlistIndex = widget.playlistIndex;
+  /// The video currently on screen; follows [PlayerScreen.video] on first load.
+  late final VideoItem _current = widget.video;
 
   bool _controlsVisible = true;
   bool _fullscreen = false;
@@ -202,32 +193,6 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     await ContinueWatchingStore.remove(key);
   }
 
-  /// Advances to the next video in the playlist when the current one ends
-  /// (play-next-episode in a folder).
-  Future<void> _playNext() async {
-    final playlist = widget.playlist;
-    if (playlist.isEmpty || _playlistIndex >= playlist.length - 1) return;
-    final next = playlist[++_playlistIndex];
-    setState(() {
-      _current = next;
-      _position = Duration.zero;
-      _duration = Duration.zero;
-      _completed = false;
-      _error = null;
-      _liveVideoCodec = null;
-      _liveVideoCodecRaw = null;
-      _liveAudioCodec = null;
-      _liveAudioChannelCount = null;
-      _liveResolution = null;
-      _liveHdr = HdrFormat.sdr;
-      _subtitleOn = false;
-      _subtitleTracks = const [];
-      _selectedSubtitleTrack = -1;
-    });
-    _showControls();
-    await _openCurrent();
-  }
-
   /// Maps a native PlaybackException to something a user can act on.
   String _friendlyError(ExoPlayerEvent e) {
     final code = e.error ?? '';
@@ -310,9 +275,6 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       _syncControlsForPlaybackState();
     }
     if (mounted) setState(() {});
-    if (e.ended && widget.playlist.isNotEmpty) {
-      _playNext();
-    }
   }
 
   /// Keeps the controls visible while paused or buffering, and starts the
