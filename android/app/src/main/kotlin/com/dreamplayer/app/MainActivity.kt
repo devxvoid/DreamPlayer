@@ -46,7 +46,12 @@ class MainActivity : FlutterActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        intentChannel?.invokeMethod("open", intentPayload(intent))
+        // Launcher taps after unlock deliver a MAIN intent (singleTop);
+        // intentPayload is null for non-VIDEO intents, so don't tell Dart to
+        // open anything — the home screen stays put.
+        intentPayload(intent)?.let { payload ->
+            intentChannel?.invokeMethod("open", payload)
+        }
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {

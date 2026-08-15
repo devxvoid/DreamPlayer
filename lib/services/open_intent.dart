@@ -65,7 +65,12 @@ class OpenIntentService {
 
     _channel.setMethodCallHandler((call) async {
       if (call.method == 'open') {
-        final args = (call.arguments as Map?) ?? const {};
+        // A launcher re-launch (singleTop) delivers `onNewIntent` with a MAIN
+        // intent; the native side maps non-video intents to a null payload
+        // (see MainActivity.kt). Ignore those instead of pushing the player
+        // with no source.
+        final args = call.arguments;
+        if (args is! Map) return;
         final intent = OpenIntent(
           title: (args['title'] as String?) ?? 'Video',
           uri: args['uri'] as String?,
