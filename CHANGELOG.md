@@ -5,6 +5,18 @@ pulled into the GitHub Release body automatically by `.github/workflows/release.
 
 ## 0.1.6
 
+- **Real HDR Dolby Vision output (Android) via hybrid-composition platform view** —
+  the player previously rendered through Flutter's stock `AndroidView` widget, which
+  composites the video into a **virtual display + texture** (a non-HDR path that
+  flattens PQ to SDR at ~500 nits and washes colors out). The view is now built with
+  `PlatformViewLink` + `initExpensiveAndroidView` (hybrid composition), keeping the
+  video `SurfaceView` a real SurfaceFlinger layer on the physical display. Verified
+  on-device: the DV P8 file composites as `BT2020_ITU_PQ` with 10-bit PQ buffers,
+  `hdr metadata types=9` and `whitePointNits≈1250` — byte-for-byte the profile of a
+  pure-native player (Just Player) — and colors now match on screen. DV content also
+  skips the window HDR/headroom machinery entirely (decoder-native BT.2020 PQ
+  device-composites), and DV tracks whose MKV omits the `Colour` element (Media3
+  `colorInfo=null`) are still treated as HDR via their `dvhe`/`dvh1`/`dvav` codec.
 - **Jellyfin folders in the home library** — the folder tiles in the Jellyfin
   browser now carry an **Add to library** button that pins that server folder
   onto the home "Your library" grid (teal Jellyfin badge). Tapping it opens the
@@ -20,6 +32,26 @@ pulled into the GitHub Release body automatically by `.github/workflows/release.
   badge without needing a TMDB match. The details screen shows a full
   backdrop/poster header with the series overview when TMDB finds nothing, and
   refreshes the info on open so the token-embedded artwork URLs stay current.
+- **Per-episode details (TMDB)** — the single-episode details page now shows
+  *that episode's* name, overview, air date, runtime, rating, **guest cast**,
+  and a **Stills** gallery (via the per-episode endpoint with
+  `append_to_response=credits,images`) instead of only the show's metadata. Runs
+  only for the single-episode view — a folder with 100 files triggers no extra
+  requests. Best-effort: on API failure the episode keeps its season-level data.
+- **Season-folder title parsing fixed** — whole-season folders like
+  `HOUSE.S02.1080p.10bit.BluRay.English.AAC.5.1.x265-Panda` now resolve to
+  `HOUSE` (a bare `Sxx` season tag is stripped, audio-language and streaming-
+  provider tags like `english`/`nf`/`amzn`/`hbo` are noise, and `H.265`/`X.264`
+  codec tags are explicitly removed) — before, they resolved to a query with 0
+  results and never got their poster.
+- **Landscape details header shows artwork whole** — in landscape the metadata
+  header now renders the poster/backdrop as a centered 16:9 box (capped to the
+  viewport height) instead of cropping the art into a thin strip or filling the
+  whole landscape screen; the rating badge stays anchored inside the box. Cast
+  rows also fit at large text scales.
+- **iOS build: CacheCleaner.swift wired into the Runner target** — CI builds
+  were failing because the cache-cleaner file was added to the tree but not to
+  the Xcode target; it's now in the Runner Sources build phase.
 
 ## 0.1.5
 

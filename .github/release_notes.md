@@ -10,7 +10,6 @@ Pick the APK for your device and allow "Install unknown apps" when prompted:
 | `DreamPlayer-<version>-armeabi-v7a.apk` | 32-bit ARM phones (older devices) |
 | `DreamPlayer-<version>-x86_64.apk` | 64-bit Intel/AMD devices (emulators, some tablets) |
 | `DreamPlayer-<version>-universal.apk` | **Universal** — all architectures in one file, installs everywhere |
-| `DreamPlayer-<version>.aab` | Android App Bundle (Google Play) |
 
 Not sure which to pick? Grab the **Universal** APK.
 
@@ -30,7 +29,7 @@ Notes:
 
 ## Versioning
 
-App version follows **semver**, bumped per release (current release: **0.1.3**).
+App version follows **semver**, bumped per release (current release: **0.1.6**).
 
 ## Playing videos from your NAS / SMB share
 

@@ -14,15 +14,15 @@
 
 A cross-platform video player built with **Flutter**, designed for high-end playback on Android and iOS/iPad — including **Dolby Vision**, HDR10/HDR10+, and lossless audio formats like DTS-HD and TrueHD.
 
-> **Android (primary):** playback runs on the native **ExoPlayer / Media3** engine inside a Flutter platform view, so the display receives a real HDR / Dolby Vision signal (no tone-mapped preview).
+> **Android (primary):** playback runs on the native **ExoPlayer / Media3** engine inside a **hybrid-composition** Flutter platform view, so the video `SurfaceView` stays a real SurfaceFlinger layer on the physical display and the panel receives a real HDR / Dolby Vision signal (no tone-mapped preview).
 > **iOS/iPad:** playback runs on **AetherEngine** (FFmpeg demux/decode + native AVPlayer path for DV/HDR) behind the same platform-view contract; verified on the iPad Pro M2.
 
 ## Features
 
-- **Dolby Vision playback** — DV P8 verified on-device: decoded by the Qualcomm hardware `c2.qti.dv.decoder` at 4K 3840×2160@60 fps with zero dropped frames and correct colors.
+- **Dolby Vision playback** — DV P8 verified on-device: decoded by the Qualcomm hardware `c2.qti.dv.decoder` at 4K 3840×2160@60 fps with zero dropped frames and correct colors. The video renders through **hybrid composition** (`PlatformViewLink` + `initExpensiveAndroidView`), so SurfaceFlinger composites the layer directly as `BT2020_ITU_PQ` with 10-bit PQ buffers and `whitePointNits≈1250` — byte-for-byte the profile of a pure-native player (Just Player). The stock Flutter `AndroidView` path used a **virtual display + texture**, which flattened the PQ signal to SDR at ~500 nits and washed the colors out; the swap to hybrid composition is what makes real HDR reach the panel.
 - **Hardware video decode on any SoC** — video always decodes on the device's hardware codec (`c2.qti.*`/`OMX.qcom.*` on Qualcomm, `c2.mtk.*` on MediaTek, `c2.samsung.*` on Samsung Exynos — the app never names a vendor); FFmpeg is retained as an **audio-only** fallback (DTS, DTS-HD, TrueHD, FLAC, E-AC3). This fixed 4K HDR HEVC stutter + washed-out colors that a mis-ordered FFmpeg video renderer caused on every phone.
 - **Graceful Dolby Vision on non-DV devices** — DV P7/P8 (HEVC-based) play as **HDR10** through the HEVC hardware decoder; DV Profile 5 shows a clean *"This device cannot decode Dolby Vision Profile 5"* message instead of pink/green garbage. HDR10/HDR10+ also render correctly on **HDR-capable but DV-less** phones (e.g. Redmi Note 10) and are auto-tone-mapped on SDR-only panels.
-- **Brighter HDR (Android EDR ramp)** — on OnePlus/OxygenOS the player engages the display's real HDR mode (window `COLOR_MODE_HDR` + 5.0 HDR headroom + consumer-side surface dataspace), so bright PQ/HDR10/HDR10+/DV highlights no longer clip flat to white; verified on-device via SurfaceFlinger (`current hdr/sdr ratio > 1.0`).
+- **Brighter HDR (Android EDR ramp)** — on OnePlus/OxygenOS the player engages the display's real HDR mode (window `COLOR_MODE_HDR` + 5.0 HDR headroom + consumer-side surface dataspace) for HDR10/HDR10+/HLG, so bright PQ highlights no longer clip flat to white; verified on-device via SurfaceFlinger (`current hdr/sdr ratio > 1.0`). Dolby Vision content skips this window machinery entirely — the decoder's native BT.2020 PQ dataspace is device-composited directly.
 - **HDR on-screen display** — live chips for Dolby Vision, HDR10+, HDR10, HLG, SDR.
 - **All major audio codecs** — DTS, DTS-HD, E-AC3, AC3, TrueHD, AAC, and more via Media3 `FFmpegAudioRenderer` (FLAC and E-AC3 work around buggy platform decoders).
 - **Audio track selection** — pick any audio track mid-playback; the sheet shows the full track name and channels (e.g. `DTS-HD MA 5.1`).
@@ -88,9 +88,9 @@ The key is compiled in at build time (never shown in the UI, never committed); t
 
 ## Download
 
-Prebuilt binaries are attached to each [GitHub Release](https://github.com/mangeshghodke/DreamPlayer/releases). The current release is **0.1.4**; previous releases follow the **0.1.x** and **0.0.x** lines.
+Prebuilt binaries are attached to each [GitHub Release](https://github.com/mangeshghodke/DreamPlayer/releases). The current release is **0.1.5**; previous releases follow the **0.1.x** and **0.0.x** lines.
 
-- **Android** — per-architecture release APKs (`arm64-v8a`, `armeabi-v7a`, `x86_64`) plus a **universal** APK that installs on any device, and the AAB for Google Play.
+- **Android** — per-architecture release APKs (`arm64-v8a`, `armeabi-v7a`, `x86_64`) plus a **universal** APK that installs on any device. (An Android App Bundle is not published yet — Play Store distribution isn't set up.)
 - **iOS / iPadOS** — the versioned `DreamPlayer-<version>.ipa` (e.g. `DreamPlayer-0.1.1.ipa`) is **unsigned** (Apple only allows App Store / TestFlight installs), so sideload it with a free Apple ID via **SideStore** or **AltStore** (guide below).
 
 ### Installing on iPhone / iPad (SideStore or AltStore)
