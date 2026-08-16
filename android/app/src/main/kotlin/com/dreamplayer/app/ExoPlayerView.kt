@@ -801,7 +801,11 @@ class ExoPlayerView(
     /// Nova's video layer is device-composited with the ratio ramping at 1.468;
     /// ours was `forceClientComposition=true clientType=UNSUPPORTDATASPACE` and
     /// stuck at 1.0 until this call).
-    private fun applyHdrHeadroom(desired: Float, colorTransfer: Int) {
+    private fun applyHdrHeadroom(
+        desired: Float,
+        colorTransfer: Int,
+        skipWindowHdr: Boolean = false,
+    ) {
         // The whole HDR window pipeline needs the API 33+ surface APIs: the
         // window color mode alone (API 26) does NOT tag the video layer as HDR
         // — without the TIRAMISU `setDataSpace(SurfaceControl, Int)` call the
@@ -812,6 +816,18 @@ class ExoPlayerView(
         // Where the tag cannot be set, stay in the default color mode and let
         // SurfaceFlinger auto-tone-map HDR→SDR (correct, if not boosted).
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        // Dolby Vision content skips the forced window HDR machinery entirely:
+        // with the hybrid-composition platform view (see exo_player.dart) the
+        // video's `SurfaceView` is now a real layer on the physical HDR panel,
+        // and the decoder's own output carries the correct BT.2020 PQ dataspace
+        // + TP10 buffer — device-composited exactly like Just Player (verified
+        // on-device: `composition type=DEVICE`, `dataspace=BT2020_ITU_PQ`,
+        // `whitePointNits=1249.99`, display in DISPLAY_P3). Forcing COLOR_MODE_HDR
+        // / headroom / setDataSpace on top was the old virtual-display workaround
+        // and we have never needed it once the surface reaches the panel natively.
+        // Non-DV HDR10/HDR10+/HLG still uses the full headroom path below (the
+        // OPLUS EDR brightness ramp, verified on the HDR10+ lake clip).
+        if (skipWindowHdr) return
         // SDR-only panels must NOT be pushed into COLOR_MODE_HDR or given a PQ
         // dataspace: on non-HDR displays Android's SurfaceFlinger tone-maps
         // HDR→SDR itself, and forcing the HDR window color mode / surface
@@ -867,13 +883,29 @@ class ExoPlayerView(
         // Engage the display's HDR tone map (see [applyHdrHeadroom]) whenever
         // the current video is HDR (PQ or HLG transfer — includes the DV base
         // layer); fall back to 1.0 (no boost) for SDR content.
+        //
+        // Some DV profile-7/8 MKVs omit the MKV `Colour` element entirely — the
+        // PQ/BT.2020 color info lives only in the HEVC SPS VUI, which Media3's
+        // MatroskaExtractor never parses, so `colorInfo` comes back null even
+        // though the content is HDR (verified on-device: `dvhe.08.06` track,
+        // colorInfo=null, while the SurfaceFlinger video layer composites as
+        // BT2020_ITU_PQ). Dolby Vision is always HDR (every profile — the base
+        // layer is PQ BT.2020 for profiles 4/7/8 and IPTPQc2 for 5), so treat
+        // a `dvhe`/`dvh1`/`dvav` codec as HDR regardless of the reported color
+        // info. This is exactly the heuristic `detectMedia3HdrFormat` on the
+        // Dart side already uses for the chip label.
         val colorTransfer = videoFormat?.colorInfo?.colorTransfer
+        val codecs = videoFormat?.codecs
+        val isDolbyVision = codecs?.let { Regex("dv(?:he|h1|av)\\.").containsMatchIn(it) } == true
         applyHdrHeadroom(
-            when (colorTransfer) {
-                C.COLOR_TRANSFER_ST2084, C.COLOR_TRANSFER_HLG -> 5.0f
+            when {
+                colorTransfer == C.COLOR_TRANSFER_ST2084 ||
+                    colorTransfer == C.COLOR_TRANSFER_HLG -> 5.0f
+                isDolbyVision -> 5.0f
                 else -> 1.0f
             },
             colorTransfer ?: -1,
+            skipWindowHdr = isDolbyVision,
         )
 
         val map = HashMap<String, Any?>()

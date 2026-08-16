@@ -21,10 +21,33 @@ A video player app supporting:
   Qualcomm hardware **`c2.qti.dv.decoder`** at 4K 3840x2160@60 fps with zero
   dropped frames, correct colors (no mpv pink/green), audio via
   `c2.dolby.eac3.decoder` / Media3 `FFmpegAudioRenderer`. Implementation:
-  native `SurfaceView` PlayerView in a Flutter `AndroidView` (hybrid-composition
-  fallback keeps its own SurfaceFlinger layer → real HDR to the display) +
+  native `SurfaceView` PlayerView in a Flutter **hybrid-composition** platform
+  view (`lib/services/exo_player.dart` `PlatformViewLink` +
+  `PlatformViewsService.initExpensiveAndroidView`) so the SurfaceView is a real
+  SurfaceFlinger layer on the physical display → real HDR to the display +
   `MethodChannel`/`EventChannel` per view. `ExoPlayerController.open()` issued
   before the platform view attaches is queued and flushed in `_attach`.
+  **VIRTUAL-DISPLAY gotcha (2026-08, the REAL HDR blocker)**: the stock
+  `AndroidView` widget has NO hybrid composition — it uses Flutter's
+  **virtual-display + texture** pipeline (`TextureAndroidViewController`). The
+  video's `SurfaceView` is composited into a non-HDR virtual display
+  (`flutter-vd#1` in `dumpsys SurfaceFlinger`, max 500 nits, `HWC Support:
+  dv=false`), read back as a texture, and that SDR-flattened buffer is what
+  reaches the panel. Real HDR is physically impossible through that path — no
+  amount of window color mode / headroom / dataspace forcing helps; the video
+  layer reports `forceClientComposition=true clientType=UNSUPPORTDATASPACE`
+  `whitePointNits=-1` and colors come out washed out. **Just Player (a pure
+  native Activity) device-composites the same file (`forceClientComposition=false
+  whitePointNits=1249.99`) — same decoder, same dataspace, same metadata.** The
+  fix: render the platform view with hybrid composition (`PlatformViewLink` +
+  `initExpensiveAndroidView`, i.e. HC). Verified on-device after the switch:
+  `flutter-vd#1` gone, video layer `composition type=DEVICE`,
+  `dataspace=BT2020_ITU_PQ` `hdr metadata types=9`, buffer format
+  `Y_CBCR_420_TP10_UBWC` (10-bit PQ), display output `whitePointNits=1249.99`,
+  display color mode `DISPLAY_P3` — byte-for-byte the Just Player profile, and
+  colors match on screen. (Flutter HC is "expensive" (\> a view-composition
+  host) but is the standard hybrid path; HCPP `initHybridAndroidView` needs
+  Vulkan + API 34 and is not used.)
   **Gotcha fixed:** the backend must `setState` after creating the controller,
   or the buttons/video layer stay frozen in the pre-init state.
   **HDR10 passthrough re-verified alongside DV (2026-08)**: the HDR10 file
@@ -54,7 +77,23 @@ A video player app supporting:
   engages the EDR boost — `current hdr/sdr ratio` stuck at 1.0). Verified
   on-device with the HDR10+ "lake" clip: `desired hdr/sdr ratio=5.0` on the
   window layer, SDR UI dimmed, video layer device-composited with the ratio
-  ramping, no more white clipping. **API-gate gotcha (2026-08, Redmi Note 10 /
+  ramping, no more white clipping. **DV-without-Colour-element gotcha (2026-08)**:
+  some DV profile-7/8 MKVs omit the MKV `Colour` element — the PQ/BT.2020 info
+  lives only in the HEVC SPS VUI (ffprobe parses it, Media3's MatroskaExtractor
+  does not), so `player.videoFormat?.colorInfo` is `null` and the headroom
+  decision used to fall to SDR (`desired ratio=1.0`) even though the SF video
+  layer composites as `BT2020_ITU_PQ`. Fix: `stateMap` treats any
+  `dvhe`/`dvh1`/`dvav` codec as HDR (DV is always HDR — profiles 4/7/8 base is
+  PQ BT.2020, profile 5 is IPTPQc2), matching the Dart `detectMedia3HdrFormat`
+  `dv`-prefix heuristic that already labels the chip correctly. Since the
+  hybrid-composition switch (see the VIRTUAL-DISPLAY gotcha above), DV content
+  *skips* the window HDR/headroom machinery entirely (`skipWindowHdr`) and
+  device-composites with the decoder's native BT.2020 PQ dataspace — verified
+  on-device (`dvhe.08.06` track): video layer `BT2020_ITU_PQ hdr metadata
+  types=9`, `whitePointNits=1249.99`, display `DISPLAY_P3`, no forced dataspace
+  or headroom needed. The `colorInfo=null` detection still matters only for the
+  Dart HDR chip label.
+  **API-gate gotcha (2026-08, Redmi Note 10 /
   MIUI API 31)**: the two-arg `SurfaceControl.Transaction.setDataSpace(
   SurfaceControl, Int)` overload is **API 33+** — the single-arg
   `setDataSpace(Int)` is API 29, and the target-surface overload does NOT exist
@@ -204,7 +243,7 @@ A video player app supporting:
 | Concern | Choice | Notes |
 |---|---|---|
 | Framework | Flutter (stable, 3.44.x) | Cross-platform, single codebase |
-| Playback engine (Android) | **ExoPlayer / Media3** (native, in PlatformView) | HDR/DV passthrough-capable; working (`c2.qti.dv.decoder`). |
+| Playback engine (Android) | **ExoPlayer / Media3** (native, in hybrid-composition PlatformView) | HDR/DV passthrough-capable; working (`c2.qti.dv.decoder`). Hybrid composition (`PlatformViewLink`) keeps the video SurfaceView on the physical display — the stock `AndroidView` is virtual-display/texture and flattens HDR. |
 | Playback engine (iOS/iPad) | **AetherEngine** (native, in PlatformView) | `AvPlayerView.swift` + `AetherEngine` SPM dep; FFmpeg demux/decode + native AVPlayer path for DV/HDR; cues drawn by host `SubtitleOverlayView`. |
 | SMB client (iPad) | **AMSMB2** (browse) + **AetherEngineSMB** (playback) | `SMBClient.swift` (channel `dreamplayer/smb`); AMSMB2 for browsing, `AetherEngineSMB` `SMBConnection`/`SMBIOReader` custom source for playback. |
 | Android audio decode | Media3 `FFmpegAudioRenderer` (ffmpeg extension) | DTS, DTS-HD, E-AC3, AC3, TrueHD — same bundled-FFmpeg approach Nova uses. |
@@ -270,7 +309,7 @@ A video player app supporting:
 ## Implemented features
 
 - **HDR detection** (`lib/models/hdr_format.dart`, `lib/utils/codec_info.dart`): parses hints like `DV P8`, `HDR10+`, `HDR10` into a `HdrFormat` (incl. `HLG`); maps raw codec names (`dts_hd`, `eac3`, `truehd`, `aac`, ...) to display labels. Live detection from Media3 format info: DV track codecs (`dvhe`/`dvh1`/`dvav`), `colorTransfer` (6→HDR10, 7→HLG). **HDR10+ is detected from the real bitstream** (2026-08): Media3's format info can't tell HDR10+ from HDR10 (both are PQ transfer 6), so `ExoPlayerView.kt` probes the first video samples with `MediaExtractor` for the ST 2094-40 SEI (ITU-T T.35 user data, country `0xB5` / provider `0x003C`, prefix/suffix SEI NAL types 39/40, AVCC + Annex-B handled) on a background thread and emits `isHdr10Plus` in the event map; Dart's `detectMedia3HdrFormat` upgrades to HDR10+ when set. `detectHdrFormat` filename-hint parsing is token-aware (safe on full titles — `Adventure.mkv` stays SDR) but the hint is **not** auto-wired from titles: the top-bar chip and labels reflect only what is actually in the content, so a misnamed file never gets an HDR chip. Probe is best-effort (failure → HDR10 label, playback unaffected); SDR content is never labeled HDR (verified on-device: lake `hdr10+...` file → amber HDR10+ chip via probe, SDR screen-recording → no chip). iOS AetherEngine has no equivalent probe yet — HDR10+ on iPad still labels as HDR10.
-- **Real playback** (`lib/screens/player_screen.dart`): Android uses a native **ExoPlayer/Media3 PlatformView** (`lib/services/exo_player.dart`) with live codec/HDR/resolution chips, play/pause, seek, ±10s, mute, fullscreen, buffering spinner, error surface. Non-Android shows a "not yet supported" message. Widget tests run playback-less (`FLUTTER_TEST` gate).
+- **Real playback** (`lib/screens/player_screen.dart`): Android uses a native **ExoPlayer/Media3 PlatformView** in **hybrid composition** (`lib/services/exo_player.dart` — `PlatformViewLink` + `PlatformViewsService.initExpensiveAndroidView`; the stock `AndroidView` widget is virtual-display + texture and flattens HDR, see the VIRTUAL-DISPLAY gotcha in the top section) with live codec/HDR/resolution chips, play/pause, seek, ±10s, mute, fullscreen, buffering spinner, error surface. Non-Android shows a "not yet supported" message. Widget tests run playback-less (`FLUTTER_TEST` gate).
 - **Android permissions**: `READ_MEDIA_VIDEO` (+ `READ_EXTERNAL_STORAGE` ≤ API 32) requested at runtime via `permission_handler` when a video is opened. `compileSdk = 37` required by `permission_handler`.
 - **Player overlay** shows HDR format + video/audio codec + resolution chips; library cards show an HDR badge + audio codec label.
   - **DV dedup**: for Dolby Vision the purple HDR chip already says "Dolby Vision", so the redundant video-codec chip is suppressed (no "Dolby Vision" twice).
@@ -460,7 +499,7 @@ lib/
     hdr_format.dart             # HdrFormat enum (SDR/HDR10/HDR10+/DV/HLG)
   utils/codec_info.dart         # HDR detection + codec -> label mapping + live label merge
   services/display_refresh_rate.dart  # high refresh rate selection (Android)
-  services/exo_player.dart        # ExoPlayerController + ExoPlayerView platform view
+  services/exo_player.dart        # ExoPlayerController + ExoPlayerView platform view (hybrid composition on Android)
   services/continue_watching.dart # continue-watching list (shared_preferences JSON)
   services/jellyfin_client.dart     # Jellyfin/Emby REST + mDNS discovery + JellyfinServer/JellyfinItem/JellyfinItemInfo models + videoItem/serverForUrl/getItemInfo helpers + folder-meta cache
   services/tmdb_client.dart        # TMDB: filename parser (ParsedFileName), TmdApi (search/details/bestForQuery), TmdStore cache, TmdService facade

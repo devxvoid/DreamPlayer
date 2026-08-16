@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show Factory;
+import 'package:flutter/gestures.dart';
+import 'package:flutter/rendering.dart' show PlatformViewHitTestBehavior;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -390,9 +393,23 @@ class ExoPlayerController {
 
 /// Embeds the native playback engine platform view.
 ///
-/// Android: ExoPlayer/Media3 [SurfaceView], rendered through Flutter's hybrid
-/// composition fallback so the video keeps its own SurfaceFlinger layer —
-/// required for real HDR / Dolby Vision output.
+/// Android: the ExoPlayer/Media3 [PlayerView]'s internal `SurfaceView` is
+/// rendered through Flutter's **hybrid composition** (`PlatformViewLink` +
+/// `PlatformViewsService.initExpensiveAndroidView`) so the video surface keeps
+/// its own SurfaceFlinger layer on the physical display — required for real
+/// HDR / Dolby Vision output.
+///
+/// The default `AndroidView` widget uses Flutter's virtual-display + texture
+/// composition: the SurfaceView is composited into a non-HDR virtual display
+/// (`flutter-vd#1` in SurfaceFlinger), read back as a texture, and that
+/// SDR-flattened texture is what reaches the panel. Real HDR is impossible
+/// through that path — the PQ/HLG transfer and the BT.2020 dataspace are lost
+/// before the display ever sees them, so HDR/DV content renders washed out
+/// (verified on-device: the DV P8 `c884f7` SurfaceView composited as CLIENT
+/// into `flutter-vd#1` with `HWC Support: dv=false`, while Just Player's same
+/// file device-composited onto the HDR panel). Hybrid composition keeps the
+/// SurfaceView as a real layer on the physical display, so the decoder's PQ
+/// output goes straight to the HWC and the display tone-maps it natively.
 ///
 /// iOS: AVPlayer-backed `AVPlayerLayer` (see `AvPlayerView.swift`), which also
 /// renders on its own Core Animation layer so the display receives the native
@@ -411,9 +428,28 @@ class ExoPlayerView extends StatelessWidget {
         creationParamsCodec: const StandardMessageCodec(),
       );
     }
-    return AndroidView(
+    return PlatformViewLink(
       viewType: exoPlayerViewType,
-      onPlatformViewCreated: controller._attach,
+      surfaceFactory: (BuildContext context, PlatformViewController controller) {
+        return AndroidViewSurface(
+          controller: controller as AndroidViewController,
+          gestureRecognizers: const <Factory<OneSequenceGestureRecognizer>>{},
+          hitTestBehavior: PlatformViewHitTestBehavior.opaque,
+        );
+      },
+      onCreatePlatformView: (PlatformViewCreationParams params) {
+        final AndroidViewController nativeController =
+            PlatformViewsService.initExpensiveAndroidView(
+          id: params.id,
+          viewType: params.viewType,
+          layoutDirection: TextDirection.ltr,
+        );
+        nativeController
+          ..addOnPlatformViewCreatedListener(controller._attach)
+          ..addOnPlatformViewCreatedListener(params.onPlatformViewCreated)
+          ..create();
+        return nativeController;
+      },
     );
   }
 }
