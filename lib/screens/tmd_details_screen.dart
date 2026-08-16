@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../models/video_item.dart';
 import '../services/file_browser.dart';
+import '../services/jellyfin_client.dart';
 import '../services/library_folders.dart';
 import '../services/resume_store.dart';
 import '../services/tmdb_client.dart';
@@ -21,6 +22,7 @@ class TmdDetailsScreen extends StatefulWidget {
     super.key,
     this.video,
     this.folder,
+    this.jellyfinInfo,
   }) : assert(video != null || folder != null);
 
   final VideoItem? video;
@@ -28,6 +30,10 @@ class TmdDetailsScreen extends StatefulWidget {
   /// When set, shows the folder's details + its file list instead of a single
   /// playable video. The folder's name is the TMDB search query.
   final LibraryFolder? folder;
+
+  /// Server-side metadata for a Jellyfin library folder (cached on bookmark,
+  /// refreshed here on open) shown when no TMDB match resolves.
+  final JellyfinItemInfo? jellyfinInfo;
 
   @override
   State<TmdDetailsScreen> createState() => _TmdDetailsScreenState();
@@ -60,10 +66,22 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
   List<FileEntry> _entries = const [];
   String? _folderError;
 
+  /// Jellyfin folder mode only: the server the folder belongs to (matched from
+  /// the saved servers) and its children, listed through the API instead of the
+  /// file browser.
+  final JellyfinClient _jellyfin = JellyfinClient();
+  JellyfinServer? _jellyfinServer;
+  List<JellyfinItem> _jellyfinEntries = const [];
+
+  /// Server-side metadata for the folder (passed in from home when cached,
+  /// refreshed here on open) — shown when no TMDB match resolves.
+  JellyfinItemInfo? _jellyfinInfo;
+
   @override
   void initState() {
     super.initState();
     _service.addListener(_onServiceChanged);
+    _jellyfinInfo = widget.jellyfinInfo;
     _load();
   }
 
@@ -94,6 +112,12 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
     _loadResume();
     if (widget.folder != null) {
       await _loadFolderEntries();
+      if (!mounted) return;
+    }
+    // Server-side series info (poster/title/year/overview) for Jellyfin
+    // folders — refreshed on open so image URLs carry the current token.
+    if (widget.folder?.isJellyfin ?? false) {
+      await _refreshJellyfinInfo();
       if (!mounted) return;
     }
     if (_meta == null) {
@@ -127,6 +151,10 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
 
   /// Folder mode: load the folder's direct entries so the file list renders.
   Future<void> _loadFolderEntries() async {
+    if (widget.folder!.isJellyfin) {
+      await _loadJellyfinEntries();
+      return;
+    }
     try {
       final entries =
           await FileBrowserService.instance.listDirectory(widget.folder!.path);
@@ -140,6 +168,63 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
       setState(() {
         _folderError = e.message ?? 'Could not list this folder';
       });
+    }
+  }
+
+  /// Jellyfin folder mode: resolve the folder's saved server (by URL, so the
+  /// current token is used) and list its children via the API. Folders first,
+  /// then playables, each sorted by name — same ordering as the Jellyfin
+  /// browser.
+  Future<void> _loadJellyfinEntries() async {
+    final folder = widget.folder!;
+    try {
+      final server =
+          await _jellyfin.serverForUrl(folder.jellyfinServerUrl ?? '');
+      if (server == null || !server.isAuthenticated) {
+        throw const JellyfinException(
+          'Jellyfin server is not signed in — open the Jellyfin screen and '
+          'sign in first.',
+        );
+      }
+      final items =
+          await _jellyfin.getItems(server, folder.jellyfinItemId ?? '');
+      if (!mounted) return;
+      final folders = items.where((i) => i.isFolder).toList()
+        ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      final playables = items.where((i) => i.isPlayable).toList()
+        ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      setState(() {
+        _jellyfinServer = server;
+        _jellyfinEntries = [...folders, ...playables];
+        _folderError = null;
+      });
+    } on Exception catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _folderError = e is JellyfinException
+            ? e.message
+            : JellyfinClient.friendlyError(e);
+      });
+    }
+  }
+
+  /// Refreshes the folder's server-side metadata (poster/title/year/overview)
+  /// from the Jellyfin server. Best-effort: a failure keeps whatever was passed
+  /// in from home, and the Jellyfin entries still load regardless.
+  Future<void> _refreshJellyfinInfo() async {
+    final folder = widget.folder;
+    final itemId = folder?.jellyfinItemId;
+    if (itemId == null || itemId.isEmpty) return;
+    try {
+      var server = _jellyfinServer;
+      server ??= await _jellyfin.serverForUrl(folder!.jellyfinServerUrl ?? '');
+      if (server == null || !server.isAuthenticated) return;
+      final info = await _jellyfin.getItemInfo(server, itemId);
+      if (info == null || !mounted) return;
+      await _jellyfin.saveFolderMeta(folder!.id, info);
+      if (mounted) setState(() => _jellyfinInfo = info);
+    } catch (_) {
+      // Best-effort.
     }
   }
 
@@ -171,9 +256,18 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
   }
 
   /// Which season numbers to fetch per-episode data for. Single episode → its
-  /// own season; folder mode → the seasons present in the local file list.
+  /// own season; folder mode → the seasons present in the local file list (or
+  /// the Jellyfin item's season numbers).
   List<int> _seasonsNeeded() {
     if (widget.folder != null) {
+      if (widget.folder!.isJellyfin) {
+        return _jellyfinEntries
+            .where((i) => i.isPlayable)
+            .map((i) => i.parentIndexNumber ?? 0)
+            .where((s) => s > 0)
+            .toSet()
+            .toList();
+      }
       return _entries
           .where((e) => !e.isDirectory)
           .map((e) => ParsedFileName.parse(e.name))
@@ -192,6 +286,14 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
     final parsed = ParsedFileName.parse(entry.name);
     if (!parsed.isEpisode) return null;
     return _meta?.seasons[parsed.season]?.episode(parsed.episode);
+  }
+
+  /// The TMDB episode matching a Jellyfin playable, or null.
+  TmdEpisode? _episodeForItem(JellyfinItem item) {
+    final season = item.parentIndexNumber;
+    final episode = item.indexNumber;
+    if (season == null || episode == null) return null;
+    return _meta?.seasons[season]?.episode(episode);
   }
 
   /// Mirrors the player's resume rules: ignore trivial positions and
@@ -305,6 +407,49 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
       duration: Duration.zero,
       sizeBytes: entry.size,
     );
+  }
+
+  /// Jellyfin folder mode: open an entry. Subfolders go into [FolderScreen]
+  /// (deep navigation); playables open their own details screen, carrying the
+  /// folder's TMDB metadata (the show's season data) so the episode screen
+  /// shows instantly.
+  Future<void> _openJellyfinItem(JellyfinItem item) async {
+    final server = _jellyfinServer;
+    if (server == null) return;
+    if (item.isFolder) {
+      final subFolder = LibraryFolder(
+        id: '${widget.folder!.id}_${item.id}',
+        name: item.name,
+        path: 'jellyfin:${item.id}',
+        addedAt: widget.folder!.addedAt,
+        source: LibraryFolderSource.jellyfin,
+        jellyfinServerUrl: server.url,
+        jellyfinItemId: item.id,
+      );
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => FolderScreen(folder: subFolder),
+        ),
+      );
+      await _loadFolderEntries();
+      await _loadDetailsAndSeasons();
+      return;
+    }
+    if (!item.isPlayable) return;
+    final video = _jellyfin.videoItem(server, item);
+    final meta = _service.metaFor(_identityKey);
+    if (meta != null) {
+      try {
+        await _service.carryMeta(_identityKey, TmdStore.identityKeyFor(video));
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => TmdDetailsScreen(video: video),
+      ),
+    );
+    await _loadResume();
   }
 
   @override
@@ -659,6 +804,7 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
   /// The folder's file list as slivers (episode files labelled with their TMDB
   /// episode name when the season data is loaded).
   List<Widget> _entriesSlivers(ThemeData theme) {
+    if (widget.folder!.isJellyfin) return _jellyfinEntriesSlivers(theme);
     final colorScheme = theme.colorScheme;
     return [
       SliverPadding(
@@ -714,39 +860,222 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
     ];
   }
 
+  /// The Jellyfin folder's item list as slivers (playables labelled with their
+  /// Jellyfin season number + TMDB episode name when matched).
+  List<Widget> _jellyfinEntriesSlivers(ThemeData theme) {
+    final colorScheme = theme.colorScheme;
+    return [
+      SliverPadding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+        sliver: SliverToBoxAdapter(
+          child: Row(
+            children: [
+              Text(
+                'Episodes',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const Spacer(),
+              if (_jellyfinEntries.isNotEmpty)
+                Text(
+                  _jellyfinFileCountLabel(),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+      if (_jellyfinEntries.isEmpty)
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              _folderError ?? 'No videos or folders here',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: colorScheme.error,
+              ),
+            ),
+          ),
+        )
+      else
+        SliverList(
+          delegate: SliverChildBuilderDelegate(
+            (context, index) {
+              final item = _jellyfinEntries[index];
+              return _JellyfinEntryTile(
+                item: item,
+                episode: _episodeForItem(item),
+                onTap: () => _openJellyfinItem(item),
+              );
+            },
+            childCount: _jellyfinEntries.length,
+          ),
+        ),
+      const SliverToBoxAdapter(child: SizedBox(height: 24)),
+    ];
+  }
+
+  String _jellyfinFileCountLabel() {
+    final files = _jellyfinEntries.where((i) => i.isPlayable).length;
+    return files == 1 ? '1 file' : '$files files';
+  }
+
   String _fileCountLabel() {
     final files = _entries.where((e) => !e.isDirectory).length;
     return files == 1 ? '1 file' : '$files files';
   }
 
   /// Folder mode without a TMDB match: still show the files so playback is
-  /// never blocked, with a "Find on TMDB" escape hatch.
+  /// never blocked, with a "Find on TMDB" escape hatch. Jellyfin folders show
+  /// the series' server-side info (backdrop/poster/title/year/rating/genres/
+  /// overview) instead of a bare title row.
   Widget _buildFolderWithoutMatch(ThemeData theme) {
+    final colorScheme = theme.colorScheme;
+    final info = _jellyfinInfo;
     return CustomScrollView(
       slivers: [
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 8, 4),
-            child: Row(
+        if (info != null && info.name.isNotEmpty) ...[
+          SliverToBoxAdapter(
+            child: Stack(
               children: [
-                Expanded(
-                  child: Text(
-                    '"${widget.folder!.name}"',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
-                    ),
+                SizedBox(
+                  height: MediaQuery.sizeOf(context).width * 9 / 16,
+                  child: info.backdropUrl != null
+                      ? Image.network(
+                          info.backdropUrl!,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => _artworkFallback(colorScheme),
+                          loadingBuilder: (context, child, progress) =>
+                              progress == null ? child : _artworkFallback(colorScheme),
+                        )
+                      : _artworkFallback(colorScheme),
+                ),
+                if (info.communityRating > 0)
+                  Positioned(
+                    bottom: 8,
+                    right: 12,
+                    child: _RatingBadge(rating: info.communityRating),
                   ),
-                ),
-                TextButton(
-                  onPressed: _fixMatch,
-                  child: const Text('Find on TMDB'),
-                ),
               ],
             ),
           ),
-        ),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(10),
+                        child: info.imageUrl != null
+                            ? Image.network(
+                                info.imageUrl!,
+                                width: 104,
+                                height: 156,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, _, _) =>
+                                    _posterFallback(colorScheme),
+                              )
+                            : _posterFallback(colorScheme),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              info.name,
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            if (info.year != null)
+                              Text(
+                                '${info.year}',
+                                style: theme.textTheme.bodyLarge?.copyWith(
+                                  color: colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            const SizedBox(height: 6),
+                            Wrap(
+                              spacing: 6,
+                              runSpacing: 6,
+                              children: [
+                                if (info.kindLabel.isNotEmpty)
+                                  _FactChip(label: info.kindLabel),
+                                if (info.durationLabel.isNotEmpty)
+                                  _FactChip(
+                                    icon: Icons.schedule,
+                                    label: info.durationLabel,
+                                  ),
+                                for (final genre in info.genres)
+                                  _FactChip(label: genre),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (info.overview.isNotEmpty) ...[
+                    const SizedBox(height: 20),
+                    Text(
+                      'Overview',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      info.overview,
+                      style: theme.textTheme.bodyMedium?.copyWith(height: 1.5),
+                    ),
+                  ],
+                  const SizedBox(height: 20),
+                  Row(
+                    children: [
+                      const Spacer(),
+                      TextButton(
+                        onPressed: _fixMatch,
+                        child: const Text('Find on TMDB'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                ],
+              ),
+            ),
+          ),
+        ] else
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 8, 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '"${widget.folder!.name}"',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: _fixMatch,
+                    child: const Text('Find on TMDB'),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ..._entriesSlivers(theme),
       ],
     );
@@ -1097,6 +1426,52 @@ class _FolderEntryTile extends StatelessWidget {
         color: colorScheme.secondary,
       ),
       title: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: subtitle.isEmpty
+          ? null
+          : Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+      onTap: onTap,
+    );
+  }
+}
+
+/// A Jellyfin folder/playable tile for the details screen's episode list.
+class _JellyfinEntryTile extends StatelessWidget {
+  const _JellyfinEntryTile({
+    required this.item,
+    required this.episode,
+    required this.onTap,
+  });
+
+  final JellyfinItem item;
+  final TmdEpisode? episode;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    if (item.isFolder) {
+      return ListTile(
+        leading: Icon(Icons.folder, color: colorScheme.primary),
+        title: Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: onTap,
+      );
+    }
+
+    final subtitle = <String>[
+      if (item.seasonLabel.isNotEmpty) item.seasonLabel,
+      if (episode != null) episode!.nameLabel,
+      if (item.durationLabel.isNotEmpty) item.durationLabel,
+    ].where((s) => s.isNotEmpty).join(' · ');
+
+    return ListTile(
+      leading: Icon(
+        item.seasonLabel.isNotEmpty
+            ? Icons.movie_outlined
+            : Icons.play_circle_outline,
+        color: colorScheme.secondary,
+      ),
+      title: Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: subtitle.isEmpty
           ? null
           : Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),

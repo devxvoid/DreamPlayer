@@ -7,6 +7,8 @@ import 'package:flutter/services.dart' show MethodChannel;
 import 'package:multicast_dns/multicast_dns.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/video_item.dart';
+
 /// A saved (or discovered) Jellyfin / Emby server.
 class JellyfinServer {
   const JellyfinServer({
@@ -100,6 +102,8 @@ class JellyfinItem {
     this.height,
     this.mediaSourceId,
     this.container,
+    this.indexNumber,
+    this.parentIndexNumber,
   });
 
   final String id;
@@ -119,11 +123,25 @@ class JellyfinItem {
   final String? mediaSourceId;
   final String? container;
 
+  /// Episode number within its season (`IndexNumber`).
+  final int? indexNumber;
+
+  /// Season number for `Type == Episode` (`ParentIndexNumber`).
+  final int? parentIndexNumber;
+
   Duration get duration => Duration(microseconds: (runTimeTicks ?? 0) ~/ 10);
 
   bool get isPlayable => !isFolder && (mediaType == 'Video' || mediaType == 'Audio');
 
   String get resolution => width != null && height != null ? '${width!}x${height!}' : '';
+
+  /// `S01E04` from [parentIndexNumber]/[indexNumber], or '' when unknown.
+  String get seasonLabel {
+    final s = parentIndexNumber;
+    final e = indexNumber;
+    if (s == null || e == null || s <= 0 || e <= 0) return '';
+    return 'S${s.toString().padLeft(2, '0')}E${e.toString().padLeft(2, '0')}';
+  }
 
   String get durationLabel {
     if (duration <= Duration.zero) return '';
@@ -152,6 +170,132 @@ class JellyfinItem {
       height: (json['Height'] as num?)?.toInt(),
       mediaSourceId: mediaSourceId ?? json['Id'] as String?,
       container: json['Container'] as String?,
+      indexNumber: (json['IndexNumber'] as num?)?.toInt(),
+      parentIndexNumber: (json['ParentIndexNumber'] as num?)?.toInt(),
+    );
+  }
+}
+
+/// Metadata about a Jellyfin folder/series fetched from the server itself
+/// (name, overview, year, genres, rating, artwork). Kept separate from
+/// [TmdMovie]: Jellyfin image URLs are server-relative and embed the session
+/// token, whereas TMDB URLs are always `image.tmdb.org`.
+class JellyfinItemInfo {
+  const JellyfinItemInfo({
+    required this.id,
+    required this.name,
+    this.type,
+    this.overview = '',
+    this.year,
+    this.genres = const [],
+    this.communityRating = 0,
+    this.runTimeTicks,
+    this.imageUrl,
+    this.backdropUrl,
+  });
+
+  final String id;
+  final String name;
+
+  /// Jellyfin type: `Series`, `Movie`, `CollectionFolder`, `Folder`, ...
+  final String? type;
+  final String overview;
+  final int? year;
+  final List<String> genres;
+  final double communityRating;
+  final int? runTimeTicks;
+
+  /// Full server URL to the poster art (token embedded as `api_key`).
+  final String? imageUrl;
+  final String? backdropUrl;
+
+  bool get isTv => type == 'Series';
+  bool get isMovie => type == 'Movie';
+
+  Duration get duration => Duration(microseconds: (runTimeTicks ?? 0) ~/ 10);
+
+  String get durationLabel {
+    if (duration <= Duration.zero) return '';
+    final h = duration.inHours;
+    final m = duration.inMinutes.remainder(60);
+    if (h > 0) return '$h:${m.toString().padLeft(2, '0')}h';
+    return '${m}m';
+  }
+
+  String get kindLabel {
+    if (isTv) return 'TV Series';
+    if (isMovie) return 'Movie';
+    return '';
+  }
+
+  /// Builds the model from a Jellyfin API item response. Image URLs carry the
+  /// session token, so they're constructed here — they can go stale after a
+  /// re-login, which is why callers refresh the cache on open.
+  factory JellyfinItemInfo.fromApi(
+    Map<String, dynamic> json, {
+    required String serverUrl,
+    required String token,
+  }) {
+    final id = json['Id'] as String? ?? '';
+    final imageTags = json['ImageTags'] as Map? ?? const {};
+    final backdropTags = json['BackdropImageTags'] as List? ?? const [];
+    final primaryTag = imageTags['Primary'] as String? ?? '';
+    final backdropTag = backdropTags.isNotEmpty
+        ? backdropTags.first as String?
+        : (imageTags['Backdrop'] as String? ??
+            imageTags['Thumb'] as String? ??
+            '');
+    String? imageUrl;
+    if (id.isNotEmpty && primaryTag.isNotEmpty) {
+      imageUrl =
+          '$serverUrl/Items/$id/Images/Primary?tag=$primaryTag&api_key=$token';
+    }
+    String? backdropUrl;
+    if (id.isNotEmpty && backdropTag != null && backdropTag.isNotEmpty) {
+      backdropUrl =
+          '$serverUrl/Items/$id/Images/Backdrop?tag=$backdropTag&api_key=$token';
+    }
+    return JellyfinItemInfo(
+      id: id,
+      name: json['Name'] as String? ?? '',
+      type: json['Type'] as String?,
+      overview: json['Overview'] as String? ?? '',
+      year: (json['ProductionYear'] as num?)?.toInt(),
+      genres: (json['Genres'] as List?)?.whereType<String>().toList() ??
+          const [],
+      communityRating: ((json['CommunityRating'] as num?) ?? 0).toDouble(),
+      runTimeTicks: (json['RunTimeTicks'] as num?)?.toInt(),
+      imageUrl: imageUrl,
+      backdropUrl: backdropUrl,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'type': type,
+        'overview': overview,
+        'year': year,
+        'genres': genres,
+        'communityRating': communityRating,
+        'runTimeTicks': runTimeTicks,
+        'imageUrl': imageUrl,
+        'backdropUrl': backdropUrl,
+      };
+
+  factory JellyfinItemInfo.fromJson(Map<String, dynamic> json) {
+    return JellyfinItemInfo(
+      id: json['id'] as String? ?? '',
+      name: json['name'] as String? ?? '',
+      type: json['type'] as String?,
+      overview: json['overview'] as String? ?? '',
+      year: json['year'] as int?,
+      genres: (json['genres'] as List?)?.whereType<String>().toList() ??
+          const [],
+      communityRating: ((json['communityRating'] as num?) ?? 0).toDouble(),
+      runTimeTicks: json['runTimeTicks'] as int?,
+      imageUrl: json['imageUrl'] as String?,
+      backdropUrl: json['backdropUrl'] as String?,
     );
   }
 }
@@ -360,12 +504,57 @@ class JellyfinClient {
         'api_key': server.token ?? '',
         'ParentId': parentId,
         'Recursive': 'false',
-        'Fields': 'MediaSources,Width,Height',
+        'Fields': 'MediaSources,Width,Height,IndexNumber,ParentIndexNumber',
       },
     );
     final json = await _getJson(uri.toString(), allowSelfSigned: server.allowSelfSigned);
     return _itemsFromJson(json);
   }
+
+  /// Fetches the full metadata (overview, year, genres, rating, artwork URLs)
+  /// for a single item — used for library folders bookmarked from the browser
+  /// so the home card + details screen can show the show's real info without
+  /// waiting on a TMDB lookup.
+  Future<JellyfinItemInfo?> getItemInfo(JellyfinServer server, String itemId) async {
+    if (itemId.isEmpty) return null;
+    final userId = server.userId ?? '';
+    final uri = Uri.parse('${server.url}/Users/$userId/Items/$itemId').replace(
+      queryParameters: {
+        'api_key': server.token ?? '',
+        'Fields':
+            'Overview,Genres,ProductionYear,CommunityRating,RunTimeTicks,OfficialRating',
+      },
+    );
+    final json = await _getJson(uri.toString(), allowSelfSigned: server.allowSelfSigned);
+    return JellyfinItemInfo.fromApi(
+      json,
+      serverUrl: server.url,
+      token: server.token ?? '',
+    );
+  }
+
+  /// The saved/authenticated server matching [url] (normalized), or null.
+  Future<JellyfinServer?> serverForUrl(String url) async {
+    if (url.isEmpty) return null;
+    final servers = await loadServers();
+    for (final s in servers) {
+      if (s.url == url) return s;
+    }
+    return null;
+  }
+
+  /// A playable item as a [VideoItem] ready for the player/details screen.
+  VideoItem videoItem(JellyfinServer server, JellyfinItem item) => VideoItem(
+        id: 'jellyfin_${server.urlHost}_${item.id}',
+        title: item.name,
+        uri: streamUrl(server, item),
+        resumeKey: resumeKey(server, item),
+        duration: item.duration,
+        resolution: item.resolution,
+        allowSelfSigned: server.allowSelfSigned,
+        jellyfinServerId: server.urlHost,
+        jellyfinItemId: item.id,
+      );
 
   /// Direct-play stream URL (token as `api_key`). Plays via the existing HTTP
   /// data sources on both platforms; [allowSelfSigned] is honored through the
@@ -411,6 +600,52 @@ class JellyfinClient {
     await prefs.setString(
       _serversKey,
       jsonEncode(servers.map((s) => s.toJson()).toList()),
+    );
+  }
+
+  static const _folderMetaKey = 'dreamplayer.jellyfinFolderMeta';
+
+  /// Cached metadata for every library folder bookmarked from the browser,
+  /// keyed by the folder's `LibraryFolder.id` (`jellyfin_folder_<host>_<item>`).
+  Future<Map<String, JellyfinItemInfo>> loadAllFolderMeta() async {
+    final prefs = await _sharedPrefs;
+    final raw = prefs.getString(_folderMetaKey);
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      final result = <String, JellyfinItemInfo>{};
+      for (final entry in map.entries) {
+        final value = entry.value;
+        if (value is Map<String, dynamic>) {
+          final info = JellyfinItemInfo.fromJson(value);
+          if (info.id.isNotEmpty || info.name.isNotEmpty) {
+            result[entry.key] = info;
+          }
+        }
+      }
+      return result;
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<void> saveFolderMeta(String folderId, JellyfinItemInfo info) async {
+    final all = await loadAllFolderMeta();
+    all[folderId] = info;
+    final prefs = await _sharedPrefs;
+    await prefs.setString(
+      _folderMetaKey,
+      jsonEncode(all.map((k, v) => MapEntry(k, v.toJson()))),
+    );
+  }
+
+  Future<void> removeFolderMeta(String folderId) async {
+    final all = await loadAllFolderMeta();
+    if (all.remove(folderId) == null) return;
+    final prefs = await _sharedPrefs;
+    await prefs.setString(
+      _folderMetaKey,
+      jsonEncode(all.map((k, v) => MapEntry(k, v.toJson()))),
     );
   }
 

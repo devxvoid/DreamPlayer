@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../models/video_item.dart';
 import '../services/file_browser.dart';
+import '../services/jellyfin_client.dart';
 import '../services/library_folders.dart';
 import '../services/tmdb_client.dart';
 import 'tmd_details_screen.dart';
@@ -11,7 +12,8 @@ import 'tmd_details_screen.dart';
 /// list; subfolders navigate one level at a time. Videos open their TMDB
 /// details page (Play/Resume) instead of playing directly. Home routes folder
 /// taps to `TmdDetailsScreen(folder:)`; this screen is used for subfolder
-/// navigation once you're inside.
+/// navigation once you're inside. Jellyfin library folders list their children
+/// through the server API instead of the file browser.
 class FolderScreen extends StatefulWidget {
   const FolderScreen({super.key, required this.folder, this.initialPath});
 
@@ -27,13 +29,24 @@ class FolderScreen extends StatefulWidget {
 
 class _FolderScreenState extends State<FolderScreen> {
   static final FileBrowserService _service = FileBrowserService.instance;
+  final JellyfinClient _jellyfin = JellyfinClient();
 
   late String _currentPath;
   List<FileEntry> _entries = const [];
   bool _loading = true;
   String? _error;
 
-  bool get _atRoot => _currentPath == widget.folder.path;
+  /// Jellyfin mode: the folder crumbs (name + item id) below the root, the
+  /// resolved server, and the current level's children.
+  List<({String name, String id})> _jellyfinCrumbs = const [];
+  JellyfinServer? _jellyfinServer;
+  List<JellyfinItem> _jellyfinEntries = const [];
+
+  bool get _atRoot => _isJellyfin
+      ? _jellyfinCrumbs.isEmpty
+      : _currentPath == widget.folder.path;
+
+  bool get _isJellyfin => widget.folder.isJellyfin;
 
   @override
   void initState() {
@@ -68,6 +81,10 @@ class _FolderScreenState extends State<FolderScreen> {
       _loading = true;
       _error = null;
     });
+    if (_isJellyfin) {
+      await _loadJellyfin();
+      return;
+    }
     try {
       final entries = await _service.listDirectory(_currentPath);
       if (!mounted) return;
@@ -79,6 +96,41 @@ class _FolderScreenState extends State<FolderScreen> {
       if (!mounted) return;
       setState(() {
         _error = e.message ?? 'Could not list this folder';
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _loadJellyfin() async {
+    try {
+      final server =
+          await _jellyfin.serverForUrl(widget.folder.jellyfinServerUrl ?? '');
+      if (server == null || !server.isAuthenticated) {
+        throw const JellyfinException(
+          'Jellyfin server is not signed in — open the Jellyfin screen and '
+          'sign in first.',
+        );
+      }
+      final parentId = _jellyfinCrumbs.isEmpty
+          ? (widget.folder.jellyfinItemId ?? '')
+          : _jellyfinCrumbs.last.id;
+      final items = await _jellyfin.getItems(server, parentId);
+      if (!mounted) return;
+      final folders = items.where((i) => i.isFolder).toList()
+        ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      final playables = items.where((i) => i.isPlayable).toList()
+        ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      setState(() {
+        _jellyfinServer = server;
+        _jellyfinEntries = [...folders, ...playables];
+        _loading = false;
+      });
+    } on Exception catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e is JellyfinException
+            ? e.message
+            : JellyfinClient.friendlyError(e);
         _loading = false;
       });
     }
@@ -99,6 +151,27 @@ class _FolderScreenState extends State<FolderScreen> {
     await _load();
   }
 
+  Future<void> _openJellyfinItem(JellyfinItem item) async {
+    final server = _jellyfinServer;
+    if (server == null) return;
+    if (item.isFolder) {
+      setState(() {
+        _jellyfinCrumbs = [..._jellyfinCrumbs, (name: item.name, id: item.id)];
+        _loading = true;
+      });
+      await _loadJellyfin();
+      return;
+    }
+    if (!item.isPlayable) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => TmdDetailsScreen(video: _jellyfin.videoItem(server, item)),
+      ),
+    );
+    // Resume positions may have changed while playing.
+    await _loadJellyfin();
+  }
+
   VideoItem _toVideoItem(FileEntry entry) {
     // Bookmarked-tree videos come back as content:// URIs (no real file
     // path), so hand those to the player's `uri` field.
@@ -115,6 +188,19 @@ class _FolderScreenState extends State<FolderScreen> {
   }
 
   Future<void> _goUp() async {
+    if (_isJellyfin) {
+      if (_jellyfinCrumbs.isEmpty) {
+        Navigator.of(context).pop();
+        return;
+      }
+      setState(() {
+        _jellyfinCrumbs =
+            _jellyfinCrumbs.sublist(0, _jellyfinCrumbs.length - 1);
+        _loading = true;
+      });
+      await _loadJellyfin();
+      return;
+    }
     if (_atRoot) {
       Navigator.of(context).pop();
       return;
@@ -129,13 +215,20 @@ class _FolderScreenState extends State<FolderScreen> {
     return path.substring(0, index);
   }
 
+  String get _title {
+    if (_isJellyfin) {
+      return _jellyfinCrumbs.isEmpty
+          ? widget.folder.name
+          : _jellyfinCrumbs.last.name;
+    }
+    return _atRoot ? widget.folder.name : (_currentPath.split('/').lastOrNull ?? '');
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-          _atRoot ? widget.folder.name : (_currentPath.split('/').lastOrNull ?? ''),
-        ),
+        title: Text(_title),
         leading: IconButton(
           tooltip: 'Up',
           icon: const Icon(Icons.arrow_back),
@@ -147,7 +240,7 @@ class _FolderScreenState extends State<FolderScreen> {
   }
 
   Widget _body(BuildContext context) {
-    if (_loading && _entries.isEmpty) {
+    if (_loading && _currentEntries.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
     if (_error != null) {
@@ -158,19 +251,28 @@ class _FolderScreenState extends State<FolderScreen> {
         ),
       );
     }
+    final entries = _currentEntries;
     return Column(
       children: [
         if (_atRoot) _header(context),
         Expanded(
-          child: _entries.isEmpty
+          child: entries.isEmpty
               ? const Center(child: Text('No videos or folders here'))
               : ListView.builder(
-                  itemCount: _entries.length,
+                  itemCount: entries.length,
                   itemBuilder: (context, index) {
-                    final entry = _entries[index];
+                    final entry = entries[index];
+                    if (_isJellyfin) {
+                      final item = entry as JellyfinItem;
+                      return _JellyfinFolderTile(
+                        item: item,
+                        onTap: () => _openJellyfinItem(item),
+                      );
+                    }
+                    final fileEntry = entry as FileEntry;
                     return _FolderTile(
-                      entry: entry,
-                      onTap: () => _openEntry(entry),
+                      entry: fileEntry,
+                      onTap: () => _openEntry(fileEntry),
                     );
                   },
                 ),
@@ -179,12 +281,19 @@ class _FolderScreenState extends State<FolderScreen> {
     );
   }
 
+  /// The entries for the current mode (files or Jellyfin items), unified so
+  /// the body doesn't branch for emptiness checks.
+  List<Object> get _currentEntries =>
+      _isJellyfin ? _jellyfinEntries : _entries;
+
   Widget _header(BuildContext context) {
     final theme = Theme.of(context);
     final meta = TmdService.instance.metaFor(widget.folder.metadataKey);
     final movie = meta?.movie;
     final backdrop = movie?.backdropUrl();
-    final videoCount = _entries.where((e) => !e.isDirectory).length;
+    final videoCount = _isJellyfin
+        ? _jellyfinEntries.where((i) => i.isPlayable).length
+        : _entries.where((e) => !e.isDirectory).length;
 
     return SizedBox(
       width: double.infinity,
@@ -258,6 +367,44 @@ class _FolderScreenState extends State<FolderScreen> {
       countLabel,
     ];
     return parts.join(' · ');
+  }
+}
+
+/// A Jellyfin folder/playable tile for the folder screen's item list.
+class _JellyfinFolderTile extends StatelessWidget {
+  const _JellyfinFolderTile({required this.item, required this.onTap});
+
+  final JellyfinItem item;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    if (item.isFolder) {
+      return ListTile(
+        leading: Icon(Icons.folder, color: colorScheme.primary),
+        title: Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: onTap,
+      );
+    }
+
+    final subtitle = <String>[
+      if (item.seasonLabel.isNotEmpty) item.seasonLabel,
+      if (item.durationLabel.isNotEmpty) item.durationLabel,
+    ].where((s) => s.isNotEmpty).join(' · ');
+
+    return ListTile(
+      leading: Icon(
+        item.seasonLabel.isNotEmpty
+            ? Icons.movie_outlined
+            : Icons.play_circle_outline,
+        color: colorScheme.secondary,
+      ),
+      title: Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: subtitle.isEmpty ? null : Text(subtitle),
+      onTap: onTap,
+    );
   }
 }
 

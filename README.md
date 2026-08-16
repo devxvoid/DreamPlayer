@@ -32,7 +32,7 @@ A cross-platform video player built with **Flutter**, designed for high-end play
 - **In-app file browser** — browse the whole device and play any video, no import needed: Android internal + SD storage, and on iPad a **Files** root that opens the system Files-app home (iCloud Drive, On My iPad, Downloads, other providers), plus the app's Documents folder and bookmarked folders.
 - **"Open with" integration** — tap any video on the device and open it in DreamPlayer; works with file managers like CX Explorer (including their network-stream handoff via a local HTTP proxy).
 - **WebDAV playback** — browse WebDAV servers and stream videos straight into the player on **both** platforms: add/edit/delete servers with an inline connection test, per-server **self-signed HTTPS** opt-in (default off), and credentials stored encrypted (Android Keystore / iOS Keychain — never plaintext, never sent to Dart).
-- **Jellyfin / Emby browsing + playback** — the home **+** menu adds Jellyfin/Emby servers (with automatic **LAN discovery** via a UDP-7359 probe + mDNS), signs in, and browses libraries → folders → play. Playback direct-plays the Jellyfin URL with your token, reusing the existing HTTP pipeline on both platforms (self-signed HTTPS honors the same opt-in toggle as WebDAV). No password ever reaches the app's Dart code or disk.
+- **Jellyfin / Emby browsing + playback** — the home **+** menu adds Jellyfin/Emby servers (with automatic **LAN discovery** via a UDP-7359 probe + mDNS), signs in, and browses libraries → folders → play. Playback direct-plays the Jellyfin URL with your token, reusing the existing HTTP pipeline on both platforms (self-signed HTTPS honors the same opt-in toggle as WebDAV). No password ever reaches the app's Dart code or disk. **Jellyfin folders can be added to the home library** straight from the browse screen, so your server's shows sit alongside local folders — each one auto-fetches the series' poster, title, year, rating, and overview from the server, and plays its episodes through the Jellyfin API.
 - **Movie metadata (TMDB)** — every video (continue-watching cards, WebDAV/Jellyfin/file-browser listings) opens a details screen with poster/backdrop art, the real title, year, synopsis, star rating, genres, runtime, and cast. **TV episodes detect their season/episode** and the details screen + continue-watching cards label them (`Season 2 · Episode 4`, `S02E04`). "Fix match" lets you re-pin a wrong auto-match; metadata is cached so cards load instantly. The API key is a build-time value only — it is never bundled in the UI or shipped in source.
 - **Live codec / resolution overlay** — video codec, audio codec + channel count, resolution, HDR format as the file plays.
 - **Transport controls** — play/pause, seek bar, ±10s, fullscreen, buffering spinner, auto-hiding UI.
@@ -129,7 +129,7 @@ lib/
     continue_watching.dart      # continue-watching list (shared_preferences JSON)
     file_browser.dart           # file-browser channel wrapper
     webdav_client.dart          # WebDAV channel wrapper + WebDavServer model
-    jellyfin_client.dart        # Jellyfin/Emby REST client + server model + mDNS/UDP discovery
+    jellyfin_client.dart        # Jellyfin/Emby REST client + server model + mDNS/UDP discovery + videoItem/serverForUrl helpers
     tmdb_client.dart            # TMDB metadata: filename parser, API, cache + facade
     open_intent.dart            # "Open with" intent bridge
     support_links.dart          # donation links (Razorpay, GitHub Sponsors)
@@ -188,6 +188,7 @@ test/
 - [x] Continue watching with source badges (WebDAV / CX SMB / Files/SMB / Files / Network / Jellyfin)
 - [~] In-app SMB/LAN playback on iPad (AMSMB2 browse + stream) — **hidden 2026-08**: switching audio tracks on an SMB stream could crash the app; NAS files reach the app via CX/Files "Open with" instead. Code stays in the tree as a rebuild blueprint.
 - [x] User-added folder library (add a TV-show/movie folder → TMDB poster + episode list; nothing is auto-scanned)
+- [x] Jellyfin folders in the home library (add from the Jellyfin browser → TMDB poster + server episode list)
 - [x] GitHub Releases (Android APKs for all ABIs + universal; unsigned iOS IPA)
 - [ ] Play Store / TestFlight distribution (paid Apple Developer account)
 

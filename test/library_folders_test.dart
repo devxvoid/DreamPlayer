@@ -31,10 +31,40 @@ void main() {
       expect(restored.name, 'Dune');
       expect(restored.path, '/sdcard/Movies');
       expect(restored.addedAt, original.addedAt);
+      expect(restored.isJellyfin, false);
     });
 
     test('metadataKey is folder:<id>', () {
       expect(folder('abc').metadataKey, 'folder:abc');
+    });
+
+    test('json round-trip preserves jellyfin source fields', () {
+      final original = LibraryFolder(
+        id: 'jellyfin_folder_192.168.1.16_ser1',
+        name: 'Succession',
+        path: 'jellyfin:ser1',
+        addedAt: DateTime.fromMillisecondsSinceEpoch(1000),
+        source: LibraryFolderSource.jellyfin,
+        jellyfinServerUrl: 'http://192.168.1.16:8096',
+        jellyfinItemId: 'ser1',
+      );
+      final restored = LibraryFolder.fromJson(original.toJson());
+      expect(restored.isJellyfin, true);
+      expect(restored.source, LibraryFolderSource.jellyfin);
+      expect(restored.jellyfinServerUrl, 'http://192.168.1.16:8096');
+      expect(restored.jellyfinItemId, 'ser1');
+      expect(restored.path, 'jellyfin:ser1');
+    });
+
+    test('missing source field defaults to files (legacy entries)', () {
+      final restored = LibraryFolder.fromJson({
+        'id': 'old',
+        'name': 'Legacy',
+        'path': '/sdcard',
+        'addedAtMs': 1000,
+      });
+      expect(restored.isJellyfin, false);
+      expect(restored.jellyfinItemId, isNull);
     });
   });
 

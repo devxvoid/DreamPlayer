@@ -1,22 +1,29 @@
 import 'package:flutter/material.dart';
 
+import '../services/jellyfin_client.dart';
 import '../services/library_folders.dart';
 import '../services/tmdb_client.dart';
 
 /// Library card for a user-added folder. Shows the folder's TMDB match (poster
-/// art, real title, year, TV/Movie chip) when one resolves, or a gradient +
-/// folder icon placeholder otherwise.
+/// art, real title, year, TV/Movie chip) when one resolves, otherwise the
+/// server-provided [JellyfinItemInfo] for Jellyfin folders, otherwise a
+/// gradient + folder icon placeholder.
 class FolderCard extends StatelessWidget {
   const FolderCard({
     super.key,
     required this.folder,
     required this.tmdbMeta,
+    this.jellyfinInfo,
     required this.onTap,
     this.onLongPress,
   });
 
   final LibraryFolder folder;
   final TmdMeta? tmdbMeta;
+
+  /// Server-side metadata for a Jellyfin library folder (poster/title/year),
+  /// used when no TMDB match is available.
+  final JellyfinItemInfo? jellyfinInfo;
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
 
@@ -25,13 +32,44 @@ class FolderCard extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
     final movie = tmdbMeta?.movie;
     final hasMeta = movie != null && movie.title.isNotEmpty;
-    final title = hasMeta ? movie.title : folder.name;
+    final info = jellyfinInfo;
+    final hasJellyfin = info != null && info.name.isNotEmpty;
+    final title = hasMeta
+        ? movie.title
+        : (hasJellyfin ? info.name : folder.name);
     final subtitle = hasMeta
         ? [
             if (movie.year != null) '${movie.year}',
             movie.kind == TmdKind.tv ? 'TV Series' : 'Movie',
+            if (folder.isJellyfin) 'Jellyfin',
           ].join(' · ')
-        : folder.name;
+        : hasJellyfin
+            ? [
+                if (info.kindLabel.isNotEmpty) info.kindLabel,
+                if (info.year != null) '${info.year}',
+                'Jellyfin',
+              ].where((s) => s.isNotEmpty).join(' · ')
+            : [
+                if (folder.name.isNotEmpty) folder.name,
+                if (folder.isJellyfin) 'Jellyfin',
+              ].join(' · ');
+
+    // Poster: TMDB when matched, else the Jellyfin server art, else the
+    // gradient placeholder.
+    final posterUrl = hasMeta
+        ? movie.posterUrl()
+        : (hasJellyfin ? info.imageUrl : null);
+
+    // TV/Movie badge: TMDB kind, else the Jellyfin type, else none.
+    final kindBadge = hasMeta
+        ? (movie.kind == TmdKind.tv ? 'TV' : 'Movie')
+        : (hasJellyfin && info.kindLabel.isNotEmpty
+            ? (info.isTv ? 'TV' : 'Movie')
+            : null);
+    final kindColor = (hasMeta && movie.kind == TmdKind.tv) ||
+            (hasJellyfin && info.isTv)
+        ? const Color(0xFF9C27B0)
+        : const Color(0xFF1565C0);
 
     return Card(
       margin: EdgeInsets.zero,
@@ -65,23 +103,30 @@ class FolderCard extends StatelessWidget {
                       ),
                     ),
                   ),
-                  if (hasMeta && movie.posterUrl() != null)
+                  if (posterUrl != null)
                     Image.network(
-                      movie.posterUrl()!,
+                      posterUrl,
                       fit: BoxFit.cover,
                       errorBuilder: (_, _, _) => const SizedBox.shrink(),
                       loadingBuilder: (context, child, progress) =>
                           progress == null ? child : const SizedBox.shrink(),
                     ),
-                  if (hasMeta)
+                  if (kindBadge != null)
                     Positioned(
                       top: 8,
                       right: 8,
                       child: _FolderBadge(
-                        label: movie.kind == TmdKind.tv ? 'TV' : 'Movie',
-                        background: movie.kind == TmdKind.tv
-                            ? const Color(0xFF9C27B0)
-                            : const Color(0xFF1565C0),
+                        label: kindBadge,
+                        background: kindColor,
+                      ),
+                    ),
+                  if (folder.isJellyfin)
+                    const Positioned(
+                      top: 8,
+                      left: 8,
+                      child: _FolderBadge(
+                        label: 'Jellyfin',
+                        background: Color(0xFF00B8A9),
                       ),
                     ),
                 ],

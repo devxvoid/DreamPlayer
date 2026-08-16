@@ -4,27 +4,55 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'continue_watching.dart' show StoreChangeNotifier;
 
+/// Where a library folder's contents are listed from.
+enum LibraryFolderSource {
+  /// On-device storage (SAF tree bookmark / absolute path / iOS folder
+  /// bookmark) listed through the native file browser.
+  files,
+
+  /// A Jellyfin / Emby folder, listed through the server API.
+  jellyfin,
+}
+
 /// A folder the user explicitly chose to add to the library (e.g. a TV show
 /// folder). Reference-only: videos are never imported — they stay in place and
-/// are listed/played through the folder's SAF tree (`tree:<id>`) or absolute
-/// path. This is the only thing the library shows: nothing is auto-scanned.
+/// are listed/played through the folder's SAF tree (`tree:<id>`), absolute
+/// path, or (for [LibraryFolderSource.jellyfin]) the Jellyfin API. This is the
+/// only thing the library shows: nothing is auto-scanned.
 class LibraryFolder {
   const LibraryFolder({
     required this.id,
     required this.name,
     required this.path,
     required this.addedAt,
+    this.source = LibraryFolderSource.files,
+    this.jellyfinServerUrl,
+    this.jellyfinItemId,
   });
 
-  /// Bookmark id from the folder picker (`FileEntry.bookmarkId`).
+  /// Bookmark id from the folder picker (`FileEntry.bookmarkId`), or a
+  /// source-specific id (e.g. `jellyfin_<host>_<item>`) for Jellyfin.
   final String id;
 
   /// Display name of the folder (also the TMDB search query).
   final String name;
 
-  /// `tree:<id>` for SAF bookmarks, or an absolute path.
+  /// `tree:<id>` for SAF bookmarks, an absolute path, or (for Jellyfin) the
+  /// synthetic `jellyfin:<itemId>` path used as the folder's identifier.
   final String path;
   final DateTime addedAt;
+
+  /// Where the folder's contents are listed from.
+  final LibraryFolderSource source;
+
+  /// Normalized base URL of the Jellyfin server (matched against saved
+  /// servers by URL — the token is never stored here). Jellyfin only.
+  final String? jellyfinServerUrl;
+
+  /// Jellyfin folder/series id whose children are listed. Jellyfin only.
+  final String? jellyfinItemId;
+
+  bool get isJellyfin => source == LibraryFolderSource.jellyfin;
 
   /// Stable identity for TMDB metadata (`folder:<id>` in TmdStore) — the
   /// `folder:` prefix keeps it clear of per-video identity keys.
@@ -35,9 +63,16 @@ class LibraryFolder {
         'name': name,
         'path': path,
         'addedAtMs': addedAt.millisecondsSinceEpoch,
+        'source': source.name,
+        'jellyfinServerUrl': jellyfinServerUrl,
+        'jellyfinItemId': jellyfinItemId,
       };
 
   factory LibraryFolder.fromJson(Map<String, dynamic> json) {
+    final source = switch (json['source'] as String?) {
+      'jellyfin' => LibraryFolderSource.jellyfin,
+      _ => LibraryFolderSource.files,
+    };
     return LibraryFolder(
       id: json['id'] as String? ?? '',
       name: json['name'] as String? ?? '',
@@ -45,6 +80,9 @@ class LibraryFolder {
       addedAt: DateTime.fromMillisecondsSinceEpoch(
         (json['addedAtMs'] as num?)?.toInt() ?? 0,
       ),
+      source: source,
+      jellyfinServerUrl: json['jellyfinServerUrl'] as String?,
+      jellyfinItemId: json['jellyfinItemId'] as String?,
     );
   }
 }

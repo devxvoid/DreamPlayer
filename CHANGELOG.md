@@ -3,6 +3,24 @@
 All notable changes to DreamPlayer are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## 0.1.6
+
+- **Jellyfin folders in the home library** — the folder tiles in the Jellyfin
+  browser now carry an **Add to library** button that pins that server folder
+  onto the home "Your library" grid (teal Jellyfin badge). Tapping it opens the
+  TMDB details screen in Jellyfin mode: episodes list through the server API
+  with `SxxExx` labels (+ TMDB episode names when the season data is cached),
+  and play directly. Only the server URL + item id are stored — the token is
+  re-matched against your saved servers on every open, so it keeps working
+  across logins. Removing the folder unlists it (no files/grants touched).
+- **Jellyfin series info auto-fetched on bookmark** — adding a folder from the
+  Jellyfin browser also fetches the series' own metadata from the server
+  (`JellyfinItemInfo`: poster + backdrop art, real title, year, rating, genres,
+  overview) and caches it, so the home card shows the show's poster and TV/Movie
+  badge without needing a TMDB match. The details screen shows a full
+  backdrop/poster header with the series overview when TMDB finds nothing, and
+  refreshes the info on open so the token-embedded artwork URLs stay current.
+
 ## 0.1.5
 
 - **HDR10+ detected from the real bitstream (Android)** — Media3's format info

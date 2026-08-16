@@ -37,6 +37,10 @@ class _HomeScreenState extends State<HomeScreen>
   /// recently added first. Nothing is auto-scanned — only these appear.
   List<LibraryFolder> _folders = const [];
 
+  /// Cached server-side metadata for the [JellyfinItemInfo] folders, keyed by
+  /// `LibraryFolder.id` (fetch-on-bookmark, refreshed on open).
+  Map<String, JellyfinItemInfo> _jellyfinMeta = const {};
+
   final JellyfinClient _client = JellyfinClient();
 
   @override
@@ -103,10 +107,41 @@ class _HomeScreenState extends State<HomeScreen>
   /// lookups so each folder card can show the show's poster.
   Future<void> _loadLibraryFolders() async {
     final folders = await LibraryFoldersStore.load();
+    final metas = await _client.loadAllFolderMeta();
     if (mounted) {
-      setState(() => _folders = folders);
+      setState(() {
+        _folders = folders;
+        _jellyfinMeta = metas;
+      });
     }
     _resolveFolderMetadata(folders);
+    _refreshJellyfinMeta(folders);
+  }
+
+  /// Best-effort server-side metadata for the Jellyfin library folders: any
+  /// folder with no cached entry gets its info fetched from the server (the
+  /// bookmark flow already saves it, so this only fills gaps).
+  Future<void> _refreshJellyfinMeta(List<LibraryFolder> folders) async {
+    for (final folder in folders) {
+      if (!folder.isJellyfin || _jellyfinMeta.containsKey(folder.id)) continue;
+      final itemId = folder.jellyfinItemId;
+      if (itemId == null || itemId.isEmpty) continue;
+      try {
+        final server =
+            await _client.serverForUrl(folder.jellyfinServerUrl ?? '');
+        if (server == null || !server.isAuthenticated) continue;
+        final info = await _client.getItemInfo(server, itemId);
+        if (info == null) continue;
+        await _client.saveFolderMeta(folder.id, info);
+        if (mounted) {
+          setState(() {
+            _jellyfinMeta = {..._jellyfinMeta, folder.id: info};
+          });
+        }
+      } catch (_) {
+        // Best-effort — the card falls back to the folder name / TMDB lookup.
+      }
+    }
   }
 
   Future<void> _resolveFolderMetadata(List<LibraryFolder> folders) async {
@@ -168,7 +203,10 @@ class _HomeScreenState extends State<HomeScreen>
   void _openFolder(LibraryFolder folder) async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => TmdDetailsScreen(folder: folder),
+        builder: (_) => TmdDetailsScreen(
+          folder: folder,
+          jellyfinInfo: _jellyfinMeta[folder.id],
+        ),
       ),
     );
     await _loadLibrary();
@@ -197,10 +235,18 @@ class _HomeScreenState extends State<HomeScreen>
     );
     if (confirmed != true) return;
     await LibraryFoldersStore.remove(folder.id);
-    // Release the native library bookmark so its grant doesn't linger.
-    try {
-      await FileBrowserService.instance.removeLibraryBookmark(folder.id);
-    } catch (_) {}
+    // Release the native library bookmark so its grant doesn't linger (only
+    // for on-device folders — Jellyfin bookmarks have no native grant).
+    if (!folder.isJellyfin) {
+      try {
+        await FileBrowserService.instance.removeLibraryBookmark(folder.id);
+      } catch (_) {}
+    } else {
+      // Drop the cached server-side metadata too so a re-add re-fetches fresh.
+      try {
+        await _client.removeFolderMeta(folder.id);
+      } catch (_) {}
+    }
     // Drop the folder's TMDB metadata too so a re-add re-matches cleanly.
     try {
       await TmdService.instance.clear(folder.metadataKey);
@@ -404,6 +450,7 @@ class _HomeScreenState extends State<HomeScreen>
                 return FolderCard(
                   folder: folder,
                   tmdbMeta: TmdService.instance.metaFor(folder.metadataKey),
+                  jellyfinInfo: _jellyfinMeta[folder.id],
                   onTap: () => _openFolder(folder),
                   onLongPress: () => _removeFolder(folder),
                 );

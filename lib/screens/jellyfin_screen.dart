@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/video_item.dart';
 import '../services/jellyfin_client.dart';
+import '../services/library_folders.dart';
 import 'tmd_details_screen.dart';
 
 /// Jellyfin / Emby browser: saved + discovered servers -> libraries -> folders
@@ -196,6 +197,41 @@ class _JellyfinScreenState extends State<JellyfinScreen> {
     }
   }
 
+  /// Adds the currently browsed folder (a TV-show/library folder) to the home
+  /// library. The server URL + item id are persisted; the token is never — the
+  /// entry is re-matched against the saved servers each time it's opened, so it
+  /// keeps working across logins.
+  Future<void> _addToLibrary(JellyfinItem item) async {
+    final server = _browsing;
+    if (server == null) return;
+    final folder = LibraryFolder(
+      id: 'jellyfin_folder_${server.urlHost}_${item.id}',
+      name: item.name,
+      path: 'jellyfin:${item.id}',
+      addedAt: DateTime.now(),
+      source: LibraryFolderSource.jellyfin,
+      jellyfinServerUrl: server.url,
+      jellyfinItemId: item.id,
+    );
+    await LibraryFoldersStore.add(folder);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('"${item.name}" added to your library')),
+    );
+    // Fetch the series' own info from the server in the background so the home
+    // card + details screen have poster/title/year/overview instantly.
+    if (server.isAuthenticated) {
+      try {
+        final info = await _client.getItemInfo(server, item.id);
+        if (info != null) {
+          await _client.saveFolderMeta(folder.id, info);
+        }
+      } catch (_) {
+        // Best-effort; the card falls back to the folder name / TMDB lookup.
+      }
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Auth + server persistence
   // ---------------------------------------------------------------------------
@@ -364,7 +400,12 @@ class _JellyfinScreenState extends State<JellyfinScreen> {
       itemCount: _items.length,
       itemBuilder: (context, index) {
         final item = _items[index];
-        return _JellyfinTile(item: item, onTap: () => _openItem(item));
+        return _JellyfinTile(
+          item: item,
+          onTap: () => _openItem(item),
+          onAddToLibrary:
+              item.isFolder ? () => _addToLibrary(item) : null,
+        );
       },
     );
   }
@@ -494,10 +535,18 @@ class _SectionHeader extends StatelessWidget {
 }
 
 class _JellyfinTile extends StatelessWidget {
-  const _JellyfinTile({required this.item, required this.onTap});
+  const _JellyfinTile({
+    required this.item,
+    required this.onTap,
+    this.onAddToLibrary,
+  });
 
   final JellyfinItem item;
   final VoidCallback onTap;
+
+  /// Shown on folders as a "add to library" shortcut (replaces the plain
+  /// chevron so both actions stay reachable).
+  final VoidCallback? onAddToLibrary;
 
   @override
   Widget build(BuildContext context) {
@@ -509,7 +558,20 @@ class _JellyfinTile extends StatelessWidget {
       leading: Icon(icon, color: color),
       title: Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: subtitle == null ? null : Text(subtitle),
-      trailing: item.isFolder ? const Icon(Icons.chevron_right) : null,
+      trailing: item.isFolder
+          ? Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (onAddToLibrary != null)
+                  IconButton(
+                    tooltip: 'Add to library',
+                    icon: const Icon(Icons.library_add_outlined),
+                    onPressed: onAddToLibrary,
+                  ),
+                const Icon(Icons.chevron_right),
+              ],
+            )
+          : null,
       onTap: onTap,
     );
   }
