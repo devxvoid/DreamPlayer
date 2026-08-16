@@ -6,8 +6,10 @@ import '../models/video_item.dart';
 import '../services/continue_watching.dart';
 import '../services/file_browser.dart';
 import '../services/jellyfin_client.dart';
+import '../services/library_folders.dart';
 import '../services/tmdb_client.dart';
 import '../services/webdav_client.dart';
+import '../widgets/folder_card.dart';
 import '../widgets/video_card.dart';
 import 'file_browser_screen.dart';
 import 'jellyfin_screen.dart';
@@ -31,6 +33,10 @@ class _HomeScreenState extends State<HomeScreen>
   /// played first (persisted via [ContinueWatchingStore]).
   List<ContinueWatchingEntry> _entries = const [];
 
+  /// "Your library": the folders the user added (e.g. TV-show folders), most
+  /// recently added first. Nothing is auto-scanned — only these appear.
+  List<LibraryFolder> _folders = const [];
+
   final JellyfinClient _client = JellyfinClient();
 
   @override
@@ -40,6 +46,7 @@ class _HomeScreenState extends State<HomeScreen>
     widget.refreshTick?.addListener(_loadLibrary);
     // Reload whenever the persisted list changes (e.g. a save or remove).
     ContinueWatchingStore.changes.addListener(_loadLibrary);
+    LibraryFoldersStore.changes.addListener(_loadLibrary);
     // Update cards when TMDB metadata resolves for a visible entry.
     TmdService.instance.addListener(_onMetadataChanged);
     _loadLibrary();
@@ -63,6 +70,7 @@ class _HomeScreenState extends State<HomeScreen>
     appRouteObserver.unsubscribe(this);
     widget.refreshTick?.removeListener(_loadLibrary);
     ContinueWatchingStore.changes.removeListener(_loadLibrary);
+    LibraryFoldersStore.changes.removeListener(_loadLibrary);
     TmdService.instance.removeListener(_onMetadataChanged);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
@@ -84,10 +92,123 @@ class _HomeScreenState extends State<HomeScreen>
 
   Future<void> _loadLibrary() async {
     final entries = await ContinueWatchingStore.load();
+    _loadLibraryFolders();
     if (mounted) {
       setState(() => _entries = entries);
     }
     _resolveMetadata(entries);
+  }
+
+  /// Loads the "Your library" folder list, then kicks off best-effort TMDB
+  /// lookups so each folder card can show the show's poster.
+  Future<void> _loadLibraryFolders() async {
+    final folders = await LibraryFoldersStore.load();
+    if (mounted) {
+      setState(() => _folders = folders);
+    }
+    _resolveFolderMetadata(folders);
+  }
+
+  Future<void> _resolveFolderMetadata(List<LibraryFolder> folders) async {
+    final service = TmdService.instance;
+    await service.ensureLoaded();
+    for (final folder in folders) {
+      final key = folder.metadataKey;
+      if (service.metaFor(key) == null) {
+        try {
+          await service.resolveFolder(key, folder.name);
+        } catch (_) {
+          // Network failures are non-fatal; the card stays a placeholder.
+          continue;
+        }
+      }
+      // Pull the full details (backdrop/overview/cast) right away so the
+      // folder's details screen is complete the moment it's opened — metadata
+      // is fetched when the folder is added, not when it's opened.
+      try {
+        await service.detailsFor(key);
+      } catch (_) {}
+    }
+  }
+
+  /// Presents the system folder picker and adds the picked folder to the
+  /// library. The folder becomes a card on home only — it is stored under its
+  /// own library bookmark, so it never shows up as an Internal-storage root;
+  /// its videos stay in place.
+  Future<void> _addFolderToLibrary() async {
+    final FileEntry? picked;
+    try {
+      picked = await FileBrowserService.instance.pickLibraryFolder();
+    } on PlatformException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message ?? 'Could not pick a folder')),
+      );
+      return;
+    }
+    if (picked == null || !mounted) return;
+    final folder = LibraryFolder(
+      id: picked.bookmarkId ??
+          'folder_${DateTime.now().millisecondsSinceEpoch}',
+      name: picked.name,
+      path: picked.path,
+      addedAt: DateTime.now(),
+    );
+    await LibraryFoldersStore.add(folder);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('"${picked.name}" added to your library')),
+    );
+    // TMDB poster for the new card resolves in the background.
+    _resolveFolderMetadata([folder]);
+  }
+
+  /// Opens a library folder: the show/movie details screen with the folder's
+  /// files (episodes) listed below it.
+  void _openFolder(LibraryFolder folder) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => TmdDetailsScreen(folder: folder),
+      ),
+    );
+    await _loadLibrary();
+  }
+
+  Future<void> _removeFolder(LibraryFolder folder) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Remove from library?'),
+        content: Text(
+          '"${folder.name}" will no longer appear here. '
+          'The files stay on your device.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await LibraryFoldersStore.remove(folder.id);
+    // Release the native library bookmark so its grant doesn't linger.
+    try {
+      await FileBrowserService.instance.removeLibraryBookmark(folder.id);
+    } catch (_) {}
+    // Drop the folder's TMDB metadata too so a re-add re-matches cleanly.
+    try {
+      await TmdService.instance.clear(folder.metadataKey);
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {
+      _folders = _folders.where((f) => f.id != folder.id).toList();
+    });
   }
 
   /// Best-effort TMDB lookups so cards can show poster art and real titles
@@ -251,8 +372,47 @@ class _HomeScreenState extends State<HomeScreen>
             title: const Text('DreamPlayer'),
             floating: true,
           ),
+          // ---- Your library: user-added folders (e.g. TV-show folders) ----
+          if (_folders.isEmpty)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                child: Text(
+                  'No folders yet. Tap + to add one.',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            )
+          else ...[
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              sliver: SliverToBoxAdapter(
+                child: Text(
+                  'Your library',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+            _folderGridSliver(
+              count: _folders.length,
+              itemBuilder: (context, index) {
+                final folder = _folders[index];
+                return FolderCard(
+                  folder: folder,
+                  tmdbMeta: TmdService.instance.metaFor(folder.metadataKey),
+                  onTap: () => _openFolder(folder),
+                  onLongPress: () => _removeFolder(folder),
+                );
+              },
+            ),
+          ],
+          // ---- Continue watching ----
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
             sliver: SliverToBoxAdapter(
               child: Text(
                 'Continue watching',
@@ -268,51 +428,31 @@ class _HomeScreenState extends State<HomeScreen>
               child: _EmptyLibrary(),
             )
           else
-            SliverPadding(
-              padding: const EdgeInsets.all(16),
-              sliver: SliverLayoutBuilder(
-                builder: (context, constraints) {
-                  final width = constraints.crossAxisExtent;
-                  final columns = _columnsForWidth(width);
-                  const spacing = 14.0;
-                  final itemWidth = (width - spacing * (columns - 1)) / columns;
-                  final itemHeight = itemWidth * 9 / 16 + _textBlockHeight;
-                  return SliverGrid(
-                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: columns,
-                      mainAxisSpacing: spacing,
-                      crossAxisSpacing: spacing,
-                      mainAxisExtent: itemHeight,
-                    ),
-                    delegate: SliverChildBuilderDelegate(
-                      (context, index) {
-                        final entry = _entries[index];
-                        final video = entry.video;
-                        final progress = video.duration > Duration.zero
-                            ? (entry.position.inMilliseconds /
-                                  video.duration.inMilliseconds)
-                                .clamp(0.0, 1.0)
-                            : null;
-                        final parsed = ParsedFileName.parse(video.title);
-                        final continueLabel =
-                            'Continue from ${_positionLabel(entry.position)}';
-                        return VideoCard(
-                          video: video,
-                          tmdbMeta: TmdService.instance
-                              .metaFor(TmdStore.identityKeyFor(video)),
-                          progress: progress,
-                          subtitle: parsed.isEpisode
-                              ? '${parsed.episodeLabel} · $continueLabel'
-                              : continueLabel,
-                          onTap: () => _openVideo(entry),
-                          onLongPress: () => _removeVideo(entry),
-                        );
-                      },
-                      childCount: _entries.length,
-                    ),
-                  );
-                },
-              ),
+            _videoGridSliver(
+              count: _entries.length,
+              itemBuilder: (context, index) {
+                final entry = _entries[index];
+                final video = entry.video;
+                final progress = video.duration > Duration.zero
+                    ? (entry.position.inMilliseconds /
+                          video.duration.inMilliseconds)
+                        .clamp(0.0, 1.0)
+                    : null;
+                final parsed = ParsedFileName.parse(video.title);
+                final continueLabel =
+                    'Continue from ${_positionLabel(entry.position)}';
+                return VideoCard(
+                  video: video,
+                  tmdbMeta: TmdService.instance
+                      .metaFor(TmdStore.identityKeyFor(video)),
+                  progress: progress,
+                  subtitle: parsed.isEpisode
+                      ? '${parsed.episodeLabel} · $continueLabel'
+                      : continueLabel,
+                  onTap: () => _openVideo(entry),
+                  onLongPress: () => _removeVideo(entry),
+                );
+              },
             ),
         ],
       ),
@@ -324,7 +464,70 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  /// Opens the "+" menu: WebDAV server, internal storage, or pick a folder.
+  /// A responsive grid of video cards (columns from the screen width), shared
+  /// by the "Continue watching" section.
+  Widget _videoGridSliver({
+    required int count,
+    required Widget Function(BuildContext, int) itemBuilder,
+  }) {
+    return SliverPadding(
+      padding: const EdgeInsets.all(16),
+      sliver: SliverLayoutBuilder(
+        builder: (context, constraints) {
+          final width = constraints.crossAxisExtent;
+          final columns = _columnsForWidth(width);
+          const spacing = 14.0;
+          final itemWidth = (width - spacing * (columns - 1)) / columns;
+          final itemHeight = itemWidth * 9 / 16 + _textBlockHeight;
+          return SliverGrid(
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: columns,
+              mainAxisSpacing: spacing,
+              crossAxisSpacing: spacing,
+              mainAxisExtent: itemHeight,
+            ),
+            delegate: SliverChildBuilderDelegate(
+              itemBuilder,
+              childCount: count,
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// A responsive grid of folder cards with poster-sized cells (2:3).
+  Widget _folderGridSliver({
+    required int count,
+    required Widget Function(BuildContext, int) itemBuilder,
+  }) {
+    return SliverPadding(
+      padding: const EdgeInsets.all(16),
+      sliver: SliverLayoutBuilder(
+        builder: (context, constraints) {
+          final width = constraints.crossAxisExtent;
+          final columns = _columnsForWidth(width);
+          const spacing = 14.0;
+          final itemWidth = (width - spacing * (columns - 1)) / columns;
+          final itemHeight = itemWidth * 3 / 2 + _textBlockHeight;
+          return SliverGrid(
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: columns,
+              mainAxisSpacing: spacing,
+              crossAxisSpacing: spacing,
+              mainAxisExtent: itemHeight,
+            ),
+            delegate: SliverChildBuilderDelegate(
+              itemBuilder,
+              childCount: count,
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// Opens the "+" menu: WebDAV server, internal storage, add folder, Jellyfin.
   Future<void> _showAddMenu() async {
     final action = await showModalBottomSheet<String>(
       context: context,
@@ -344,16 +547,16 @@ class _HomeScreenState extends State<HomeScreen>
               onTap: () => Navigator.of(context).pop('jellyfin'),
             ),
             ListTile(
+              leading: const Icon(Icons.video_library_outlined),
+              title: const Text('Add folder to library'),
+              subtitle: const Text('A TV-show folder, a movie folder\u2026'),
+              onTap: () => Navigator.of(context).pop('add-folder'),
+            ),
+            ListTile(
               leading: const Icon(Icons.storage_outlined),
               title: const Text('Internal storage'),
               subtitle: const Text('Browse files on this device'),
               onTap: () => Navigator.of(context).pop('storage'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.add_to_drive),
-              title: const Text('Pick a folder'),
-              subtitle: const Text('SD card, USB drive, cloud apps\u2026'),
-              onTap: () => Navigator.of(context).pop('folder'),
             ),
           ],
         ),
@@ -373,26 +576,8 @@ class _HomeScreenState extends State<HomeScreen>
         await Navigator.of(context).push(
           MaterialPageRoute<void>(builder: (_) => const FileBrowserScreen()),
         );
-      case 'folder':
-        await _pickFolder();
-    }
-  }
-
-  Future<void> _pickFolder() async {
-    try {
-      final picked = await FileBrowserService.instance.pickFolder();
-      if (!mounted) return;
-      if (picked == null) return;
-      // The picked folder is now bookmarked as a root; open the file browser
-      // so it (and the rest of storage) is browsable.
-      await Navigator.of(context).push(
-        MaterialPageRoute<void>(builder: (_) => const FileBrowserScreen()),
-      );
-    } on PlatformException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message ?? 'Could not open the folder')),
-      );
+      case 'add-folder':
+        await _addFolderToLibrary();
     }
   }
 
@@ -437,15 +622,14 @@ class _EmptyLibrary extends StatelessWidget {
             ),
             const SizedBox(height: 16),
             Text(
-              'Nothing to continue yet',
+              'Nothing yet',
               style: theme.textTheme.titleMedium?.copyWith(
                 fontWeight: FontWeight.w600,
               ),
             ),
             const SizedBox(height: 8),
             Text(
-              'Play a video from your storage or a WebDAV server and it '
-              'will show up here so you can pick up where you left off.',
+              'Videos you play will appear here.',
               textAlign: TextAlign.center,
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: colorScheme.onSurfaceVariant,

@@ -105,6 +105,8 @@ class TmdDetails {
     this.posterPath,
     this.backdropPath,
     this.originalTitle,
+    this.numberOfSeasons = 0,
+    this.numberOfEpisodes = 0,
   });
 
   final String title;
@@ -119,6 +121,11 @@ class TmdDetails {
   final String? posterPath;
   final String? backdropPath;
   final String? originalTitle;
+
+  /// `number_of_seasons` / `number_of_episodes` from `/tv/{id}` (TV only;
+  /// 0 for movies). Used to decide whether per-episode data is fetchable.
+  final int numberOfSeasons;
+  final int numberOfEpisodes;
 
   String get runtimeLabel =>
       runtimeMinutes == null ? '' : '${runtimeMinutes! ~/ 60}h ${runtimeMinutes! % 60}m';
@@ -156,6 +163,8 @@ class TmdDetails {
       posterPath: json['poster_path'] as String?,
       backdropPath: json['backdrop_path'] as String?,
       originalTitle: json[kind == TmdKind.movie ? 'original_title' : 'original_name'] as String?,
+      numberOfSeasons: (json['number_of_seasons'] as num?)?.toInt() ?? 0,
+      numberOfEpisodes: (json['number_of_episodes'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -167,6 +176,201 @@ class TmdDetails {
   }
 }
 
+/// One episode of a TV series (from `/tv/{id}/season/{n}`). Lets a local
+/// `SxxExx` file show the episode's real TMDB name/overview. [cast] and
+/// [stills] are only populated when the per-episode endpoint
+/// (`/tv/{id}/season/{n}/episode/{m}` + `credits,images`) is fetched.
+class TmdEpisode {
+  const TmdEpisode({
+    required this.episodeNumber,
+    this.name = '',
+    this.overview = '',
+    this.stillPath,
+    this.airDate,
+    this.runtimeMinutes,
+    this.voteAverage = 0,
+    this.cast = const [],
+    this.guestStars = const [],
+    this.stills = const [],
+  });
+
+  final int episodeNumber;
+  final String name;
+  final String overview;
+  final String? stillPath;
+  final String? airDate;
+  final int? runtimeMinutes;
+  final double voteAverage;
+
+  /// Guests/main cast from the episode's `credits` (may be empty).
+  final List<TmdCastMember> cast;
+
+  /// `credits.guest_stars` — the credited guest actors of this episode.
+  final List<TmdCastMember> guestStars;
+
+  /// Still-frame file paths (no host) from the episode's `images.stills`.
+  final List<String> stills;
+
+  String? stillUrl({int width = 300}) =>
+      stillPath == null ? null : 'https://image.tmdb.org/t/p/w$width$stillPath';
+
+  /// Absolute URLs for every still in [stills] (wide enough for a gallery row).
+  List<String> stillUrls({int width = 500}) => stills
+      .map((s) => 'https://image.tmdb.org/t/p/w$width$s')
+      .toList();
+
+  /// Falls back to "Episode N" so tiles never show a blank name.
+  String get nameLabel => name.isEmpty ? 'Episode $episodeNumber' : name;
+
+  /// Copy with [stills] replaced (used to merge the dedicated /images gallery
+  /// into an episode whose `append_to_response=images` was empty).
+  TmdEpisode withStills(List<String> stills) => TmdEpisode(
+        episodeNumber: episodeNumber,
+        name: name,
+        overview: overview,
+        stillPath: stillPath,
+        airDate: airDate,
+        runtimeMinutes: runtimeMinutes,
+        voteAverage: voteAverage,
+        cast: cast,
+        guestStars: guestStars,
+        stills: stills,
+      );
+
+  factory TmdEpisode.fromJson(Map<String, dynamic> json) {
+    final credits = json['credits'] as Map<String, dynamic>?;
+    final apiCast = credits?['cast'] as List?;
+    final castList = (apiCast != null && apiCast.isNotEmpty)
+        ? apiCast
+        : (json['cast'] as List? ?? const []);
+    final apiGuests = credits?['guest_stars'] as List?;
+    final guestList = (apiGuests != null && apiGuests.isNotEmpty)
+        ? apiGuests
+        : (json['guestStars'] as List? ?? const []);
+    final images = json['images'] as Map<String, dynamic>?;
+    final apiStills = images?['stills'] as List?;
+    final stills = (apiStills != null && apiStills.isNotEmpty)
+        ? apiStills
+            .whereType<Map<String, dynamic>>()
+            .map((s) => s['file_path'] as String?)
+            .whereType<String>()
+            .toList()
+        : (json['stills'] as List? ?? const []).whereType<String>().toList();
+    return TmdEpisode(
+      episodeNumber: (json['episode_number'] ?? json['episodeNumber'] as num?)
+              ?.toInt() ??
+          0,
+      name: json['name'] as String? ?? '',
+      overview: json['overview'] as String? ?? '',
+      stillPath: (json['still_path'] ?? json['stillPath']) as String?,
+      airDate: (json['air_date'] ?? json['airDate']) as String?,
+      runtimeMinutes: (json['runtime'] ?? json['runtimeMinutes'] as num?)
+          ?.toInt(),
+      voteAverage: (json['vote_average'] ?? json['voteAverage'] as num?)
+              ?.toDouble() ??
+          0,
+      cast: _castMembersFrom(castList),
+      guestStars: _castMembersFrom(guestList),
+      stills: stills,
+    );
+  }
+
+  /// Maps a JSON cast list (API `credits.cast` / `credits.guest_stars` or the
+  /// camelCase cache key) to [TmdCastMember]s, dropping blank names.
+  static List<TmdCastMember> _castMembersFrom(List? list) => list
+      ?.whereType<Map<String, dynamic>>()
+      .map(
+        (c) => TmdCastMember(
+          name: c['name'] as String? ?? '',
+          character: (c['character'] ?? c['role']) as String?,
+          profilePath: (c['profile_path'] ?? c['profilePath']) as String?,
+        ),
+      )
+      .where((c) => c.name.isNotEmpty)
+      .toList() ??
+      const [];
+
+  Map<String, dynamic> toJson() => {
+        'episodeNumber': episodeNumber,
+        'name': name,
+        'overview': overview,
+        'stillPath': stillPath,
+        'airDate': airDate,
+        'runtimeMinutes': runtimeMinutes,
+        'voteAverage': voteAverage,
+        'cast': cast
+            .map(
+              (c) => {
+                'name': c.name,
+                'character': c.character,
+                'profilePath': c.profilePath,
+              },
+            )
+            .toList(),
+        'guestStars': guestStars
+            .map(
+              (c) => {
+                'name': c.name,
+                'character': c.character,
+                'profilePath': c.profilePath,
+              },
+            )
+            .toList(),
+        'stills': stills,
+      };
+}
+
+/// A season's episode list, keyed by season number in [TmdMeta.seasons] so
+/// folder screens can match local files against TMDB per episode.
+class TmdSeason {
+  const TmdSeason({
+    required this.seasonNumber,
+    this.name = '',
+    this.episodes = const [],
+  });
+
+  final int seasonNumber;
+  final String name;
+  final List<TmdEpisode> episodes;
+
+  TmdEpisode? episode(int episodeNumber) {
+    for (final e in episodes) {
+      if (e.episodeNumber == episodeNumber) return e;
+    }
+    return null;
+  }
+
+  /// Returns a copy with [replacement] swapped in for its episode number.
+  TmdSeason withEpisode(TmdEpisode replacement) {
+    final next = List<TmdEpisode>.of(episodes);
+    final index =
+        next.indexWhere((e) => e.episodeNumber == replacement.episodeNumber);
+    if (index >= 0) {
+      next[index] = replacement;
+    } else {
+      next.add(replacement);
+    }
+    return TmdSeason(seasonNumber: seasonNumber, name: name, episodes: next);
+  }
+
+  factory TmdSeason.fromJson(Map<String, dynamic> json) => TmdSeason(
+        seasonNumber:
+            (json['season_number'] ?? json['seasonNumber'] as num?)?.toInt() ??
+                0,
+        name: json['name'] as String? ?? '',
+        episodes: (json['episodes'] as List? ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map(TmdEpisode.fromJson)
+            .toList(),
+      );
+
+  Map<String, dynamic> toJson() => {
+        'seasonNumber': seasonNumber,
+        'name': name,
+        'episodes': episodes.map((e) => e.toJson()).toList(),
+      };
+}
+
 /// Result of matching a cleaned filename against TMDB search results.
 class TmdMatch {
   const TmdMatch(this.movie, this.score);
@@ -175,18 +379,34 @@ class TmdMatch {
   final double score;
 }
 
-/// Cached per-video metadata (what the card shows + optional full details).
+/// Cached per-video metadata (what the card shows + optional full details +
+/// optional per-season episode data for TV shows).
 class TmdMeta {
-  const TmdMeta({required this.movie, this.details});
+  const TmdMeta({
+    required this.movie,
+    this.details,
+    this.seasons = const {},
+  });
 
   final TmdMovie movie;
   final TmdDetails? details;
 
-  TmdMeta withDetails(TmdDetails d) => TmdMeta(movie: movie, details: d);
+  /// Season number → [TmdSeason], filled lazily for TV shows whose episodes
+  /// the user actually has locally.
+  final Map<int, TmdSeason> seasons;
+
+  TmdMeta withDetails(TmdDetails d) => TmdMeta(movie: movie, details: d, seasons: seasons);
+
+  TmdMeta withSeason(TmdSeason season) {
+    final next = Map<int, TmdSeason>.of(seasons);
+    next[season.seasonNumber] = season;
+    return TmdMeta(movie: movie, details: details, seasons: next);
+  }
 
   Map<String, dynamic> toJson() => {
         'movie': movie.toJson(),
         'details': details == null ? null : _detailsToJson(details!),
+        'seasons': seasons.values.map((s) => s.toJson()).toList(),
       };
 
   static Map<String, dynamic> _detailsToJson(TmdDetails d) => {
@@ -206,6 +426,8 @@ class TmdMeta {
         'posterPath': d.posterPath,
         'backdropPath': d.backdropPath,
         'originalTitle': d.originalTitle,
+        'numberOfSeasons': d.numberOfSeasons,
+        'numberOfEpisodes': d.numberOfEpisodes,
       };
 
   factory TmdMeta.fromJson(Map<String, dynamic> json) {
@@ -213,9 +435,16 @@ class TmdMeta {
     if (movieJson == null) {
       throw const FormatException('no movie in meta');
     }
+    final seasonsRaw = json['seasons'] as List? ?? const [];
+    final seasons = <int, TmdSeason>{};
+    for (final s in seasonsRaw.whereType<Map<String, dynamic>>()) {
+      final season = TmdSeason.fromJson(s);
+      seasons[season.seasonNumber] = season;
+    }
     return TmdMeta(
       movie: TmdMovie.fromMetaJson(movieJson),
       details: _detailsFromJson(json['details'] as Map<String, dynamic>?),
+      seasons: seasons,
     );
   }
 
@@ -243,6 +472,8 @@ class TmdMeta {
       posterPath: json['posterPath'] as String?,
       backdropPath: json['backdropPath'] as String?,
       originalTitle: json['originalTitle'] as String?,
+      numberOfSeasons: json['numberOfSeasons'] as int? ?? 0,
+      numberOfEpisodes: json['numberOfEpisodes'] as int? ?? 0,
     );
   }
 }
@@ -430,6 +661,94 @@ class TmdApi {
     return TmdDetails.fromJson(json, kind: movie.kind);
   }
 
+  /// Episodes of one season (`/tv/{id}/season/{n}`), in one request. Empty when
+  /// there's no key configured or the payload has no episodes.
+  Future<List<TmdEpisode>> seasonEpisodes(TmdMovie movie, int seasonNumber) async {
+    final key = await effectiveApiKey();
+    if (key.isEmpty || seasonNumber <= 0) return const [];
+    final json = await _get(
+      '/tv/${movie.id}/season/$seasonNumber?api_key=$key&language=en-US',
+    );
+    final episodes = json['episodes'] as List? ?? const [];
+    return episodes
+        .whereType<Map<String, dynamic>>()
+        .map(TmdEpisode.fromJson)
+        .where((e) => e.episodeNumber > 0)
+        .toList();
+  }
+
+  /// Full details of one episode (`/tv/{id}/season/{n}/episode/{m}`) with its
+  /// cast (`credits`) and stills (`images`). Null when no key is configured or
+  /// the endpoint fails. The season endpoint already supplies the episode
+  /// name/overview/still; this adds the guest cast + all still frames.
+  Future<TmdEpisode?> episodeDetails(
+    TmdMovie movie,
+    int seasonNumber,
+    int episodeNumber,
+  ) async {
+    final key = await effectiveApiKey();
+    if (key.isEmpty || seasonNumber <= 0 || episodeNumber <= 0) return null;
+    try {
+      final json = await _get(
+        '/tv/${movie.id}/season/$seasonNumber/episode/$episodeNumber'
+        '?api_key=$key&language=en-US&append_to_response=credits,images',
+      );
+      final parsed = TmdEpisode.fromJson(json);
+      debugPrint('episodeDetails: season=$seasonNumber ep=$episodeNumber '
+          'stills=${parsed.stills.length} cast=${parsed.cast.length} '
+          'guests=${parsed.guestStars.length}');
+      if (parsed.episodeNumber <= 0) return null;
+      // The episode endpoint's `append_to_response=images` can come back with
+      // an empty stills list even when the episode has a gallery on the site —
+      // the dedicated /images sub-endpoint is authoritative, so merge it in.
+      if (parsed.stills.isEmpty) {
+        final gallery = await episodeGallery(movie, seasonNumber, episodeNumber);
+        if (gallery.isNotEmpty) return parsed.withStills(gallery);
+      }
+      return parsed;
+    } on TmdException {
+      return null;
+    } on SocketException {
+      return null;
+    } on TimeoutException {
+      return null;
+    }
+  }
+
+  /// Every still-frame file path for one episode from the dedicated images
+  /// endpoint (`/tv/{id}/season/{n}/episode/{m}/images`) — the same source the
+  /// TMDB site's episode gallery uses. Used when the episode endpoint's
+  /// `append_to_response=images` came back empty. Empty on failure.
+  Future<List<String>> episodeGallery(
+    TmdMovie movie,
+    int seasonNumber,
+    int episodeNumber,
+  ) async {
+    final key = await effectiveApiKey();
+    if (key.isEmpty || seasonNumber <= 0 || episodeNumber <= 0) return const [];
+    try {
+      final json = await _get(
+        '/tv/${movie.id}/season/$seasonNumber/episode/$episodeNumber/images'
+        '?api_key=$key',
+      );
+      final stills = json['stills'] as List? ?? const [];
+      final paths = stills
+          .whereType<Map<String, dynamic>>()
+          .map((s) => s['file_path'] as String?)
+          .whereType<String>()
+          .toList();
+      debugPrint('episodeGallery: season=$seasonNumber ep=$episodeNumber '
+          'stills=${paths.length}');
+      return paths;
+    } on TmdException {
+      return const [];
+    } on SocketException {
+      return const [];
+    } on TimeoutException {
+      return const [];
+    }
+  }
+
   Future<TmdMatch?> bestMatch(ParsedFileName parsed) async {
     final key = await effectiveApiKey();
     if (key.isEmpty) return null;
@@ -463,6 +782,51 @@ class TmdApi {
     }
     if (parsed.year != null && movie.year == parsed.year && !parsed.isEpisode) {
       score = (score + 0.15).clamp(0.0, 1.0);
+    }
+    return score;
+  }
+
+  /// Searches both TV and movie for an arbitrary query (e.g. a folder name)
+  /// and returns the best match above the threshold, or null. TV hits get a
+  /// hair of preference so an exact-title tie (same name is both a show and a
+  /// movie) lands on the series — the primary folder use-case is TV folders.
+  Future<TmdMatch?> bestForQuery(String query) async {
+    final key = await effectiveApiKey();
+    if (key.isEmpty) return null;
+    final clean = query.trim();
+    if (clean.isEmpty) return null;
+    final tv = await search(clean, kind: TmdKind.tv);
+    final movie = await search(clean, kind: TmdKind.movie);
+    TmdMatch? best;
+    void consider(TmdMovie candidate, double tieBoost) {
+      final score = _queryScore(candidate, clean) + tieBoost;
+      if (score < 0.5) return;
+      if (best == null || score > best!.score) {
+        best = TmdMatch(candidate, score);
+      }
+    }
+
+    for (final m in tv) {
+      consider(m, 0.001);
+    }
+    for (final m in movie) {
+      consider(m, 0.0);
+    }
+    return best;
+  }
+
+  double _queryScore(TmdMovie movie, String query) {
+    final q = query.toLowerCase();
+    final title = movie.title.toLowerCase();
+    var score = 0.0;
+    if (title == q) {
+      score = 1.0;
+    } else if (title.startsWith(q) || q.startsWith(title)) {
+      score = 0.85;
+    } else {
+      final common = _commonWords(q, title);
+      final ratio = title.isNotEmpty ? common / title.split(' ').length : 0;
+      score = 0.6 * ratio.clamp(0.0, 1.0);
     }
     return score;
   }
@@ -649,6 +1013,32 @@ class TmdService extends ChangeNotifier {
     }
   }
 
+  /// Resolves a folder's name against TMDB (TV preferred) so its library card
+  /// can show the show's poster. Best-effort; null when nothing matches.
+  /// [metadataKey] is the folder's stable identity (see `LibraryFolder`).
+  Future<TmdMeta?> resolveFolder(String metadataKey, String folderName) async {
+    await ensureLoaded();
+    final cached = _cache[metadataKey];
+    if (cached != null) return cached;
+    if (_pending.contains(metadataKey)) return null;
+
+    final parsed = ParsedFileName.parse(folderName);
+    if (parsed.title.isEmpty) return null;
+
+    _pending.add(metadataKey);
+    try {
+      final match = await _api.bestForQuery(parsed.title);
+      if (match == null) return null;
+      final meta = TmdMeta(movie: match.movie);
+      _cache[metadataKey] = meta;
+      await TmdStore.save(metadataKey, meta);
+      return meta;
+    } finally {
+      _pending.remove(metadataKey);
+      notifyListeners();
+    }
+  }
+
   /// Fetches full details (synopsis, cast, runtime) for a matched video.
   Future<TmdDetails?> detailsFor(String identityKey) async {
     final meta = _cache[identityKey];
@@ -665,12 +1055,118 @@ class TmdService extends ChangeNotifier {
     }
   }
 
+  /// Fetches + caches the episodes of one season for the show matched under
+  /// [identityKey] (a folder key or a per-video key). Returns null when there's
+  /// no cached match, it's not a TV show, or the request fails. Only the
+  /// seasons the user actually has locally are ever fetched.
+  Future<TmdSeason?> seasonFor(String identityKey, int seasonNumber) async {
+    await ensureLoaded();
+    if (seasonNumber <= 0) return null;
+    final cached = _cache[identityKey];
+    if (cached == null || cached.movie.kind != TmdKind.tv) return null;
+    final already = cached.seasons[seasonNumber];
+    if (already != null) return already;
+    final pendingKey = '$identityKey#s$seasonNumber';
+    if (_pending.contains(pendingKey)) return null;
+
+    _pending.add(pendingKey);
+    try {
+      final episodes = await _api.seasonEpisodes(cached.movie, seasonNumber);
+      if (episodes.isEmpty) return null;
+      final season = TmdSeason(seasonNumber: seasonNumber, episodes: episodes);
+      _cache[identityKey] = cached.withSeason(season);
+      await TmdStore.save(identityKey, _cache[identityKey]!);
+      return season;
+    } catch (_) {
+      return null;
+    } finally {
+      _pending.remove(pendingKey);
+      notifyListeners();
+    }
+  }
+
+  /// Fetches + caches the full details (guest cast, all stills) of one episode
+  /// of the show matched under [identityKey], enriching the cached [TmdEpisode]
+  /// in place. Returns the (possibly unchanged) episode when the fetch fails,
+  /// or null when there's nothing cached to enrich.
+  Future<TmdEpisode?> episodeDetailsFor(
+    String identityKey,
+    int seasonNumber,
+    int episodeNumber,
+  ) async {
+    await ensureLoaded();
+    final cached = _cache[identityKey];
+    if (cached == null || cached.movie.kind != TmdKind.tv) return null;
+    final season = cached.seasons[seasonNumber];
+    if (season == null) return null;
+    final existing = season.episode(episodeNumber);
+    if (existing == null) return null;
+    // Only a completed stills gallery short-circuits. Cast alone means an
+    // earlier run hit the empty `append_to_response=images` case, so the
+    // dedicated /images gallery must be retried.
+    if (existing.stills.isNotEmpty) {
+      debugPrint('episodeDetailsFor: cache hit, cast=${existing.cast.length} '
+          'stills=${existing.stills.length}');
+      return existing;
+    }
+    final pendingKey = '$identityKey#e$seasonNumber.$episodeNumber';
+    if (_pending.contains(pendingKey)) return null;
+
+    _pending.add(pendingKey);
+    try {
+      final enriched = await _api.episodeDetails(
+        cached.movie,
+        seasonNumber,
+        episodeNumber,
+      );
+      if (enriched == null) return existing;
+      _cache[identityKey] = cached.withSeason(season.withEpisode(enriched));
+      await TmdStore.save(identityKey, _cache[identityKey]!);
+      return enriched;
+    } catch (_) {
+      return existing;
+    } finally {
+      _pending.remove(pendingKey);
+      notifyListeners();
+    }
+  }
+
   /// Manual fix: pins an explicitly chosen title for the video.
   Future<void> setManual(VideoItem video, TmdMovie movie) async {
     final identityKey = TmdStore.identityKeyFor(video);
     if (identityKey.isEmpty) return;
     _cache[identityKey] = TmdMeta(movie: movie);
     await TmdStore.save(identityKey, _cache[identityKey]!);
+    notifyListeners();
+  }
+
+  /// Manual fix for a library folder (identity = `folder:<id>`), so the folder
+  /// details screen can be pinned to a TV series without a video.
+  Future<void> setManualFolder(String metadataKey, TmdMovie movie) async {
+    await ensureLoaded();
+    _cache[metadataKey] = TmdMeta(movie: movie);
+    await TmdStore.save(metadataKey, _cache[metadataKey]!);
+    notifyListeners();
+  }
+
+  /// Carries the full cached metadata (details + seasons) from [fromKey] to
+  /// [toKey], so a video opened from a folder instantly has the show's season
+  /// data (episode names/overviews/ratings/stills) without re-fetching it.
+  /// [fromKey] is left untouched. Used by the folder details screen when an
+  /// episode is tapped — the folder has already loaded the seasons, so the
+  /// episode screen must not start from a bare movie and re-fetch on every tap.
+  Future<void> carryMeta(String fromKey, String toKey) async {
+    if (fromKey.isEmpty || toKey.isEmpty || fromKey == toKey) return;
+    await ensureLoaded();
+    // The folder meta may live only in prefs (e.g. a fresh process where the
+    // folder screen hasn't resolved yet) — read it through so the carry still
+    // works.
+    final source =
+        _cache[fromKey] ?? (await TmdStore.loadAll())[fromKey];
+    if (source == null) return;
+    _cache[fromKey] ??= source;
+    _cache[toKey] = source;
+    await TmdStore.save(toKey, source);
     notifyListeners();
   }
 

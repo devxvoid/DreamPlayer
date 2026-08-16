@@ -3,11 +3,65 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
+import '../services/cache_cleaner.dart';
 import '../services/support_links.dart';
 import 'licenses_screen.dart';
 
-class SettingsScreen extends StatelessWidget {
+class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
+
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  int _diskBytes = 0;
+  bool _cleared = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshDiskSize();
+  }
+
+  Future<void> _refreshDiskSize() async {
+    final size = await CacheCleaner.diskSizeBytes();
+    if (mounted) setState(() => _diskBytes = size);
+  }
+
+  Future<void> _clearCache() async {
+    final totalBytes = _diskBytes + CacheCleaner.memoryBytes();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Clear cache?'),
+        content: Text(
+          'Removes ${CacheCleaner.formatBytes(totalBytes)} of cached images '
+          'and temporary files. Posters and details may need to be reloaded '
+          'from the network the next time you open them.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Clear'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await CacheCleaner.clearDisk();
+    CacheCleaner.clearMemoryImages();
+    if (!mounted) return;
+    setState(() => _cleared = true);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Cache cleared')),
+    );
+    await _refreshDiskSize();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -47,6 +101,28 @@ class SettingsScreen extends StatelessWidget {
                 }
               },
             ),
+          const Divider(),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: Text(
+              'Storage',
+              style: theme.textTheme.titleSmall?.copyWith(
+                color: theme.colorScheme.primary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.cleaning_services),
+            title: const Text('Clear cache'),
+            subtitle: Text(
+              _cleared
+                  ? 'Cached images and temporary files cleared'
+                  : '${CacheCleaner.formatBytes(_diskBytes)} on disk · '
+                        '${CacheCleaner.formatBytes(CacheCleaner.memoryBytes())} in memory',
+            ),
+            onTap: _clearCache,
+          ),
           const Divider(),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),

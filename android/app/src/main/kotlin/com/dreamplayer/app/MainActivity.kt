@@ -25,6 +25,9 @@ class MainActivity : FlutterActivity() {
         WebDAVClient(this).configure(
             MethodChannel(flutterEngine.dartExecutor.binaryMessenger, WebDAVClient.CHANNEL),
         )
+        CacheCleaner(this).configure(
+            MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dreamplayer/cache"),
+        )
         MulticastLockManager(this).configure(
             MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dreamplayer/multicast"),
         )

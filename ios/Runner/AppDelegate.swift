@@ -37,5 +37,6 @@ import UIKit
     SMBClient.register(with: messenger)
     WebDAVClient.register(with: messenger)
     JellyfinDiscovery.register(with: messenger)
+    CacheCleaner.register(with: messenger)
   }
 }

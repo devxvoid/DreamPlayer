@@ -14,7 +14,7 @@ void main() {
 
     expect(find.text('DreamPlayer'), findsOneWidget);
     expect(find.text('Continue watching'), findsOneWidget);
-    expect(find.text('Nothing to continue yet'), findsOneWidget);
+    expect(find.text('Nothing yet'), findsOneWidget);
     expect(find.text('Library'), findsOneWidget);
     expect(find.text('Settings'), findsOneWidget);
   });
@@ -52,6 +52,35 @@ void main() {
       find.textContaining('DreamPlayer is free software released under the GNU General'),
       findsOneWidget,
     );
+  });
+
+  testWidgets('Clear cache shows a confirmation and confirms', (tester) async {
+    // The dreamplayer/cache channel is only registered natively; in the test
+    // binding an unhandled channel never completes, so mock it to return 0.
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      const MethodChannel('dreamplayer/cache'),
+      (call) async => 0,
+    );
+    await tester.pumpWidget(const DreamPlayerApp());
+
+    await tester.tap(find.text('Settings'));
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.text('Clear cache'),
+      200,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Clear cache'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Clear cache?'), findsOneWidget);
+    await tester.tap(find.text('Clear'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Cache cleared'), findsOneWidget);
+    expect(find.text('Cached images and temporary files cleared'), findsOneWidget);
   });
 
   testWidgets('Tapping a video opens the player with codec chips', (

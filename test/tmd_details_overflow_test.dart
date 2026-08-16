@@ -20,6 +20,13 @@ const _videoNoMatch = VideoItem(
   duration: Duration(minutes: 136),
 );
 
+const _episodeVideo = VideoItem(
+  id: 'ep',
+  title: 'House.S02E04.1080p.mkv',
+  path: '/storage/emulated/0/Download/video/House/House.S02E04.mkv',
+  duration: Duration(minutes: 44),
+);
+
 Future<void> _pumpAndCheck(
   WidgetTester tester,
   VideoItem video,
@@ -101,5 +108,80 @@ void main() {
     // error no-match panel is shown.
     await _pumpAndCheck(tester, _videoNoMatch, const Size(1080, 2400));
     await _pumpAndCheck(tester, _videoNoMatch, const Size(2400, 1080));
+  });
+
+  testWidgets('single-episode state has no overflow at device sizes', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    // Seed a TV show whose season/episode data (cast, guest stars, stills)
+    // exercises the single-episode sections: the images strip, the Episode
+    // cast + Guest stars rows, and the Remove info/Fix match action wrap.
+    const seedKey = 'seed:ep';
+    await TmdStore.save(
+      seedKey,
+      TmdMeta(
+        movie: TmdMovie(
+          id: 456,
+          title: 'House',
+          kind: TmdKind.tv,
+          year: 2004,
+          posterPath: '/poster.jpg',
+          backdropPath: '/backdrop.jpg',
+        ),
+        details: TmdDetails(
+          title: 'House',
+          overview: 'A very long show overview that keeps going on and on and '
+              'on and on and on and on and on and on and on and on.',
+          runtimeMinutes: 45,
+          genres: ['Drama', 'Mystery'],
+          numberOfSeasons: 8,
+          numberOfEpisodes: 177,
+        ),
+        seasons: {
+          2: TmdSeason(
+            seasonNumber: 2,
+            episodes: [
+              TmdEpisode(
+                episodeNumber: 4,
+                name: 'Humble',
+                overview: 'A very long episode overview that keeps going on '
+                    'and on and on and on and on and on and on and on.',
+                stillPath: '/stills/e4.jpg',
+                airDate: '2005-11-01',
+                runtimeMinutes: 44,
+                voteAverage: 8.0,
+                cast: [
+                  TmdCastMember(name: 'Hugh Laurie', character: 'Dr. House'),
+                  TmdCastMember(name: 'Lisa Edelstein', character: 'Cuddy'),
+                  TmdCastMember(name: 'Omar Epps', character: 'Foreman'),
+                ],
+                guestStars: [
+                  TmdCastMember(
+                    name: 'David Morse',
+                    character: 'Michael Tritter',
+                  ),
+                ],
+                stills: [
+                  '/stills/e4-1.jpg',
+                  '/stills/e4-2.jpg',
+                  '/stills/e4-3.jpg',
+                ],
+              ),
+            ],
+          ),
+        },
+      ),
+    );
+    await TmdService.instance.carryMeta(seedKey, _episodeVideo.path!);
+
+    await _pumpAndCheck(tester, _episodeVideo, const Size(1080, 2400));
+    await _pumpAndCheck(tester, _episodeVideo, const Size(2400, 1080));
+    await _pumpAndCheck(
+      tester,
+      _episodeVideo,
+      const Size(2400, 1080),
+      textScale: 1.3,
+    );
   });
 }

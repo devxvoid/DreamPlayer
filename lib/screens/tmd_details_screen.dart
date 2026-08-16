@@ -1,29 +1,46 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../models/video_item.dart';
+import '../services/file_browser.dart';
+import '../services/library_folders.dart';
 import '../services/resume_store.dart';
 import '../services/tmdb_client.dart';
+import 'folder_screen.dart';
 import 'player_screen.dart';
 
-/// Shows TMDB metadata for a single video (backdrop, poster, synopsis, rating,
-/// genres, cast) with a Play/Resume button and a "Fix match" manual search.
+/// Shows TMDB metadata with a Play/Resume button and a "Fix match" manual
+/// search.
+///
+/// In [folder] mode (a library folder, typically a TV-show folder) it shows the
+/// show's details with the folder's files below, each episode labelled with its
+/// TMDB episode name when the season data is available. Tapping a file opens
+/// its own details screen; tapping a subfolder goes into [FolderScreen].
 class TmdDetailsScreen extends StatefulWidget {
   const TmdDetailsScreen({
     super.key,
-    required this.video,
-  });
+    this.video,
+    this.folder,
+  }) : assert(video != null || folder != null);
 
-  final VideoItem video;
+  final VideoItem? video;
+
+  /// When set, shows the folder's details + its file list instead of a single
+  /// playable video. The folder's name is the TMDB search query.
+  final LibraryFolder? folder;
 
   @override
   State<TmdDetailsScreen> createState() => _TmdDetailsScreenState();
 }
 
 class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
-  late final String _identityKey = TmdStore.identityKeyFor(widget.video);
-  late final String _resumeKey =
-      widget.video.resumeKey ?? widget.video.path ?? widget.video.uri ?? '';
-  late final ParsedFileName _parsed = ParsedFileName.parse(widget.video.title);
+  late final String _identityKey = widget.folder?.metadataKey ??
+      TmdStore.identityKeyFor(widget.video!);
+  late final String _resumeKey = widget.folder == null
+      ? (widget.video!.resumeKey ?? widget.video!.path ?? widget.video!.uri ?? '')
+      : '';
+  late final ParsedFileName _parsed =
+      ParsedFileName.parse(widget.folder?.name ?? widget.video!.title);
   final TmdService _service = TmdService.instance;
 
   TmdMeta? _meta;
@@ -38,6 +55,10 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
   /// Saved playhead for this video (mirrors the player's resume lookup), used
   /// to label the action button "Resume from m:ss" instead of "Play".
   Duration? _resumePosition;
+
+  /// Folder mode only: the folder's direct entries (files + subfolders).
+  List<FileEntry> _entries = const [];
+  String? _folderError;
 
   @override
   void initState() {
@@ -71,28 +92,106 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
       _loadingError = false;
     });
     _loadResume();
-    if (_meta != null) return;
-    try {
-      await _service.resolve(widget.video);
+    if (widget.folder != null) {
+      await _loadFolderEntries();
       if (!mounted) return;
-      final meta = _service.metaFor(_identityKey);
-      setState(() {
-        _meta = meta;
-        _loading = false;
-      });
-      if (meta != null) {
-        final details = await _service.detailsFor(_identityKey);
-        if (mounted) setState(() => _details = details);
-      }
-    } catch (e) {
-      if (mounted) {
+    }
+    if (_meta == null) {
+      try {
+        if (widget.folder != null) {
+          await _service.resolveFolder(
+            widget.folder!.metadataKey,
+            widget.folder!.name,
+          );
+        } else {
+          await _service.resolve(widget.video!);
+        }
+        if (!mounted) return;
+        final meta = _service.metaFor(_identityKey);
         setState(() {
+          _meta = meta;
           _loading = false;
-          _loadingError = true;
-          _errorMessage = e is TmdException ? e.message : null;
         });
+      } catch (e) {
+        if (mounted) {
+          setState(() {
+            _loading = false;
+            _loadingError = true;
+            _errorMessage = e is TmdException ? e.message : null;
+          });
+        }
       }
     }
+    await _loadDetailsAndSeasons();
+  }
+
+  /// Folder mode: load the folder's direct entries so the file list renders.
+  Future<void> _loadFolderEntries() async {
+    try {
+      final entries =
+          await FileBrowserService.instance.listDirectory(widget.folder!.path);
+      if (!mounted) return;
+      setState(() {
+        _entries = entries;
+        _folderError = null;
+      });
+    } on PlatformException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _folderError = e.message ?? 'Could not list this folder';
+      });
+    }
+  }
+
+  /// Pulls the full details and the per-episode season data (TV shows only).
+  /// Season numbers to fetch come from the files actually present.
+  Future<void> _loadDetailsAndSeasons() async {
+    final meta = _service.metaFor(_identityKey);
+    if (meta == null) return;
+    final details = await _service.detailsFor(_identityKey);
+    if (mounted) setState(() => _details = details);
+    if (meta.movie.kind != TmdKind.tv) return;
+    for (final season in _seasonsNeeded()) {
+      await _service.seasonFor(_identityKey, season);
+      if (!mounted) return;
+    }
+    // Single episode (video mode, not a folder): enrich it with its own cast
+    // and still frames once the season list is loaded.
+    if (widget.folder == null &&
+        _parsed.isEpisode &&
+        _parsed.season > 0 &&
+        _parsed.episode > 0) {
+      await _service.episodeDetailsFor(
+        _identityKey,
+        _parsed.season,
+        _parsed.episode,
+      );
+      if (!mounted) return;
+    }
+  }
+
+  /// Which season numbers to fetch per-episode data for. Single episode → its
+  /// own season; folder mode → the seasons present in the local file list.
+  List<int> _seasonsNeeded() {
+    if (widget.folder != null) {
+      return _entries
+          .where((e) => !e.isDirectory)
+          .map((e) => ParsedFileName.parse(e.name))
+          .where((p) => p.isEpisode)
+          .map((p) => p.season)
+          .where((s) => s > 0)
+          .toSet()
+          .toList();
+    }
+    if (_parsed.isEpisode) return [_parsed.season].where((s) => s > 0).toList();
+    return const [];
+  }
+
+  /// The TMDB episode matching a local file, or null (movie / no season data).
+  TmdEpisode? _episodeFor(FileEntry entry) {
+    final parsed = ParsedFileName.parse(entry.name);
+    if (!parsed.isEpisode) return null;
+    return _meta?.seasons[parsed.season]?.episode(parsed.episode);
   }
 
   /// Mirrors the player's resume rules: ignore trivial positions and
@@ -103,9 +202,11 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
     if (position != null && position < const Duration(seconds: 10)) {
       position = null;
     }
+    final video = widget.video;
     if (position != null &&
-        widget.video.duration > Duration.zero &&
-        widget.video.duration - position < const Duration(seconds: 5)) {
+        video != null &&
+        video.duration > Duration.zero &&
+        video.duration - position < const Duration(seconds: 5)) {
       position = null;
     }
     if (mounted && position != _resumePosition) {
@@ -131,26 +232,79 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
     final picked = await showDialog<TmdMovie>(
       context: context,
       builder: (context) => _SearchDialog(
-        initialQuery: ParsedFileName.parse(widget.video.title).title,
+        initialQuery: ParsedFileName.parse(
+          widget.folder?.name ?? widget.video!.title,
+        ).title,
       ),
     );
     if (picked == null || !mounted) return;
-    await _service.setManual(widget.video, picked);
+    if (widget.folder != null) {
+      await _service.setManualFolder(widget.folder!.metadataKey, picked);
+    } else {
+      await _service.setManual(widget.video!, picked);
+    }
     if (!mounted) return;
     final meta = _service.metaFor(_identityKey);
     setState(() => _meta = meta);
-    final details = await _service.detailsFor(_identityKey);
-    if (mounted) setState(() => _details = details);
+    await _loadDetailsAndSeasons();
   }
 
   Future<void> _play() async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => PlayerScreen(video: widget.video),
+        builder: (_) => PlayerScreen(video: widget.video!),
       ),
     );
     // The playhead may have moved (or the video finished) — refresh the label.
     await _loadResume();
+  }
+
+  /// Folder mode: open an entry. Subfolders go into [FolderScreen] (deep
+  /// navigation); files open their own details screen, pre-pinned to the
+  /// folder's match so the show's metadata shows instantly.
+  Future<void> _openFolderEntry(FileEntry entry) async {
+    if (entry.isDirectory) {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) =>
+              FolderScreen(folder: widget.folder!, initialPath: entry.path),
+        ),
+      );
+      await _loadFolderEntries();
+      await _loadDetailsAndSeasons();
+      return;
+    }
+    final video = _toVideoItem(entry);
+    final meta = _service.metaFor(_identityKey);
+    if (meta != null) {
+      try {
+        // Carry the folder's full meta (movie + details + seasons) onto the
+        // episode's key so its details screen shows the episode's own
+        // name/overview/rating instantly — a bare `setManual` would drop the
+        // already-loaded season data and force a re-fetch on every tap.
+        await _service.carryMeta(_identityKey, TmdStore.identityKeyFor(video));
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => TmdDetailsScreen(video: video),
+      ),
+    );
+    await _loadResume();
+  }
+
+  VideoItem _toVideoItem(FileEntry entry) {
+    final isContentUri = entry.path.startsWith('content://');
+    return VideoItem(
+      id: 'folder_${widget.folder!.id}_${entry.path.hashCode}',
+      title: entry.name,
+      path: isContentUri ? null : entry.path,
+      uri: isContentUri ? entry.path : null,
+      resumeKey: entry.resumeKey,
+      duration: Duration.zero,
+      sizeBytes: entry.size,
+    );
   }
 
   @override
@@ -159,7 +313,7 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
     final meta = _meta;
     final title = (meta?.movie.title.isNotEmpty ?? false)
         ? meta!.movie.title
-        : widget.video.title;
+        : (widget.folder?.name ?? widget.video!.title);
     final resume = _resumePosition;
 
     return Scaffold(
@@ -167,25 +321,27 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _buildBody(theme, meta),
-      bottomNavigationBar: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-          // Always reachable: a metadata failure (or a slow lookup) must never
-          // block playing the video, whatever the metadata state.
-          child: FilledButton.icon(
-            onPressed: _play,
-            style: FilledButton.styleFrom(
-              minimumSize: const Size.fromHeight(52),
-            ),
-            icon: const Icon(Icons.play_arrow),
-            label: Text(
-              resume != null
-                  ? 'Resume from ${_formatClock(resume)}'
-                  : 'Play',
-            ),
-          ),
-        ),
-      ),
+      bottomNavigationBar: widget.folder == null
+          ? SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                // Always reachable: a metadata failure (or a slow lookup) must
+                // never block playing the video, whatever the metadata state.
+                child: FilledButton.icon(
+                  onPressed: _play,
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size.fromHeight(52),
+                  ),
+                  icon: const Icon(Icons.play_arrow),
+                  label: Text(
+                    resume != null
+                        ? 'Resume from ${_formatClock(resume)}'
+                        : 'Play',
+                  ),
+                ),
+              ),
+            )
+          : null,
     );
   }
 
@@ -195,34 +351,75 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
     return '$m:${s.toString().padLeft(2, '0')}';
   }
 
+  /// "2024-03-17" → "Mar 17, 2024"; falls back to the raw value.
+  static String _formatAirDate(String iso) {
+    final parts = iso.split('-');
+    if (parts.length != 3) return iso;
+    final year = int.tryParse(parts[0]);
+    final month = int.tryParse(parts[1]);
+    final day = int.tryParse(parts[2]);
+    if (year == null || month == null || day == null) return iso;
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    if (month < 1 || month > 12) return iso;
+    return '${months[month - 1]} $day, $year';
+  }
+
   Widget _buildBody(ThemeData theme, TmdMeta? meta) {
-    if (meta == null) return _buildNoMatch(theme);
+    if (meta == null) {
+      if (widget.folder != null) return _buildFolderWithoutMatch(theme);
+      return _buildNoMatch(theme);
+    }
     final movie = meta.movie;
     final details = _details;
     final colorScheme = theme.colorScheme;
+    final singleEpisode = _parsed.isEpisode && widget.folder == null
+        ? meta.seasons[_parsed.season]?.episode(_parsed.episode)
+        : null;
+    // For a single episode, the still frame takes over the header (when the
+    // show's season data is loaded) so the page reads as "this episode".
+    final headerImage = singleEpisode?.stillUrl() ?? movie.backdropUrl();
+    final episodeAirDate = singleEpisode?.airDate;
+    final episodeOverview =
+        (singleEpisode?.overview.isNotEmpty ?? false) ? singleEpisode!.overview : null;
+
+    // Horizontal scrollable images for the single-episode page: the episode's
+    // own still frames when the per-episode fetch landed, otherwise fall back
+    // to the header still then the show backdrop so the strip is never empty.
+    final episodeImages = singleEpisode == null
+        ? const <String>[]
+        : singleEpisode.stills.isNotEmpty
+            ? singleEpisode.stillUrls()
+            : <String>[
+                if (singleEpisode.stillUrl() != null) singleEpisode.stillUrl()!,
+                if (singleEpisode.stillUrl() == null && movie.backdropUrl() != null)
+                  movie.backdropUrl()!,
+              ];
 
     return CustomScrollView(
       slivers: [
         SliverToBoxAdapter(
           child: Stack(
             children: [
-              AspectRatio(
-                aspectRatio: 16 / 9,
-                child: movie.backdropUrl() != null
-                    ? Image.network(
-                        movie.backdropUrl()!,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, _, _) =>
-                            _artworkFallback(colorScheme),
-                        loadingBuilder: (context, child, progress) =>
-                            progress == null ? child : _artworkFallback(colorScheme),
-                      )
-                    : _artworkFallback(colorScheme),
+              SizedBox(
+                height: MediaQuery.sizeOf(context).width * 9 / 16,
+                child: _HeaderImageGallery(
+                  images: episodeImages.isNotEmpty
+                      ? episodeImages
+                      : [?headerImage],
+                  fallback: _artworkFallback(colorScheme),
+                ),
               ),
               Positioned(
                 bottom: 8,
                 right: 12,
-                child: _RatingBadge(rating: movie.voteAverage),
+                child: _RatingBadge(
+                  rating: singleEpisode != null && singleEpisode.voteAverage > 0
+                      ? singleEpisode.voteAverage
+                      : movie.voteAverage,
+                ),
               ),
             ],
           ),
@@ -262,6 +459,13 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
                                 fontWeight: FontWeight.w600,
                               ),
                             ),
+                          if (singleEpisode != null)
+                            Text(
+                              singleEpisode.nameLabel,
+                              style: theme.textTheme.titleSmall?.copyWith(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
                           if (movie.year != null)
                             Text(
                               '${movie.year}',
@@ -279,7 +483,24 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
                                   icon: Icons.tag,
                                   label: _parsed.episodeLabel,
                                 ),
-                              if (details?.runtimeMinutes != null)
+                              if (singleEpisode?.runtimeMinutes != null)
+                                _FactChip(
+                                  icon: Icons.schedule,
+                                  label:
+                                      '${singleEpisode!.runtimeMinutes} min',
+                                ),
+                              if (episodeAirDate != null)
+                                _FactChip(
+                                  icon: Icons.calendar_today,
+                                  label: _formatAirDate(episodeAirDate),
+                                ),
+                              // The show's average runtime only outside the
+                              // single-episode page and the parent folder
+                              // page, where the episode's own runtime chip
+                              // would otherwise duplicate it.
+                              if (widget.folder == null &&
+                                  singleEpisode == null &&
+                                  details?.runtimeMinutes != null)
                                 _FactChip(
                                   icon: Icons.schedule,
                                   label:
@@ -305,63 +526,228 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
                 ),
                 const SizedBox(height: 20),
                 Text(
-                  'Overview',
+                  singleEpisode != null ? 'Episode overview' : 'Overview',
                   style: theme.textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w600,
                   ),
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  details?.overview ?? movie.overview,
+                  episodeOverview ?? (details?.overview ?? movie.overview),
                   style: theme.textTheme.bodyMedium?.copyWith(height: 1.5),
                 ),
-                const SizedBox(height: 20),
-                Wrap(
-                  alignment: WrapAlignment.spaceBetween,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  spacing: 8,
-                  runSpacing: 0,
-                  children: [
+                if (singleEpisode != null) ...[
+                  const SizedBox(height: 20),
+                  Wrap(
+                    alignment: WrapAlignment.spaceBetween,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 8,
+                    runSpacing: 0,
+                    children: [
+                      Text(
+                        'Episode cast',
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      Wrap(
+                        spacing: 0,
+                        children: [
+                          TextButton(
+                            onPressed: _removeInfo,
+                            style: TextButton.styleFrom(
+                              foregroundColor: theme.colorScheme.error,
+                            ),
+                            child: const Text('Remove info'),
+                          ),
+                          TextButton(
+                            onPressed: _fixMatch,
+                            child: const Text('Fix match'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  if (singleEpisode.cast.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      height: 96,
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: singleEpisode.cast.length,
+                        separatorBuilder: (_, _) => const SizedBox(width: 12),
+                        itemBuilder: (context, index) =>
+                            _CastTile(member: singleEpisode.cast[index]),
+                      ),
+                    ),
+                  ],
+                  if (singleEpisode.guestStars.isNotEmpty) ...[
+                    const SizedBox(height: 20),
                     Text(
-                      'Cast',
+                      'Guest stars',
                       style: theme.textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.w600,
                       ),
                     ),
-                    Wrap(
-                      spacing: 0,
-                      children: [
-                        TextButton(
-                          onPressed: _removeInfo,
-                          style: TextButton.styleFrom(
-                            foregroundColor: theme.colorScheme.error,
-                          ),
-                          child: const Text('Remove info'),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      height: 96,
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: singleEpisode.guestStars.length,
+                        separatorBuilder: (_, _) => const SizedBox(width: 12),
+                        itemBuilder: (context, index) => _CastTile(
+                          member: singleEpisode.guestStars[index],
                         ),
-                        TextButton(
-                          onPressed: _fixMatch,
-                          child: const Text('Fix match'),
-                        ),
-                      ],
+                      ),
                     ),
                   ],
-                ),
-                if (details != null && details.cast.isNotEmpty)
-                  SizedBox(
-                    height: 96,
-                    child: ListView.separated(
-                      scrollDirection: Axis.horizontal,
-                      itemCount: details.cast.length,
-                      separatorBuilder: (_, _) => const SizedBox(width: 12),
-                      itemBuilder: (context, index) =>
-                          _CastTile(member: details.cast[index]),
-                    ),
+                ] else ...[
+                  const SizedBox(height: 20),
+                  Wrap(
+                    alignment: WrapAlignment.spaceBetween,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 8,
+                    runSpacing: 0,
+                    children: [
+                      Text(
+                        'Cast',
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      Wrap(
+                        spacing: 0,
+                        children: [
+                          TextButton(
+                            onPressed: _removeInfo,
+                            style: TextButton.styleFrom(
+                              foregroundColor: theme.colorScheme.error,
+                            ),
+                            child: const Text('Remove info'),
+                          ),
+                          TextButton(
+                            onPressed: _fixMatch,
+                            child: const Text('Fix match'),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
+                  if (details != null && details.cast.isNotEmpty)
+                    SizedBox(
+                      height: 96,
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: details.cast.length,
+                        separatorBuilder: (_, _) => const SizedBox(width: 12),
+                        itemBuilder: (context, index) =>
+                            _CastTile(member: details.cast[index]),
+                      ),
+                    ),
+                ],
                 const SizedBox(height: 12),
               ],
             ),
           ),
         ),
+        if (widget.folder != null) ..._entriesSlivers(theme),
+      ],
+    );
+  }
+
+  /// The folder's file list as slivers (episode files labelled with their TMDB
+  /// episode name when the season data is loaded).
+  List<Widget> _entriesSlivers(ThemeData theme) {
+    final colorScheme = theme.colorScheme;
+    return [
+      SliverPadding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+        sliver: SliverToBoxAdapter(
+          child: Row(
+            children: [
+              Text(
+                'Episodes',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const Spacer(),
+              if (_entries.isNotEmpty)
+                Text(
+                  _fileCountLabel(),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+      if (_entries.isEmpty)
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              _folderError ?? 'No videos or folders here',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: colorScheme.error,
+              ),
+            ),
+          ),
+        )
+      else
+        SliverList(
+          delegate: SliverChildBuilderDelegate(
+            (context, index) {
+              final entry = _entries[index];
+              return _FolderEntryTile(
+                entry: entry,
+                episode: _episodeFor(entry),
+                onTap: () => _openFolderEntry(entry),
+              );
+            },
+            childCount: _entries.length,
+          ),
+        ),
+      const SliverToBoxAdapter(child: SizedBox(height: 24)),
+    ];
+  }
+
+  String _fileCountLabel() {
+    final files = _entries.where((e) => !e.isDirectory).length;
+    return files == 1 ? '1 file' : '$files files';
+  }
+
+  /// Folder mode without a TMDB match: still show the files so playback is
+  /// never blocked, with a "Find on TMDB" escape hatch.
+  Widget _buildFolderWithoutMatch(ThemeData theme) {
+    return CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 8, 4),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '"${widget.folder!.name}"',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                TextButton(
+                  onPressed: _fixMatch,
+                  child: const Text('Find on TMDB'),
+                ),
+              ],
+            ),
+          ),
+        ),
+        ..._entriesSlivers(theme),
       ],
     );
   }
@@ -381,7 +767,7 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
             ),
             const SizedBox(height: 16),
             Text(
-              'Could not find "${widget.video.title}" on TMDB',
+              'Could not find "${widget.folder?.name ?? widget.video!.title}" on TMDB',
               textAlign: TextAlign.center,
               style: theme.textTheme.titleMedium,
             ),
@@ -569,6 +955,156 @@ class _CastTile extends StatelessWidget {
   }
 }
 
+/// The top header artwork: a horizontal swipeable gallery of the episode's
+/// TMDB still frames (a dot indicator shows the current frame). Falls back to
+/// a single static frame when the page isn't an episode gallery.
+class _HeaderImageGallery extends StatefulWidget {
+  const _HeaderImageGallery({
+    required this.images,
+    required this.fallback,
+  });
+
+  final List<String> images;
+  final Widget fallback;
+
+  @override
+  State<_HeaderImageGallery> createState() => _HeaderImageGalleryState();
+}
+
+class _HeaderImageGalleryState extends State<_HeaderImageGallery> {
+  int _page = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final images = widget.images;
+    final width = MediaQuery.sizeOf(context).width;
+    return Stack(
+      children: [
+        SizedBox(
+          height: width * 9 / 16,
+          child: images.isNotEmpty
+              ? PageView.builder(
+                  itemCount: images.length,
+                  onPageChanged: (i) => setState(() => _page = i),
+                  itemBuilder: (context, index) => _HeaderArtwork(
+                    url: images[index],
+                    fallback: widget.fallback,
+                  ),
+                )
+              : _HeaderArtwork(
+                  url: null,
+                  fallback: widget.fallback,
+                ),
+        ),
+        if (images.length > 1)
+          Positioned(
+            bottom: 10,
+            left: 0,
+            right: 0,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                for (var i = 0; i < images.length; i++) ...[
+                  if (i > 0) const SizedBox(width: 6),
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    width: i == _page ? 18 : 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: i == _page
+                          ? Colors.white
+                          : Colors.white.withValues(alpha: 0.5),
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// A full-bleed header frame for the details screen: one page of the episode
+/// still gallery, or the single static artwork on non-episode pages.
+class _HeaderArtwork extends StatelessWidget {
+  const _HeaderArtwork({required this.url, required this.fallback});
+
+  final String? url;
+  final Widget fallback;
+
+  @override
+  Widget build(BuildContext context) {
+    final url = this.url;
+    if (url == null) return fallback;
+    return Image.network(
+      url,
+      fit: BoxFit.cover,
+      errorBuilder: (_, _, _) => fallback,
+      loadingBuilder: (context, child, progress) =>
+          progress == null ? child : fallback,
+    );
+  }
+}
+
+/// A folder file/subfolder tile for the details screen's episode list.
+class _FolderEntryTile extends StatelessWidget {
+  const _FolderEntryTile({
+    required this.entry,
+    required this.episode,
+    required this.onTap,
+  });
+
+  final FileEntry entry;
+  final TmdEpisode? episode;
+  final VoidCallback onTap;
+
+  static String _sizeLabel(int bytes) {
+    if (bytes <= 0) return '';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    var value = bytes.toDouble();
+    var unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+      value /= 1024;
+      unit++;
+    }
+    return '${value.toStringAsFixed(value >= 100 ? 0 : 1)} ${units[unit]}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    if (entry.isDirectory) {
+      return ListTile(
+        leading: Icon(Icons.folder, color: colorScheme.primary),
+        title: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: onTap,
+      );
+    }
+
+    final parsed = ParsedFileName.parse(entry.name);
+    final subtitle = <String>[
+      if (parsed.isEpisode) parsed.episodeLabel,
+      if (episode != null) episode!.nameLabel,
+      _sizeLabel(entry.size),
+    ].where((s) => s.isNotEmpty).join(' · ');
+
+    return ListTile(
+      leading: Icon(
+        parsed.isEpisode ? Icons.movie_outlined : Icons.play_circle_outline,
+        color: colorScheme.secondary,
+      ),
+      title: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: subtitle.isEmpty
+          ? null
+          : Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+      onTap: onTap,
+    );
+  }
+}
+
 /// Manual search dialog for picking the right TMDB entry.
 class _SearchDialog extends StatefulWidget {
   const _SearchDialog({this.initialQuery});
@@ -620,7 +1156,14 @@ class _SearchDialogState extends State<_SearchDialog> {
       _noKey = false;
     });
     try {
-      final results = await _api.search(query);
+      // Search TV and movies together so a folder can be pinned to a series.
+      final all = await Future.wait([
+        _api.search(query, kind: TmdKind.tv),
+        _api.search(query, kind: TmdKind.movie),
+      ]);
+      final results = <TmdMovie>[...all[0], ...all[1]];
+      final seen = <int>{};
+      results.removeWhere((m) => !seen.add(m.id));
       if (!mounted) return;
       setState(() => _results = results);
     } catch (e) {
@@ -702,6 +1245,7 @@ class _SearchDialogState extends State<_SearchDialog> {
                         title: Text(movie.title),
                         subtitle: Text(
                           [
+                            if (movie.kind == TmdKind.tv) 'TV Series',
                             if (movie.year != null) '${movie.year}',
                             if (movie.voteAverage > 0)
                               movie.voteAverage.toStringAsFixed(1),

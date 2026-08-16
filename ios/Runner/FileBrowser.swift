@@ -21,6 +21,11 @@ final class FileBrowser: NSObject {
 
     private static let bookmarksKey = "dreamplayer.folderBookmarks"
 
+    /// Library-folder bookmarks ("Add folder to library") live in their own
+    /// UserDefaults key so a library folder never shows up as a file-browser
+    /// root — Internal storage stays for browsing individual files only.
+    private static let libraryBookmarksKey = "dreamplayer.libraryFolderBookmarks"
+
     /// Synthetic path of the virtual "Files" root. Tapping it opens the system
     /// document picker (the real Files-app home), so it is never listed — Dart
     /// routes it to `openFilesHome` via the `isFilesHome` flag.
@@ -46,7 +51,7 @@ final class FileBrowser: NSObject {
 
     /// What the currently presented system picker returns.
     private enum PickerMode {
-        case folder, file
+        case folder, libraryFolder, file
     }
 
     static func register(with messenger: FlutterBinaryMessenger) {
@@ -75,6 +80,8 @@ final class FileBrowser: NSObject {
             listDirectory(path, result: result)
         case "pickFolder":
             presentFolderPicker(result)
+        case "pickLibraryFolder":
+            presentLibraryFolderPicker(result)
         case "openFilesHome":
             presentFilePicker(result)
         case "resolveImportedPath":
@@ -87,6 +94,12 @@ final class FileBrowser: NSObject {
             let bookmarkId = (call.arguments as? [String: Any])?["bookmarkId"] as? String
             if let bookmarkId {
                 removeBookmark(bookmarkId)
+            }
+            result(nil)
+        case "removeLibraryBookmark":
+            let bookmarkId = (call.arguments as? [String: Any])?["bookmarkId"] as? String
+            if let bookmarkId {
+                removeLibraryBookmark(bookmarkId)
             }
             result(nil)
         default:
@@ -214,6 +227,14 @@ final class FileBrowser: NSObject {
         UserDefaults.standard.set(bookmarks, forKey: Self.bookmarksKey)
     }
 
+    private func loadLibraryBookmarks() -> [String: Data] {
+        UserDefaults.standard.dictionary(forKey: Self.libraryBookmarksKey) as? [String: Data] ?? [:]
+    }
+
+    private func saveLibraryBookmarks(_ bookmarks: [String: Data]) {
+        UserDefaults.standard.set(bookmarks, forKey: Self.libraryBookmarksKey)
+    }
+
     private func resolvedBookmarkEntries() -> [[String: Any]] {
         resolveAllBookmarks()
         var entries: [[String: Any]] = []
@@ -225,11 +246,14 @@ final class FileBrowser: NSObject {
         return entries
     }
 
-    /// Resolves every stored bookmark and starts its security scope so its
-    /// paths are readable this session.
+    /// Resolves every stored bookmark (file-browser AND library) and starts its
+    /// security scope so its paths are readable this session. Library folders
+    /// must be resolvable here so the folder screen can list them, but they are
+    /// never surfaced as file-browser roots (see `storageRoots`).
     private func resolveAllBookmarks() {
         var roots: [String: URL] = [:]
-        for (id, data) in loadBookmarks() {
+        let all = loadBookmarks().merging(loadLibraryBookmarks()) { first, _ in first }
+        for (id, data) in all {
             guard let url = resolve(data) else { continue }
             roots[id] = url
             startAccess(url)
@@ -256,6 +280,17 @@ final class FileBrowser: NSObject {
         var bookmarks = loadBookmarks()
         guard let data = bookmarks.removeValue(forKey: bookmarkId) else { return }
         saveBookmarks(bookmarks)
+        stopAccess(data)
+    }
+
+    private func removeLibraryBookmark(_ bookmarkId: String) {
+        var bookmarks = loadLibraryBookmarks()
+        guard let data = bookmarks.removeValue(forKey: bookmarkId) else { return }
+        saveLibraryBookmarks(bookmarks)
+        stopAccess(data)
+    }
+
+    private func stopAccess(_ data: Data) {
         if let url = resolve(data),
            let index = activeSecurityScopedURLs.firstIndex(of: url) {
             url.stopAccessingSecurityScopedResource()
@@ -267,6 +302,10 @@ final class FileBrowser: NSObject {
 
     private func presentFolderPicker(_ result: @escaping FlutterResult) {
         presentPicker(result, mode: .folder, contentTypes: [.folder])
+    }
+
+    private func presentLibraryFolderPicker(_ result: @escaping FlutterResult) {
+        presentPicker(result, mode: .libraryFolder, contentTypes: [.folder])
     }
 
     /// Presents the system document picker (the Files-app home: iCloud Drive,
@@ -396,6 +435,14 @@ extension FileBrowser: UIDocumentPickerDelegate {
                 var bookmarks = loadBookmarks()
                 bookmarks[bookmarkId] = data
                 saveBookmarks(bookmarks)
+            }
+            completion(Self.entryMap(url, isDirectory: true, bookmarkId: bookmarkId))
+        case .libraryFolder:
+            let bookmarkId = UUID().uuidString
+            if let data = try? url.bookmarkData(options: .minimalBookmark) {
+                var bookmarks = loadLibraryBookmarks()
+                bookmarks[bookmarkId] = data
+                saveLibraryBookmarks(bookmarks)
             }
             completion(Self.entryMap(url, isDirectory: true, bookmarkId: bookmarkId))
         case .file:

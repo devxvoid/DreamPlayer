@@ -27,6 +27,7 @@ class FileBrowser(private val activity: MainActivity) {
 
         private const val PREFS = "dreamplayer.folderBookmarks"
         private const val BOOKMARK_PREFIX = "bm."
+        private const val LIB_BOOKMARK_PREFIX = "libfolder."
         private const val TREE_PREFIX = "tree:"
 
         private val VIDEO_EXTENSIONS = setOf(
@@ -36,6 +37,11 @@ class FileBrowser(private val activity: MainActivity) {
     }
 
     private var pendingFolderResult: MethodChannel.Result? = null
+
+    /// True while the open picker is a library pick ("Add folder to library"),
+    /// so the picked tree is stored under the library bookmark prefix and never
+    /// appears as a file-browser root.
+    private var pendingFolderIsLibrary = false
 
     fun configure(channel: MethodChannel) {
         channel.setMethodCallHandler { call, result ->
@@ -55,11 +61,17 @@ class FileBrowser(private val activity: MainActivity) {
                     }
                 }
                 "pickFolder" -> pickFolder(result)
+                "pickLibraryFolder" -> pickLibraryFolder(result)
                 "resolveImportedPath" -> result.success(true)
                 "resolvePath" -> result.success(true)
                 "removeBookmark" -> {
                     val id = call.argument<String>("bookmarkId")
                     if (id != null) removeBookmark(id)
+                    result.success(null)
+                }
+                "removeLibraryBookmark" -> {
+                    val id = call.argument<String>("bookmarkId")
+                    if (id != null) removeLibraryBookmark(id)
                     result.success(null)
                 }
                 else -> result.notImplemented()
@@ -205,6 +217,8 @@ class FileBrowser(private val activity: MainActivity) {
 
     private fun keyFor(id: String) = BOOKMARK_PREFIX + id
 
+    private fun keyForLib(id: String) = LIB_BOOKMARK_PREFIX + id
+
     private fun treePath(id: String) = TREE_PREFIX + id
 
     private fun parseTreePath(path: String): Pair<String, String> {
@@ -213,8 +227,13 @@ class FileBrowser(private val activity: MainActivity) {
         return if (slash < 0) rest to "" else rest.substring(0, slash) to rest.substring(slash + 1)
     }
 
+    /// Resolves a tree URI from either bookmark store (file-browser or library),
+    /// so `listDirectory` can open both a file-browser root and a library folder.
     private fun treeUriFor(id: String): Uri? {
-        val stored = bookmarks().getString(keyFor(id), null) ?: return null
+        val prefs = bookmarks()
+        val stored = prefs.getString(keyFor(id), null)
+            ?: prefs.getString(keyForLib(id), null)
+            ?: return null
         return try {
             Uri.parse(stored)
         } catch (_: Exception) {
@@ -269,6 +288,21 @@ class FileBrowser(private val activity: MainActivity) {
         }
     }
 
+    private fun removeLibraryBookmark(id: String) {
+        val prefs = bookmarks()
+        val stored = prefs.getString(keyForLib(id), null)
+        prefs.edit().remove(keyForLib(id)).apply()
+        if (stored != null) {
+            try {
+                activity.contentResolver.releasePersistableUriPermission(
+                    Uri.parse(stored),
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            } catch (_: Exception) {
+            }
+        }
+    }
+
     // MARK: - Folder picker
 
     /// Launches the system folder picker (ACTION_OPEN_DOCUMENT_TREE). The result
@@ -279,6 +313,22 @@ class FileBrowser(private val activity: MainActivity) {
             result.error("busy", "A folder picker is already open", null)
             return
         }
+        pendingFolderIsLibrary = false
+        startFolderPicker(result)
+    }
+
+    /// Same picker, but the picked tree is stored as a LIBRARY bookmark — it
+    /// never shows up as a file-browser root.
+    private fun pickLibraryFolder(result: MethodChannel.Result) {
+        if (pendingFolderResult != null) {
+            result.error("busy", "A folder picker is already open", null)
+            return
+        }
+        pendingFolderIsLibrary = true
+        startFolderPicker(result)
+    }
+
+    private fun startFolderPicker(result: MethodChannel.Result) {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
@@ -308,7 +358,11 @@ class FileBrowser(private val activity: MainActivity) {
         } catch (_: Exception) {
         }
         val id = UUID.randomUUID().toString()
-        bookmarks().edit().putString(keyFor(id), treeUri.toString()).apply()
+        if (pendingFolderIsLibrary) {
+            bookmarks().edit().putString(keyForLib(id), treeUri.toString()).apply()
+        } else {
+            bookmarks().edit().putString(keyFor(id), treeUri.toString()).apply()
+        }
         val doc = DocumentFile.fromTreeUri(activity, treeUri)
         result.success(
             mapOf(

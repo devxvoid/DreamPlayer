@@ -91,6 +91,16 @@ class FileBrowserService {
     return FileEntry.fromMap(result);
   }
 
+  /// Same folder picker, but the picked folder is stored as a LIBRARY bookmark
+  /// only — it never appears as a file-browser root. Used by "Add folder to
+  /// library".
+  Future<FileEntry?> pickLibraryFolder() async {
+    final result =
+        await _channel.invokeMapMethod<dynamic, dynamic>('pickLibraryFolder');
+    if (result == null) return null;
+    return FileEntry.fromMap(result);
+  }
+
   /// iOS only: presents the system document picker — the Files-app home
   /// (iCloud Drive, On My iPad, Downloads, providers). Returns the picked
   /// video, imported (bookmarked) for future sessions, or null if cancelled.
@@ -122,6 +132,14 @@ class FileBrowserService {
   /// Forgets a bookmarked folder.
   Future<void> removeBookmark(String bookmarkId) async {
     await _channel.invokeMethod<void>('removeBookmark', {
+      'bookmarkId': bookmarkId,
+    });
+  }
+
+  /// Forgets a library-folder bookmark (when a folder is removed from the
+  /// library, so its native grant doesn't linger).
+  Future<void> removeLibraryBookmark(String bookmarkId) async {
+    await _channel.invokeMethod<void>('removeLibraryBookmark', {
       'bookmarkId': bookmarkId,
     });
   }

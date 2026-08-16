@@ -166,4 +166,205 @@ void main() {
       expect(roundTripped.details!.runtimeMinutes, 166);
     });
   });
+
+  group('TmdSeason / TmdEpisode', () {
+    test('round-trips episodes through JSON', () {
+      const season = TmdSeason(
+        seasonNumber: 2,
+        name: 'Season 2',
+        episodes: [
+          TmdEpisode(
+            episodeNumber: 4,
+            name: 'Humble',
+            overview: 'House faces a difficult choice.',
+            runtimeMinutes: 44,
+            voteAverage: 8.0,
+          ),
+          TmdEpisode(episodeNumber: 5, name: 'Follow the Ashes'),
+        ],
+      );
+      final restored = TmdSeason.fromJson(
+        jsonDecode(jsonEncode(season.toJson())) as Map<String, dynamic>,
+      );
+      expect(restored.seasonNumber, 2);
+      expect(restored.name, 'Season 2');
+      expect(restored.episodes, hasLength(2));
+      expect(restored.episode(4)!.name, 'Humble');
+      expect(restored.episode(4)!.overview, 'House faces a difficult choice.');
+      expect(restored.episode(4)!.runtimeMinutes, 44);
+      expect(restored.episode(4)!.voteAverage, 8.0);
+      expect(restored.episode(5)!.nameLabel, 'Follow the Ashes');
+      expect(restored.episode(99), isNull);
+    });
+
+    test('episode name falls back to "Episode N" when unnamed', () {
+      const episode = TmdEpisode(episodeNumber: 3);
+      expect(episode.nameLabel, 'Episode 3');
+    });
+
+    test('TmdMeta stores seasons by number and round-trips them', () {
+      final meta = TmdMeta(
+        movie: const TmdMovie(id: 456, title: 'House', kind: TmdKind.tv),
+        details: const TmdDetails(
+          title: 'House',
+          numberOfSeasons: 8,
+          numberOfEpisodes: 177,
+        ),
+        seasons: {
+          2: const TmdSeason(
+            seasonNumber: 2,
+            episodes: [TmdEpisode(episodeNumber: 4, name: 'Humble')],
+          ),
+        },
+      );
+      final restored = TmdMeta.fromJson(
+        jsonDecode(jsonEncode(meta.toJson())) as Map<String, dynamic>,
+      );
+      expect(restored.movie.kind, TmdKind.tv);
+      expect(restored.details!.numberOfSeasons, 8);
+      expect(restored.details!.numberOfEpisodes, 177);
+      expect(restored.seasons[2], isNotNull);
+      expect(restored.seasons[2]!.episode(4)!.name, 'Humble');
+    });
+
+    test('withSeason adds a season without dropping details', () {
+      final meta = TmdMeta(
+        movie: const TmdMovie(id: 1, title: 'X', kind: TmdKind.tv),
+        details: const TmdDetails(title: 'X'),
+      );
+      final updated = meta.withSeason(
+        const TmdSeason(
+          seasonNumber: 1,
+          episodes: [TmdEpisode(episodeNumber: 1, name: 'Pilot')],
+        ),
+      );
+      expect(updated.details, isNotNull);
+      expect(updated.seasons[1]!.episode(1)!.name, 'Pilot');
+      expect(meta.seasons, isEmpty);
+    });
+
+    test('episode round-trips cast, guest stars, and stills through JSON', () {
+      const episode = TmdEpisode(
+        episodeNumber: 4,
+        name: 'Humble',
+        cast: [
+          TmdCastMember(name: 'Hugh Laurie', character: 'Dr. House'),
+          TmdCastMember(name: 'Lisa Edelstein', character: 'Cuddy'),
+        ],
+        guestStars: [
+          TmdCastMember(name: 'David Morse', character: 'Michael Tritter'),
+        ],
+        stills: ['/stills/e4-1.jpg', '/stills/e4-2.jpg'],
+      );
+      final restored = TmdEpisode.fromJson(
+        jsonDecode(jsonEncode(episode.toJson())) as Map<String, dynamic>,
+      );
+      expect(restored.cast, hasLength(2));
+      expect(restored.cast[0].name, 'Hugh Laurie');
+      expect(restored.cast[0].character, 'Dr. House');
+      expect(restored.cast[1].profilePath, isNull);
+      expect(restored.guestStars, hasLength(1));
+      expect(restored.guestStars[0].name, 'David Morse');
+      expect(restored.guestStars[0].character, 'Michael Tritter');
+      expect(restored.stills, hasLength(2));
+      expect(
+        restored.stillUrls(),
+        ['https://image.tmdb.org/t/p/w500/stills/e4-1.jpg', 'https://image.tmdb.org/t/p/w500/stills/e4-2.jpg'],
+      );
+    });
+
+    test('episode fromJson reads API credits/images keys too', () {
+      final apiJson = <String, dynamic>{
+        'episode_number': 4,
+        'name': 'Humble',
+        'credits': {
+          'cast': [
+            {'name': 'Hugh Laurie', 'character': 'Dr. House', 'profile_path': '/hl.jpg'},
+          ],
+          'guest_stars': [
+            {'name': 'David Morse', 'character': 'Michael Tritter', 'profile_path': '/dm.jpg'},
+          ],
+        },
+        'images': {
+          'stills': [
+            {'file_path': '/stills/e4-1.jpg'},
+          ],
+        },
+      };
+      final parsed = TmdEpisode.fromJson(apiJson);
+      expect(parsed.episodeNumber, 4);
+      expect(parsed.cast.single.name, 'Hugh Laurie');
+      expect(parsed.cast.single.character, 'Dr. House');
+      expect(parsed.cast.single.profileUrl(width: 185), 'https://image.tmdb.org/t/p/w185/hl.jpg');
+      expect(parsed.guestStars.single.name, 'David Morse');
+      expect(parsed.guestStars.single.character, 'Michael Tritter');
+      expect(parsed.guestStars.single.profileUrl(width: 185), 'https://image.tmdb.org/t/p/w185/dm.jpg');
+      expect(parsed.stills, ['/stills/e4-1.jpg']);
+    });
+
+    test('withEpisode swaps an episode without dropping siblings', () {
+      const season = TmdSeason(
+        seasonNumber: 1,
+        episodes: [
+          TmdEpisode(episodeNumber: 1, name: 'Pilot'),
+          TmdEpisode(episodeNumber: 2, name: 'Second'),
+        ],
+      );
+      final updated = season.withEpisode(
+        const TmdEpisode(
+          episodeNumber: 2,
+          name: 'Second',
+          cast: [TmdCastMember(name: 'Someone')],
+        ),
+      );
+      expect(updated.episode(1)!.name, 'Pilot');
+      expect(updated.episode(2)!.cast, hasLength(1));
+      expect(season.episode(2)!.cast, isEmpty);
+    });
+  });
+
+  group('TmdService carryMeta', () {
+    test('carries movie + details + seasons onto the episode key', () async {
+      SharedPreferences.setMockInitialValues({});
+      final service = TmdService.instance;
+      await service.ensureLoaded();
+      const movie = TmdMovie(id: 456, title: 'House', kind: TmdKind.tv);
+      final folderMeta = TmdMeta(
+        movie: movie,
+        details: const TmdDetails(
+          title: 'House',
+          numberOfSeasons: 8,
+          numberOfEpisodes: 177,
+        ),
+        seasons: {
+          2: const TmdSeason(
+            seasonNumber: 2,
+            episodes: [TmdEpisode(episodeNumber: 4, name: 'Humble')],
+          ),
+        },
+      );
+      // Simulate the folder having been resolved + seasons loaded into prefs,
+      // as the folder details screen does before an episode is tapped.
+      await TmdStore.save('folder:1', folderMeta);
+
+      await service.carryMeta('folder:1', '/videos/house-s02e04.mkv');
+
+      final carried = service.metaFor('/videos/house-s02e04.mkv');
+      expect(carried, isNotNull);
+      expect(carried!.movie.kind, TmdKind.tv);
+      expect(carried.details!.numberOfSeasons, 8);
+      expect(carried.seasons[2]!.episode(4)!.name, 'Humble');
+      // The source key is left untouched.
+      expect(service.metaFor('folder:1'), isNotNull);
+    });
+
+    test('carry is a no-op for empty or equal keys', () async {
+      SharedPreferences.setMockInitialValues({});
+      final service = TmdService.instance;
+      await service.ensureLoaded();
+      await service.carryMeta('', '/videos/x.mkv');
+      await service.carryMeta('/videos/x.mkv', '/videos/x.mkv');
+      expect(service.metaFor('/videos/x.mkv'), isNull);
+    });
+  });
 }

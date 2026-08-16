@@ -135,7 +135,7 @@ lib/
     support_links.dart          # donation links (Razorpay, GitHub Sponsors)
     smb_client.dart             # SMB channel wrapper (ipad in-app shares; hidden from the UI)
   screens/
-    home_screen.dart            # Continue watching grid + **+** source menu (Jellyfin / WebDAV / storage / folder)
+    home_screen.dart            # Continue watching grid + **+** source menu (Jellyfin / WebDAV / storage / add folder)
     player_screen.dart          # ExoPlayer/AetherEngine playback + live chips + controls + subtitle/audio/aspect pickers
     tmd_details_screen.dart     # TMDB details: poster/backdrop, rating, genres, cast + Resume/Play + Fix match
     jellyfin_screen.dart        # Jellyfin/Emby server list + discovery + sign-in → libraries → folders → play
@@ -187,7 +187,7 @@ test/
 - [x] Aspect ratio / fit-mode picker (Fit / Crop / Stretch / 16:9 / 4:3, persists per video)
 - [x] Continue watching with source badges (WebDAV / CX SMB / Files/SMB / Files / Network / Jellyfin)
 - [~] In-app SMB/LAN playback on iPad (AMSMB2 browse + stream) — **hidden 2026-08**: switching audio tracks on an SMB stream could crash the app; NAS files reach the app via CX/Files "Open with" instead. Code stays in the tree as a rebuild blueprint.
-- [ ] MediaStore scanning for the library
+- [x] User-added folder library (add a TV-show/movie folder → TMDB poster + episode list; nothing is auto-scanned)
 - [x] GitHub Releases (Android APKs for all ABIs + universal; unsigned iOS IPA)
 - [ ] Play Store / TestFlight distribution (paid Apple Developer account)
 
