@@ -233,6 +233,7 @@ A video player app supporting:
   the video's folder auto-attaches (SRT, SSA/ASS, WebVTT, TTML, SAMI, MicroDVD,
   MPL2, SubViewer via custom parsers), the best match auto-selects, and the CC
   button opens a full track picker over embedded + sideloaded tracks.
+- **Static HDR10 detection for MKV files without Colour element (2026-08)**: some HEVC MKVs omit the MKV `Colour` element — the PQ/BT.2020 mastering metadata lives only in the HEVC SEI (payload types 137 Mastering Display Colour Volume, 144 Content Light Level). `ExoPlayerView.kt` now probes the first ~10 MB of video samples on a background thread with `MediaExtractor`, scanning Annex-B / AVCC NALs for these SEI payloads. When found, `hdr10Content=true` is set and `stateMap` emits `desired=5.0` + `colorTransfer=6`, engaging the HDR headroom / window color mode path for true HDR10 passthrough even without container-level signalling. Verified on-device: a test MKV with no Colour element but with SEI 137/144 now shows the HDR10 chip and triggers the EDR ramp.
 - **New direction**: playback on Android via **ExoPlayer/Media3** in a Flutter
   **PlatformView + MethodChannel** (HDR/DV-capable native surface), modeled on
   **Nova Video Player** architecture. Keep the Flutter UI/shell, the rendering/

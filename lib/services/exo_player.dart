@@ -170,6 +170,7 @@ class ExoPlayerEvent {
     this.videoHeight = 0,
     this.colorTransfer,
     this.isHdr10Plus = false,
+    this.isHdr10 = false,
     this.audioCodecs,
     this.audioMime,
     this.audioChannels = 0,
@@ -201,6 +202,14 @@ class ExoPlayerEvent {
   /// the video bitstream. Media3's format info can't tell HDR10+ from HDR10
   /// (both are PQ transfer), so this is a separate bitstream probe result.
   final bool isHdr10Plus;
+
+  /// True when the native side found static HDR10 metadata (SEI payload
+  /// types 137 = mastering display colour volume, 144 = content light level)
+  /// in the video bitstream. This covers plain HDR10 files that omit the
+  /// MKV Colour element — Media3's MatroskaExtractor doesn't populate
+  /// `Format.colorInfo`, so this bitstream probe restores the correct
+  /// HDR10 label and engages the headroom path.
+  final bool isHdr10;
   final String? audioCodecs;
   final String? audioMime;
   final int audioChannels;
@@ -245,6 +254,7 @@ class ExoPlayerEvent {
           ? (m['colorTransfer'] as num).toInt()
           : null,
       isHdr10Plus: m['isHdr10Plus'] == true,
+      isHdr10: m['isHdr10'] == true,
       audioCodecs: m['audioCodecs'] as String?,
       audioMime: m['audioMime'] as String?,
       audioChannels: asInt(m['audioChannels']),

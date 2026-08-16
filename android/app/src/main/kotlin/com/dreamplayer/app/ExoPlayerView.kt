@@ -294,6 +294,14 @@ class ExoPlayerView(
     /// leaves this false and the content plays with the plain HDR10 label.
     @Volatile private var hdr10PlusContent = false
 
+    /// Whether the current video carries static HDR10 metadata (SEI payload types
+    /// 137 = mastering display colour volume, 144 = content light level). This
+    /// covers plain HDR10 files that omit the MKV Colour element — Media3's
+    /// MatroskaExtractor doesn't populate `Format.colorInfo`, so the app would
+    /// fall back to SDR. Probing the bitstream SEI restores the correct HDR10 label
+    /// and engages the OPLUS EDR headroom path.
+    @Volatile private var hdr10Content = false
+
     /// Scans the first video samples for an HDR10+ SEI (ITU-T T.35 user data,
     /// country 0xB5 / provider 0x003C = ST 2094-40) on a background thread and
     /// flips [hdr10PlusContent], re-emitting the event map so the UI upgrades
@@ -444,6 +452,132 @@ class ExoPlayerView(
         return false
     }
 
+    /// True when this HEVC NAL unit is a SEI carrying static HDR10 metadata:
+    /// payload type 137 (mastering display colour volume) or
+    /// payload type 144 (content light level).
+    private fun nalHasStaticHdrSei(buf: ByteArray, start: Int, len: Int): Boolean {
+        if (len < 2) return false
+        val nalType = ((buf[start].toInt() and 0xFF) shr 1) and 0x3F
+        if (nalType != 39 && nalType != 40) return false // prefix/suffix SEI
+        val end = start + len
+        var i = start + 2
+        while (i + 1 < end) {
+            var payloadType = 0
+            while (i < end && (buf[i].toInt() and 0xFF) == 0xFF) {
+                payloadType += 255
+                i++
+            }
+            if (i >= end) return false
+            payloadType += buf[i].toInt() and 0xFF
+            i++
+            var payloadSize = 0
+            while (i < end && (buf[i].toInt() and 0xFF) == 0xFF) {
+                payloadSize += 255
+                i++
+            }
+            if (i >= end) return false
+            payloadSize += buf[i].toInt() and 0xFF
+            i++
+            if (payloadType == 137 || payloadType == 144) return true
+            i += payloadSize
+            if (i > end) return false
+        }
+        return false
+    }
+
+    /// Scans one encoded video sample for static HDR10 SEI (payload types
+    /// 137 = mastering display colour volume, 144 = content light level).
+    private fun sampleHasStaticHdrSei(buf: ByteArray, size: Int): Boolean {
+        val annexB = (size >= 4 && buf[0] == 0.toByte() && buf[1] == 0.toByte() &&
+            buf[2] == 1.toByte()) ||
+            (size >= 5 && buf[0] == 0.toByte() && buf[1] == 0.toByte() &&
+                buf[2] == 0.toByte() && buf[3] == 1.toByte())
+        if (annexB) {
+            var i = nextStartCode(buf, size, 0)
+            while (i >= 0) {
+                val nalData = i + if (i + 3 < size && buf[i + 2] == 1.toByte()) 3 else 4
+                val next = nextStartCode(buf, size, nalData)
+                val nalEnd = if (next < 0) size else next
+                if (nalHasStaticHdrSei(buf, nalData, nalEnd - nalData)) return true
+                i = next
+            }
+            return false
+        }
+        var off = 0
+        while (off + 4 <= size) {
+            val len = ((buf[off].toInt() and 0xFF) shl 24) or
+                ((buf[off + 1].toInt() and 0xFF) shl 16) or
+                ((buf[off + 2].toInt() and 0xFF) shl 8) or
+                (buf[off + 3].toInt() and 0xFF)
+            off += 4
+            if (len <= 0 || off + len > size) break
+            if (nalHasStaticHdrSei(buf, off, len)) return true
+            off += len
+        }
+        return false
+    }
+
+    private fun scanForStaticHdr(
+        path: String?,
+        uri: String?,
+        headers: Map<String, String>,
+    ): Boolean {
+        val extractor = MediaExtractor()
+        try {
+            when {
+                path != null -> extractor.setDataSource(path)
+                uri != null -> {
+                    val u = android.net.Uri.parse(uri)
+                    when (u.scheme) {
+                        "file" -> u.path?.let { extractor.setDataSource(it) } ?: return false
+                        "content" -> extractor.setDataSource(activity, u, null)
+                        else -> extractor.setDataSource(activity, u, headers.ifEmpty { null })
+                    }
+                }
+                else -> return false
+            }
+            var videoTrack = -1
+            for (i in 0 until extractor.trackCount) {
+                val mime = extractor.getTrackFormat(i).getString(MediaFormat.KEY_MIME)
+                if (mime?.startsWith("video/") == true) {
+                    videoTrack = i
+                    break
+                }
+            }
+            if (videoTrack < 0) return false
+            extractor.selectTrack(videoTrack)
+            val buffer = ByteArray(512 * 1024)
+            var samples = 0
+            while (samples < 256) {
+                val size = extractor.readSampleData(java.nio.ByteBuffer.wrap(buffer), 0)
+                if (size <= 0) break
+                if (sampleHasStaticHdrSei(buffer, size)) return true
+                samples++
+                val timeUs = extractor.sampleTime
+                if (timeUs > 0 && timeUs > 4_000_000L) break
+                extractor.advance()
+            }
+            return false
+        } catch (_: Exception) {
+            return false
+        } finally {
+            extractor.release()
+        }
+    }
+
+    private fun probeHdr10(path: String?, uri: String?, headers: Map<String, String>) {
+        Thread {
+            try {
+                if (scanForStaticHdr(path, uri, headers) && !hdr10Content) {
+                    hdr10Content = true
+                    handler.post { emit() }
+                }
+            } catch (_: Throwable) {
+                // Best-effort probe; never let it affect playback.
+            }
+        }.apply { isDaemon = true }.start()
+    }
+
     init {
         playerView.player = player
         player.addListener(listener)
@@ -471,6 +605,7 @@ class ExoPlayerView(
                     // this one is also Profile 5 on a DV-less device.
                     dvRejectionShown = false
                     hdr10PlusContent = false
+                    hdr10Content = false
                     val mediaItem = MediaItem.Builder()
                         .apply {
                             when {
@@ -532,6 +667,7 @@ class ExoPlayerView(
                     player.play()
                     subtitleOn = currentSubtitle != null
                     probeHdr10Plus(path, uri, headers)
+                    probeHdr10(path, uri, headers)
                     result.success(null)
                 }
                 "play" -> {
@@ -894,6 +1030,11 @@ class ExoPlayerView(
         // a `dvhe`/`dvh1`/`dvav` codec as HDR regardless of the reported color
         // info. This is exactly the heuristic `detectMedia3HdrFormat` on the
         // Dart side already uses for the chip label.
+        //
+        // Similarly, plain HDR10 MKVs may omit the MKV `Colour` element — the
+        // PQ/BT.2020 info lives only in the HEVC SPS VUI. We probe the bitstream
+        // for static HDR10 SEI (payload types 137/144) and treat it as HDR10
+        // when Media3's colorInfo is missing.
         val colorTransfer = videoFormat?.colorInfo?.colorTransfer
         val codecs = videoFormat?.codecs
         val isDolbyVision = codecs?.let { Regex("dv(?:he|h1|av)\\.").containsMatchIn(it) } == true
@@ -902,11 +1043,19 @@ class ExoPlayerView(
                 colorTransfer == C.COLOR_TRANSFER_ST2084 ||
                     colorTransfer == C.COLOR_TRANSFER_HLG -> 5.0f
                 isDolbyVision -> 5.0f
+                hdr10Content -> 5.0f
                 else -> 1.0f
             },
             colorTransfer ?: -1,
             skipWindowHdr = isDolbyVision,
         )
+
+        // Override colorTransfer for the Dart chip when we detected HDR10 via
+        // bitstream probe but Media3's colorInfo was null.
+        val emittedColorTransfer = if (hdr10Content && colorTransfer == null)
+            C.COLOR_TRANSFER_ST2084
+        else
+            colorTransfer
 
         val map = HashMap<String, Any?>()
         map["state"] = state
@@ -919,8 +1068,9 @@ class ExoPlayerView(
         map["videoMime"] = videoFormat?.sampleMimeType
         map["videoWidth"] = videoSize.width
         map["videoHeight"] = videoSize.height
-        map["colorTransfer"] = colorTransfer
+        map["colorTransfer"] = emittedColorTransfer
         map["isHdr10Plus"] = hdr10PlusContent
+        map["isHdr10"] = hdr10Content
         map["audioCodecs"] = audioFormat?.codecs
         map["audioMime"] = audioFormat?.sampleMimeType
         map["audioChannels"] = audioFormat?.channelCount

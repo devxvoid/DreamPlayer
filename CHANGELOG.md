@@ -3,6 +3,10 @@
 All notable changes to DreamPlayer are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## 0.1.7
+
+- **Static HDR10 detection for MKV files without Colour element (Android)** — some HEVC MKVs omit the MKV `Colour` element; the PQ/BT.2020 mastering metadata lives only in the HEVC SEI (payload type 137 Mastering Display Colour Volume, payload type 144 Content Light Level). `ExoPlayerView.kt` now probes the first ~10 MB of video samples on a background thread with `MediaExtractor`, scanning Annex-B / AVCC NALs for these SEI payloads. When found, `hdr10Content=true` is set and `stateMap` emits `desired=5.0` + `colorTransfer=6`, engaging the HDR headroom / window color mode path for true HDR10 passthrough even without container-level signalling. Verified on-device: a test MKV with no Colour element but with SEI 137/144 now shows the HDR10 chip and triggers the EDR ramp.
+
 ## 0.1.6
 
 - **Real HDR Dolby Vision output (Android) via hybrid-composition platform view** —

@@ -24,6 +24,7 @@ A cross-platform video player built with **Flutter**, designed for high-end play
 - **Graceful Dolby Vision on non-DV devices** — DV P7/P8 (HEVC-based) play as **HDR10** through the HEVC hardware decoder; DV Profile 5 shows a clean *"This device cannot decode Dolby Vision Profile 5"* message instead of pink/green garbage. HDR10/HDR10+ also render correctly on **HDR-capable but DV-less** phones (e.g. Redmi Note 10) and are auto-tone-mapped on SDR-only panels.
 - **Brighter HDR (Android EDR ramp)** — on OnePlus/OxygenOS the player engages the display's real HDR mode (window `COLOR_MODE_HDR` + 5.0 HDR headroom + consumer-side surface dataspace) for HDR10/HDR10+/HLG, so bright PQ highlights no longer clip flat to white; verified on-device via SurfaceFlinger (`current hdr/sdr ratio > 1.0`). Dolby Vision content skips this window machinery entirely — the decoder's native BT.2020 PQ dataspace is device-composited directly.
 - **HDR on-screen display** — live chips for Dolby Vision, HDR10+, HDR10, HLG, SDR.
+- **Static HDR10 detection for MKV files** — some HEVC MKVs omit the MKV `Colour` element (PQ/BT.2020 mastering lives only in HEVC SEI payloads 137/144). The player now probes the first ~10 MB of video samples for these SEI NALs on a background thread and engages the HDR headroom / window color mode path for true HDR10 passthrough even without container-level signalling.
 - **All major audio codecs** — DTS, DTS-HD, E-AC3, AC3, TrueHD, AAC, and more via Media3 `FFmpegAudioRenderer` (FLAC and E-AC3 work around buggy platform decoders).
 - **Audio track selection** — pick any audio track mid-playback; the sheet shows the full track name and channels (e.g. `DTS-HD MA 5.1`).
 - **Aspect ratio / fit-mode picker** — Fit, Crop to screen, Stretch to screen, 16:9, or 4:3 from the player's aspect button; the choice persists per video and is re-applied on every open.
@@ -88,7 +89,7 @@ The key is compiled in at build time (never shown in the UI, never committed); t
 
 ## Download
 
-Prebuilt binaries are attached to each [GitHub Release](https://github.com/mangeshghodke/DreamPlayer/releases). The current release is **0.1.5**; previous releases follow the **0.1.x** and **0.0.x** lines.
+Prebuilt binaries are attached to each [GitHub Release](https://github.com/mangeshghodke/DreamPlayer/releases). The current release is **0.1.7**; previous releases follow the **0.1.x** and **0.0.x** lines.
 
 - **Android** — per-architecture release APKs (`arm64-v8a`, `armeabi-v7a`, `x86_64`) plus a **universal** APK that installs on any device. (An Android App Bundle is not published yet — Play Store distribution isn't set up.)
 - **iOS / iPadOS** — the versioned `DreamPlayer-<version>.ipa` (e.g. `DreamPlayer-0.1.1.ipa`) is **unsigned** (Apple only allows App Store / TestFlight installs), so sideload it with a free Apple ID via **SideStore** or **AltStore** (guide below).
@@ -189,6 +190,7 @@ test/
 - [~] In-app SMB/LAN playback on iPad (AMSMB2 browse + stream) — **hidden 2026-08**: switching audio tracks on an SMB stream could crash the app; NAS files reach the app via CX/Files "Open with" instead. Code stays in the tree as a rebuild blueprint.
 - [x] User-added folder library (add a TV-show/movie folder → TMDB poster + episode list; nothing is auto-scanned)
 - [x] Jellyfin folders in the home library (add from the Jellyfin browser → TMDB poster + server episode list)
+- [x] Static HDR10 detection for MKV files without Colour element (probes HEVC SEI 137/144)
 - [x] GitHub Releases (Android APKs for all ABIs + universal; unsigned iOS IPA)
 - [ ] Play Store / TestFlight distribution (paid Apple Developer account)
 

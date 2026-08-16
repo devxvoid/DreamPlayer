@@ -201,16 +201,25 @@ String formatSubtitle(String? mime, String? codecs) {
 /// color transfer function decides HDR10 (ST2084/PQ) vs HLG. Media3's
 /// `Format.colorInfo.colorTransfer` uses the Android `MediaFormat` constants
 /// (ST2084 = 6, HLG = 7).
+///
+/// Additionally, the native side can probe the bitstream for static HDR10
+/// metadata (SEI payload types 137/144) and set `isHdr10`, covering plain
+/// HDR10 MKVs that omit the MKV `Colour` element (Media3's MatroskaExtractor
+/// doesn't populate `Format.colorInfo` for such files).
 HdrFormat detectMedia3HdrFormat({
   int? colorTransfer,
   String? videoCodecs,
   bool isHdr10Plus = false,
+  bool isHdr10 = false,
 }) {
   final codec = (videoCodecs ?? '').toLowerCase();
   if (codec.startsWith('dv')) return HdrFormat.dolbyVision;
   // ST 2094-40 dynamic metadata found in the bitstream → HDR10+, even though
   // the transfer function is the same PQ used by plain HDR10.
   if (isHdr10Plus) return HdrFormat.hdr10plus;
+  // Static HDR10 metadata (SEI 137/144) found in the bitstream → HDR10,
+  // even when Media3's colorInfo is null (MKV Colour element omitted).
+  if (isHdr10) return HdrFormat.hdr10;
   switch (colorTransfer) {
     case 6:
       return HdrFormat.hdr10;
