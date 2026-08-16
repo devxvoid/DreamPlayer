@@ -512,6 +512,29 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
     return '${months[month - 1]} $day, $year';
   }
 
+  /// The header banner box: full-width 16:9 in portrait; in landscape a
+  /// centered 16:9 box capped small. A full-width strip in landscape would
+  /// have to `cover`-crop a 16:9 artwork down to a thin zoomed band, so the
+  /// image is instead shown whole, at the small height.
+  Widget _headerBox(BuildContext context, Widget child) {
+    final size = MediaQuery.sizeOf(context);
+    if (MediaQuery.orientationOf(context) == Orientation.landscape) {
+      final height = (size.height * 0.32).clamp(140.0, 240.0);
+      return Center(
+        child: SizedBox(
+          width: height * 16 / 9,
+          height: height,
+          child: child,
+        ),
+      );
+    }
+    return SizedBox(
+      width: double.infinity,
+      height: size.width * 9 / 16,
+      child: child,
+    );
+  }
+
   Widget _buildBody(ThemeData theme, TmdMeta? meta) {
     if (meta == null) {
       if (widget.folder != null) return _buildFolderWithoutMatch(theme);
@@ -546,27 +569,27 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
     return CustomScrollView(
       slivers: [
         SliverToBoxAdapter(
-          child: Stack(
-            children: [
-              SizedBox(
-                height: MediaQuery.sizeOf(context).width * 9 / 16,
-                child: _HeaderImageGallery(
+          child: _headerBox(
+            context,
+            Stack(
+              children: [
+                _HeaderImageGallery(
                   images: episodeImages.isNotEmpty
                       ? episodeImages
                       : [?headerImage],
                   fallback: _artworkFallback(colorScheme),
                 ),
-              ),
-              Positioned(
-                bottom: 8,
-                right: 12,
-                child: _RatingBadge(
-                  rating: singleEpisode != null && singleEpisode.voteAverage > 0
-                      ? singleEpisode.voteAverage
-                      : movie.voteAverage,
+                Positioned(
+                  bottom: 8,
+                  right: 12,
+                  child: _RatingBadge(
+                    rating: singleEpisode != null && singleEpisode.voteAverage > 0
+                        ? singleEpisode.voteAverage
+                        : movie.voteAverage,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
         SliverToBoxAdapter(
@@ -939,27 +962,31 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
       slivers: [
         if (info != null && info.name.isNotEmpty) ...[
           SliverToBoxAdapter(
-            child: Stack(
-              children: [
-                SizedBox(
-                  height: MediaQuery.sizeOf(context).width * 9 / 16,
-                  child: info.backdropUrl != null
-                      ? Image.network(
-                          info.backdropUrl!,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, _, _) => _artworkFallback(colorScheme),
-                          loadingBuilder: (context, child, progress) =>
-                              progress == null ? child : _artworkFallback(colorScheme),
-                        )
-                      : _artworkFallback(colorScheme),
-                ),
-                if (info.communityRating > 0)
-                  Positioned(
-                    bottom: 8,
-                    right: 12,
-                    child: _RatingBadge(rating: info.communityRating),
-                  ),
-              ],
+            child: _headerBox(
+              context,
+              Stack(
+                children: [
+                  if (info.backdropUrl != null)
+                    Image.network(
+                      info.backdropUrl!,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, _, _) =>
+                          _artworkFallback(colorScheme),
+                      loadingBuilder: (context, child, progress) =>
+                          progress == null
+                              ? child
+                              : _artworkFallback(colorScheme),
+                    )
+                  else
+                    _artworkFallback(colorScheme),
+                  if (info.communityRating > 0)
+                    Positioned(
+                      bottom: 8,
+                      right: 12,
+                      child: _RatingBadge(rating: info.communityRating),
+                    ),
+                ],
+              ),
             ),
           ),
           SliverToBoxAdapter(
@@ -1251,24 +1278,40 @@ class _CastTile extends StatelessWidget {
                 : _avatarFallback(colorScheme),
           ),
           const SizedBox(height: 6),
-          Text(
-            member.name,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-          ),
-          if (member.character != null)
-            Text(
-              member.character!,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 11,
-                color: colorScheme.onSurfaceVariant,
+          // Name + character must fit the fixed 96px tile height at any text
+          // scale — scale the two lines down together when they don't.
+          Expanded(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Text(
+                    member.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  if (member.character != null)
+                    Text(
+                      member.character!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                ],
               ),
             ),
+          ),
         ],
       ),
     );
@@ -1306,11 +1349,9 @@ class _HeaderImageGalleryState extends State<_HeaderImageGallery> {
   @override
   Widget build(BuildContext context) {
     final images = widget.images;
-    final width = MediaQuery.sizeOf(context).width;
     return Stack(
       children: [
-        SizedBox(
-          height: width * 9 / 16,
+        SizedBox.expand(
           child: images.isNotEmpty
               ? PageView.builder(
                   itemCount: images.length,
