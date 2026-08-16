@@ -74,6 +74,25 @@ void main() {
       final parsed = ParsedFileName.parse('Trailer.mp4');
       expect(parsed.title, 'Trailer');
     });
+
+    test('strips a bare season tag from a whole-season folder name', () {
+      final parsed = ParsedFileName.parse(
+        'HOUSE.S02.1080p.10bit.BluRay.English.AAC.5.1.x265-Panda',
+      );
+      expect(parsed.isEpisode, isFalse);
+      expect(parsed.season, 2);
+      expect(parsed.seriesName, 'HOUSE');
+      expect(parsed.title, 'HOUSE');
+    });
+
+    test('strips audio-language and streaming-provider noise', () {
+      final parsed = ParsedFileName.parse(
+        'I.Will.Find.You.S01.2160p.NF.WEB-DL.MULTi.DDP5.1.Atmos.DV.HDR.H.265-4kHdHub.Com',
+      );
+      expect(parsed.season, 1);
+      expect(parsed.title, 'I Will Find You');
+      expect(parsed.seriesName, 'I Will Find You');
+    });
   });
 
   group('TmdStore', () {

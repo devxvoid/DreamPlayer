@@ -219,7 +219,7 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
       var server = _jellyfinServer;
       server ??= await _jellyfin.serverForUrl(folder!.jellyfinServerUrl ?? '');
       if (server == null || !server.isAuthenticated) return;
-      final info = await _jellyfin.getItemInfo(server, itemId);
+      final info = await _jellyfin.getPrimaryPosterInfo(server, itemId);
       if (info == null || !mounted) return;
       await _jellyfin.saveFolderMeta(folder!.id, info);
       if (mounted) setState(() => _jellyfinInfo = info);

@@ -130,7 +130,7 @@ class _HomeScreenState extends State<HomeScreen>
         final server =
             await _client.serverForUrl(folder.jellyfinServerUrl ?? '');
         if (server == null || !server.isAuthenticated) continue;
-        final info = await _client.getItemInfo(server, itemId);
+        final info = await _client.getPrimaryPosterInfo(server, itemId);
         if (info == null) continue;
         await _client.saveFolderMeta(folder.id, info);
         if (mounted) {

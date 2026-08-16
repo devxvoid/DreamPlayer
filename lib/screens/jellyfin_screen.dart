@@ -219,10 +219,12 @@ class _JellyfinScreenState extends State<JellyfinScreen> {
       SnackBar(content: Text('"${item.name}" added to your library')),
     );
     // Fetch the series' own info from the server in the background so the home
-    // card + details screen have poster/title/year/overview instantly.
+    // card + details screen have the main poster/title/year/overview instantly.
+    // Plain folders have no poster (Jellyfin answers with a random child
+    // image), so the nearest Series ancestor's info is used instead.
     if (server.isAuthenticated) {
       try {
-        final info = await _client.getItemInfo(server, item.id);
+        final info = await _client.getPrimaryPosterInfo(server, item.id);
         if (info != null) {
           await _client.saveFolderMeta(folder.id, info);
         }

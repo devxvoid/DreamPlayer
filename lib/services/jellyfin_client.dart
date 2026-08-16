@@ -358,7 +358,9 @@ class JellyfinClient {
     return client;
   }
 
-  Future<Map<String, dynamic>> _getJson(
+  /// GET and decode JSON as `dynamic` — the raw response (a JSON object for
+  /// most Jellyfin endpoints, a JSON array for e.g. `/Items/{id}/Ancestors`).
+  Future<dynamic> _getJsonRaw(
     String url, {
     required bool allowSelfSigned,
     Map<String, String>? headers,
@@ -378,7 +380,7 @@ class JellyfinClient {
       if (res.statusCode >= 400) {
         throw JellyfinException('Server error ${res.statusCode}');
       }
-      return jsonDecode(body) as Map<String, dynamic>;
+      return jsonDecode(body);
     } on SocketException catch (e) {
       throw JellyfinException(friendlyError(e));
     } on HandshakeException catch (e) {
@@ -390,6 +392,21 @@ class JellyfinClient {
     } finally {
       client.close(force: true);
     }
+  }
+
+  Future<Map<String, dynamic>> _getJson(
+    String url, {
+    required bool allowSelfSigned,
+    Map<String, String>? headers,
+    int timeoutSeconds = 15,
+  }) async {
+    final decoded = await _getJsonRaw(
+      url,
+      allowSelfSigned: allowSelfSigned,
+      headers: headers,
+      timeoutSeconds: timeoutSeconds,
+    );
+    return decoded as Map<String, dynamic>;
   }
 
   Future<Map<String, dynamic>> _postJson(
@@ -531,6 +548,80 @@ class JellyfinClient {
       serverUrl: server.url,
       token: server.token ?? '',
     );
+  }
+
+  /// Parent chain of an item (immediate parent first) — season/folder →
+  /// series → library. Raw `BaseItemDto` maps (each carries `Id` + `Type`),
+  /// or `[]` on any failure. Used to resolve the real Series behind a
+  /// bookmarked folder, since a plain Jellyfin folder has no poster of its own.
+  Future<List<Map<String, dynamic>>> getItemAncestors(
+    JellyfinServer server,
+    String itemId,
+  ) async {
+    if (itemId.isEmpty) return const [];
+    try {
+      final uri = Uri.parse('${server.url}/Items/$itemId/Ancestors').replace(
+        queryParameters: {'api_key': server.token ?? ''},
+      );
+      final decoded = await _getJsonRaw(
+        uri.toString(),
+        allowSelfSigned: server.allowSelfSigned,
+      );
+      if (decoded is List) {
+        return decoded.whereType<Map<String, dynamic>>().toList();
+      }
+      if (decoded is Map<String, dynamic>) {
+        return (decoded['Items'] as List?)
+                ?.whereType<Map<String, dynamic>>()
+                .toList() ??
+            const [];
+      }
+      return const [];
+    } catch (_) {
+      // Best-effort — a failure just means we keep the folder's own info.
+      return const [];
+    }
+  }
+
+  /// The item whose info should represent [itemId] as a bookmark: the item
+  /// itself when it is a Series/Movie, otherwise the nearest Series ancestor.
+  /// Jellyfin answers `/Items/{folderId}/Images/Primary` with a random child
+  /// image for a folder without its own poster, so bookmarking must resolve
+  /// the show — otherwise the home card shows a random still from the series
+  /// instead of the main poster.
+  Future<JellyfinItemInfo?> getPrimaryPosterInfo(
+    JellyfinServer server,
+    String itemId,
+  ) async {
+    final info = await getItemInfo(server, itemId);
+    if (info == null) return null;
+    final posterId = resolvePosterItemId(
+      info.type,
+      itemId,
+      await getItemAncestors(server, itemId),
+    );
+    if (posterId == itemId || posterId == null) return info;
+    final seriesInfo = await getItemInfo(server, posterId);
+    return seriesInfo ?? info;
+  }
+
+  /// Pure decision logic for [getPrimaryPosterInfo]: which item id carries the
+  /// main poster for [ownId]? [ownId] when it is itself a Series/Movie, else
+  /// the first Series in the [ancestors] chain, else null (keep the folder's
+  /// own info).
+  static String? resolvePosterItemId(
+    String? ownType,
+    String ownId,
+    List<Map<String, dynamic>> ancestors,
+  ) {
+    if (ownType == 'Series' || ownType == 'Movie') return ownId;
+    for (final ancestor in ancestors) {
+      if (ancestor['Type'] == 'Series') {
+        final seriesId = ancestor['Id'] as String?;
+        if (seriesId != null && seriesId.isNotEmpty) return seriesId;
+      }
+    }
+    return null;
   }
 
   /// The saved/authenticated server matching [url] (normalized), or null.

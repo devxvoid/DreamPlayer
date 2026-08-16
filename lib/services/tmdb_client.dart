@@ -514,6 +514,12 @@ class ParsedFileName {
   static final RegExp _episodeShortPattern =
       RegExp(r'\b(\d{1,2})x(\d{1,3})\b', caseSensitive: false);
 
+  /// Bare season tag (`S02`, `S1`) — used by TV-season folder names like
+  /// `HOUSE.S02.1080p...`. There's no episode number, so this is a whole
+  /// season; the tag must be stripped or it pollutes the search title.
+  static final RegExp _seasonOnlyPattern =
+      RegExp(r'\bS(\d{1,2})\b', caseSensitive: false);
+
   static const List<String> _noise = [
     '1080p', '720p', '2160p', '480p', '4k', 'uhd', 'hd',
     'bluray', 'blu-ray', 'bdremux', 'remux', 'web-dl',     'webdl', 'webrip', 'web',
@@ -522,6 +528,7 @@ class ParsedFileName {
     'ddp', '5.1', '7.1', '2.0', '10bit', '8bit', 'hdr', 'hdr10', 'hdr10plus', 'dolby',
     'vision', 'dv', 'hdr10+', 'multi', 'proper', 'repack', 'internal', 'extended',
     'unrated', 'directors', 'cut', 'imax', 'complete',
+    'english', 'eng', 'nf', 'netflix', 'amzn', 'amazon', 'hbo', 'hulu',
   ];
 
   static ParsedFileName parse(String fileName) {
@@ -539,6 +546,7 @@ class ParsedFileName {
 
     final episodeMatch = _episodePattern.firstMatch(name);
     final shortEpisodeMatch = _episodeShortPattern.firstMatch(name);
+    final seasonOnlyMatch = _seasonOnlyPattern.firstMatch(name);
 
     final yearMatch = _yearPattern.firstMatch(name);
     int? year;
@@ -563,6 +571,12 @@ class ParsedFileName {
       episode = int.parse(shortEpisodeMatch.group(2)!);
       seriesName = name.substring(0, shortEpisodeMatch.start).trim();
       name = name.replaceAll(shortEpisodeMatch.group(0)!, ' ');
+    } else if (seasonOnlyMatch != null) {
+      // Whole-season folder (`Show.S02.1080p...`): keep the season number for
+      // context but drop the tag so the cleaned title stays searchable.
+      season = int.parse(seasonOnlyMatch.group(1)!);
+      seriesName = name.substring(0, seasonOnlyMatch.start).trim();
+      name = name.replaceAll(seasonOnlyMatch.group(0)!, ' ');
     }
 
     final title = _cleanName(name);
@@ -581,6 +595,12 @@ class ParsedFileName {
     // Codec tags glued to their channel layout (e.g. `DDP5.1`, `AC3.5.1`).
     cleaned = cleaned.replaceAll(
       RegExp(r'\b[a-z]{2,}\d+\.\d+\b', caseSensitive: false),
+      ' ',
+    );
+    // `H.265` / `H265` / `H 265` (and X.264/265) survive the noise list
+    // because of the dot/space — catch them explicitly before splitting.
+    cleaned = cleaned.replaceAll(
+      RegExp(r'\b[xh]\.?\s*26[0-9]\b', caseSensitive: false),
       ' ',
     );
     for (final n in _noise) {

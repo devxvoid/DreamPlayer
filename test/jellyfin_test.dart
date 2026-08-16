@@ -257,6 +257,67 @@ void main() {
     });
   });
 
+  group('resolvePosterItemId', () {
+    const seasonAncestors = [
+      {'Id': 'ser1', 'Type': 'Series'},
+      {'Id': 'lib1', 'Type': 'CollectionFolder'},
+    ];
+    const folderAncestors = [
+      {'Id': 'lib1', 'Type': 'CollectionFolder'},
+    ];
+
+    test('series item keeps itself', () {
+      expect(
+        JellyfinClient.resolvePosterItemId(
+          'Series',
+          'ser1',
+          seasonAncestors,
+        ),
+        'ser1',
+      );
+    });
+
+    test('movie item keeps itself', () {
+      expect(
+        JellyfinClient.resolvePosterItemId('Movie', 'm1', const []),
+        'm1',
+      );
+    });
+
+    test('season resolves to its series ancestor', () {
+      expect(
+        JellyfinClient.resolvePosterItemId(
+          'Season',
+          'sea1',
+          seasonAncestors,
+        ),
+        'ser1',
+      );
+    });
+
+    test('episode resolves to the nearest series ancestor', () {
+      expect(
+        JellyfinClient.resolvePosterItemId('Episode', 'e1', const [
+          {'Id': 'sea1', 'Type': 'Season'},
+          {'Id': 'ser1', 'Type': 'Series'},
+          {'Id': 'lib1', 'Type': 'CollectionFolder'},
+        ]),
+        'ser1',
+      );
+    });
+
+    test('plain folder without a series ancestor keeps itself', () {
+      expect(
+        JellyfinClient.resolvePosterItemId(
+          'Folder',
+          'f1',
+          folderAncestors,
+        ),
+        isNull,
+      );
+    });
+  });
+
   group('Jellyfin folder-meta cache', () {
     const folderId = 'jellyfin_folder_192.168.1.16_ser1';
     final info = JellyfinItemInfo(
