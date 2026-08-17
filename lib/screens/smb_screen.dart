@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../models/video_item.dart';
 import '../services/smb_client.dart';
+import '../services/tmdb_client.dart';
 import 'tmd_details_screen.dart';
 
 /// SMB / LAN-share browser: saved servers -> shares -> folders -> videos.
@@ -23,6 +24,7 @@ class _SmbScreenState extends State<SmbScreen> {
   String _share = '';
   String _path = '';
   List<SmbEntry> _entries = const [];
+  final Map<String, TmdMeta?> _tmdbMeta = {};
   bool _loading = true;
   String? _error;
 
@@ -151,6 +153,7 @@ class _SmbScreenState extends State<SmbScreen> {
         _entries = entries;
         _loading = false;
       });
+      _prefetchTmdbMeta(entries);
     } on PlatformException catch (e) {
       if (mounted) {
         setState(() {
@@ -158,6 +161,29 @@ class _SmbScreenState extends State<SmbScreen> {
           _loading = false;
         });
       }
+    }
+  }
+
+  void _prefetchTmdbMeta(List<SmbEntry> entries) {
+    final service = TmdService.instance;
+    for (final entry in entries) {
+      if (entry.isDirectory) continue;
+      final key = entry.path;
+      if (_tmdbMeta.containsKey(key)) continue;
+      _tmdbMeta[key] = null; // placeholder to avoid duplicate requests
+      service.resolve(VideoItem(
+        id: 'smb_$key',
+        title: entry.name,
+        uri: '',
+        resumeKey: key,
+        duration: Duration.zero,
+        sizeBytes: entry.size,
+      )).then((meta) {
+        if (!mounted) return;
+        setState(() {
+          _tmdbMeta[key] = meta;
+        });
+      });
     }
   }
 
@@ -479,6 +505,7 @@ class _SmbScreenState extends State<SmbScreen> {
         return _SmbTile(
           entry: entry,
           onTap: () => _openEntry(entry),
+          tmdbMeta: _tmdbMeta[entry.path],
         );
       },
     );
@@ -620,10 +647,15 @@ class _SectionHeader extends StatelessWidget {
 }
 
 class _SmbTile extends StatelessWidget {
-  const _SmbTile({required this.entry, required this.onTap});
+  const _SmbTile({
+    required this.entry,
+    required this.onTap,
+    this.tmdbMeta,
+  });
 
   final SmbEntry entry;
   final VoidCallback onTap;
+  final TmdMeta? tmdbMeta;
 
   static String _sizeLabel(int bytes) {
     if (bytes <= 0) return '';
@@ -645,8 +677,23 @@ class _SmbTile extends StatelessWidget {
         : Icons.play_circle_outline;
     final color = entry.isDirectory ? colorScheme.primary : colorScheme.secondary;
     final subtitle = entry.isDirectory ? null : _sizeLabel(entry.size);
+    final posterUrl = tmdbMeta?.movie.posterPath != null
+        ? 'https://image.tmdb.org/t/p/w185${tmdbMeta!.movie.posterPath}'
+        : null;
+
     return ListTile(
-      leading: Icon(icon, color: color),
+      leading: posterUrl != null
+          ? ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: Image.network(
+                posterUrl,
+                width: 48,
+                height: 72,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => Icon(icon, color: color),
+              ),
+            )
+          : Icon(icon, color: color),
       title: Text(
         entry.name,
         maxLines: 1,
