@@ -4,17 +4,20 @@ import AetherEngineSMB
 
 /// Ring-buffer + multi-thread prefetch reader for SMB/WebDAV playback.
 ///
-/// Ports the Android `SmbDataSource` design (4 parallel prefetch threads, each
+/// Ports the Android `SmbDataSource` design (parallel prefetch threads, each
 /// with its own SMB handle / TCP connection) to iOS:
 ///
 /// - **Ring buffer** (96 MiB) keeps data ahead of the read cursor.
-/// - **4 prefetch tasks** each read different regions of the file simultaneously
-///   via their own `ByteRangeSource`, then copy into the ring under lock (with
-///   epoch check to prevent stale writes from killed/restarted tasks).
+/// - **Up to 4 prefetch tasks** read different regions of the file
+///   simultaneously, one per underlying connection, then copy into the ring
+///   under lock (with epoch check to prevent stale writes from killed/restarted
+///   tasks). A single source therefore gets exactly one prefetch task.
 /// - **Out-of-order completion** merges chunks that land ahead of the contiguous
-///   write frontier.
-/// - `read()` serves from the ring; `seek()` within the ring is a cheap cursor
-///   move; outside triggers a re-anchor.
+///   write frontier; a failed read rewinds its chunk so it is retried rather
+///   than leaving a permanent hole.
+/// - `read()` blocks until data arrives (Android parity — no early -1 to the
+///   demuxer); `seek()` within the ring is a cheap cursor move; outside
+///   triggers a re-anchor.
 ///
 /// Lifecycle: `cancel()` unblocks a pending read; `close()` stops prefetch
 /// tasks and does NOT close the underlying sources (SMBClient owns their
@@ -95,8 +98,10 @@ final class BufferedSMBReader: IOReader, @unchecked Sendable {
         closed = true
         prefetchGen &+= 1
         ringLock.broadcast()
+        let tasks = prefetchTasks
+        prefetchTasks.removeAll()
         ringLock.unlock()
-        for t in prefetchTasks { t.cancel() }
+        for t in tasks { t.cancel() }
         if ownsSources { sources.forEach { $0.close() } }
         ring?.deallocate()
     }
@@ -108,18 +113,16 @@ final class BufferedSMBReader: IOReader, @unchecked Sendable {
         let epoch = cancelEpoch
         ringLock.lock()
 
-        // Wait for data if ring is empty.
+        // Wait for data if the ring is empty. Mirrors Android's SmbDataSource,
+        // which blocks indefinitely — an early -1 would hard-abort the FFmpeg
+        // probe mid-open on any slow/transient Wi-Fi. A 60 s hard-stall
+        // deadline is kept purely as a backstop so a genuinely dead connection
+        // surfaces as an error instead of hanging the reader forever.
         if availableLocked() == 0 && !bufEof && !closed {
-            let deadline = Date().addingTimeInterval(10)
-            var retriesLeft = 3
+            let deadline = Date().addingTimeInterval(60)
             while availableLocked() == 0 && !bufEof && !closed && cancelEpoch == epoch {
                 if Date() >= deadline { break }
                 ringLock.wait(until: deadline)
-                // Prefetch may have died from a transient error — restart.
-                if availableLocked() == 0 && !bufEof && retriesLeft > 0 {
-                    retriesLeft -= 1
-                    startPrefetchers()
-                }
             }
         }
 
@@ -169,9 +172,10 @@ final class BufferedSMBReader: IOReader, @unchecked Sendable {
         closed = true
         prefetchGen &+= 1
         ringLock.broadcast()
-        ringLock.unlock()
-        for t in prefetchTasks { t.cancel() }
+        let tasks = prefetchTasks
         prefetchTasks.removeAll()
+        ringLock.unlock()
+        for t in tasks { t.cancel() }
     }
 
     func cancel() {
@@ -233,11 +237,20 @@ final class BufferedSMBReader: IOReader, @unchecked Sendable {
 
     private static let PREFETCH_THREADS = 4
 
-    /// Start 4 prefetch tasks.  Caller MUST hold ringLock.
+    /// Start prefetch tasks — at most one per underlying connection.  Caller
+    /// MUST hold ringLock.
+    ///
+    /// Bumping `prefetchGen` first retires any still-running tasks from a
+    /// previous spawn (they exit at their next generation check), so repeated
+    /// calls from `read()`/`reanchorLocked()` never pile tasks up on the same
+    /// connections — concurrent SMB reads on one connection corrupt the protocol.
     private func startPrefetchers() {
+        prefetchGen &+= 1
         let gen = prefetchGen
-        for i in 0..<Self.PREFETCH_THREADS {
-            let src = i < sources.count ? sources[i] : sources[0]
+        prefetchTasks.removeAll { $0.isCompleted }
+        let count = min(Self.PREFETCH_THREADS, sources.count)
+        for i in 0..<count {
+            let src = sources[i]
             let task = Task.detached(priority: .userInitiated) { [weak self] in
                 guard let self else { return }
                 await self.prefetchLoop(gen: gen, threadIdx: i, source: src)
@@ -289,7 +302,6 @@ final class BufferedSMBReader: IOReader, @unchecked Sendable {
 
             // ---- SMB read (outside lock — parallel with other threads) ----
             var got = -2
-            let t0 = Date()
             do {
                 let data = try await source.read(at: readAt, length: readLen)
                 got = data.count
@@ -304,11 +316,6 @@ final class BufferedSMBReader: IOReader, @unchecked Sendable {
 
             // ---- Copy into ring under lock ----
             if got > 0 {
-                let ms = Date().timeIntervalSince(t0) * 1000
-                if ms > 500 {
-                    let mbps = Double(got) / 1024.0 / 1024.0 / max(ms / 1000.0, 0.001)
-                    print("smb-prefetch t\(threadIdx) slow: \(got) bytes in \(String(format: "%.0f", ms))ms (\(String(format: "%.1f", mbps)) MB/s) at \(readAt)")
-                }
                 ringLock.lock()
                 if epoch == ringEpoch && ring != nil {
                     var off = ringIdx(readAt)
@@ -344,7 +351,16 @@ final class BufferedSMBReader: IOReader, @unchecked Sendable {
                 ringLock.broadcast()
                 ringLock.unlock()
             } else {
-                // Transient error: brief pause then retry.
+                // Transient error: give the chunk back so it's retried. Without
+                // the rewind, nextWritePos already advanced past this region and
+                // the failed bytes would form a permanent hole the contiguous
+                // frontier can never cross — the ring would never fill again.
+                ringLock.lock()
+                if epoch == ringEpoch {
+                    nextWritePos = min(nextWritePos, readAt)
+                }
+                ringLock.broadcast()
+                ringLock.unlock()
                 try? await Task.sleep(nanoseconds: 200_000_000)
             }
         }

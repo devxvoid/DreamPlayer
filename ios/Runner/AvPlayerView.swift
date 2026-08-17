@@ -221,6 +221,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     // the engine closing the previous reader doesn't tear down the shared
     // SMBConnection (SMBClient owns its lifetime). ----
     private var smbToken: String?
+    private var smbServerId: String?
     private var isSMBStream = false
     /// File extension from the SMB token URL, passed to AetherEngine as a
     /// `formatHint` so FFmpeg skips the byte-level probe.  `nil` for
@@ -441,13 +442,18 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             // read from their own connection simultaneously, filling a 96 MiB
             // ring buffer ahead of the cursor.
             smbToken = parsed.token
+            smbServerId = parsed.serverId
             isSMBStream = true
+            // Mark server as active so closeShare won't tear down connections
+            // while we're still playing.
+            if !parsed.serverId.isEmpty {
+                SMBClient.shared.markPlayerActive(serverId: parsed.serverId)
+            }
             if parsed.ext.isEmpty || parsed.ext == "stream" {
                 // Extensionless file on the NAS (e.g. "LG") — read the first
                 // 16 bytes and guess the container so FFmpeg doesn't fail its
                 // byte-level probe with "custom probe failed".
                 smbFormatHint = Self.sniffFormatFromSMB(conns[0])
-                print("smb-sniff: extensionless -> \(smbFormatHint ?? "nil")")
             } else {
                 smbFormatHint = parsed.ext
             }
@@ -910,15 +916,26 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     /// an SMB stream URL. Token/ext parsed by string so URL quirks (empty path)
     /// can't break resolution; the extension is forwarded to AetherEngine as a
     /// `formatHint` so FFmpeg skips its byte-level format probe.
-    private static func smbToken(in uri: String) -> (token: String, ext: String)? {
+    private static func smbToken(in uri: String) -> (token: String, ext: String, serverId: String)? {
         let prefix = "dreamplayersmb://"
         guard uri.hasPrefix(prefix) else { return nil }
         let rest = String(uri.dropFirst(prefix.count))
         guard !rest.isEmpty else { return nil }
-        let token = (rest as NSString).deletingPathExtension
-        let ext = (rest as NSString).pathExtension
+        // Format: dreamplayersmb://<serverId>.<token>.<ext>
+        let parts = rest.split(separator: ".", maxSplits: 2)
+        guard parts.count >= 2 else {
+            // Legacy format without serverId: dreamplayersmb://<token>.<ext>
+            let token = (rest as NSString).deletingPathExtension
+            let ext = (rest as NSString).pathExtension
+            guard !token.isEmpty else { return nil }
+            return (token, ext, "")
+        }
+        let serverId = String(parts[0])
+        let tokenExt = String(parts[1...].joined(separator: "."))
+        let token = (tokenExt as NSString).deletingPathExtension
+        let ext = (tokenExt as NSString).pathExtension
         guard !token.isEmpty else { return nil }
-        return (token, ext)
+        return (token, ext, serverId)
     }
 
     // MARK: - Sidecar subtitle auto-pairing
@@ -1025,5 +1042,10 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         UIApplication.shared.isIdleTimerDisabled = false
         for conn in previousStaleSMBConnections { conn.close() }
         previousStaleSMBConnections.removeAll()
+        // Release the active-player lock so closeShare can clean up connections.
+        if let sid = smbServerId, !sid.isEmpty {
+            SMBClient.shared.markPlayerClosed(serverId: sid)
+        }
+        smbServerId = nil
     }
 }

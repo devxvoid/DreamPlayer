@@ -61,6 +61,10 @@ final class SMBClient: NSObject {
     /// `streamLock`.
     private var streamParams: [String: (serverId: String, share: String, path: String)] = [:]
 
+    /// Servers with an active player session.  `closeShare` skips closing
+    /// connections for these — the player owns their lifetime.
+    private var activePlayerServers: Set<String> = []
+
     private override init() { super.init() }
 
     static func register(with messenger: FlutterBinaryMessenger) {
@@ -662,7 +666,9 @@ final class SMBClient: NSObject {
         streamLock.unlock()
 
         let ext = (path as NSString).pathExtension
-        return "dreamplayersmb://\(token).\(ext.isEmpty ? "stream" : ext)"
+        // Embed serverId in the token URL so the player can mark it active
+        // and prevent closeShare from tearing down connections mid-playback.
+        return "dreamplayersmb://\(serverId).\(token).\(ext.isEmpty ? "stream" : ext)"
     }
 
     /// Creates `count` independent SMBConnections for the same file, enabling
@@ -724,6 +730,11 @@ final class SMBClient: NSObject {
     }
 
     private func closeShare(serverId: String) {
+        // Don't close connections while the player is still using them.
+        // The player calls markPlayerClosed() on teardown.
+        if activePlayerServers.contains(serverId) {
+            return
+        }
         streamLock.lock()
         let items = streamConnections.removeValue(forKey: serverId) ?? []
         // Also collect extra connections for tokens owned by this server.
@@ -739,6 +750,16 @@ final class SMBClient: NSObject {
         for item in items {
             item.connection.close()
         }
+    }
+
+    /// Mark a server as having an active player — `closeShare` won't touch it.
+    func markPlayerActive(serverId: String) {
+        activePlayerServers.insert(serverId)
+    }
+
+    /// Player teardown done — allow `closeShare` to clean up.
+    func markPlayerClosed(serverId: String) {
+        activePlayerServers.remove(serverId)
     }
 
     // MARK: - Reachability / discovery
