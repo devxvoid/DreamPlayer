@@ -189,6 +189,13 @@ A video player app supporting:
     latency"). The SMB call sites (`AvPlayerView.open` + `reopenSMBStream`) pass
     `chunkSize: Self.smbChunkSize == 256 KiB`. WebDAV keeps 4 MiB (`one HTTP
     Range request ≈ one round-trip`, which is why WebDAV never hit this).
+    **Single-threaded SMB (2026-08, revert)**: a 4-connection/4-thread parallel
+    prefetch design (`SMBClient.openShare` minting 4 `SMBConnection`s + 4
+    prefetch tasks over independent sockets) failed to play ANYTHING on-device
+    — reverted to one connection per file; `BufferedSMBReader` then runs exactly
+    one prefetch task (`min(4, sources.count)`). `SMBClient` dropped
+    `streamExtraConnections`/`openShareConnections`/`reconnectAll`; the sole
+    `reconnect(for:)` + `previousStaleSMBConnection` serve audio-track switch.
     CI will verify
     the iOS build; on-device buffering was still to be re-measured.
   - **Replay / scrub-after-end**: AetherEngine's `.ended` is terminal (seek and
