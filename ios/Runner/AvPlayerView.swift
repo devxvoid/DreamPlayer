@@ -226,10 +226,10 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     /// `formatHint` so FFmpeg skips the byte-level probe.  `nil` for
     /// extensionless files (e.g. "stream" fallback in `openShare`).
     private var smbFormatHint: String?
-    /// Stale SMBConnection from the last audio-track switch. Kept alive until
-    /// the NEXT switch or teardown so AetherEngine's FFmpeg demux thread can
-    /// finish draining I/O without the socket being torn down underneath it.
-    private var previousStaleSMBConnection: SMBConnection?
+    /// Stale SMBConnections from the last audio-track switch (primary + extras).
+    /// Kept alive until the NEXT switch or teardown so AetherEngine's FFmpeg
+    /// demux thread can finish draining I/O without sockets being torn down.
+    private var previousStaleSMBConnections: [SMBConnection] = []
 
     init(messenger: FlutterBinaryMessenger, viewId: Int64, frame: CGRect) {
         container = AetherPlayerView(frame: frame)
@@ -431,22 +431,20 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             localURL = URL(fileURLWithPath: path)
             source = .url(localURL!)
         } else if let uri, let parsed = Self.smbToken(in: uri) {
-            guard let connection = SMBClient.shared.connection(for: parsed.token) else {
+            let conns = SMBClient.shared.connections(for: parsed.token)
+            guard !conns.isEmpty else {
                 result(FlutterError(code: "smb_stream", message: "SMB stream token not found", details: nil))
                 return
             }
-            // Read-ahead wrapper: SMBIOReader bridges every FFmpeg read to a
-            // synchronous SMB round-trip (256 KB per read, zero prefetch), so
-            // a Wi-Fi latency spike starves the engine's loopback producer and
-            // AVPlayer buffers. BufferedSMBReader keeps a 32 MiB window filled
-            // ahead of the cursor on a background task. ownsSource stays false
-            // on both the connection and the reader — SMBClient owns the
-            // connection's lifetime (closed on closeShare / server delete).
+            // Multi-thread parallel prefetch: each connection is an independent
+            // TCP socket to the NAS.  BufferedSMBReader's 4 prefetch tasks each
+            // read from their own connection simultaneously, filling a 96 MiB
+            // ring buffer ahead of the cursor.
             smbToken = parsed.token
             isSMBStream = true
             smbFormatHint = parsed.ext.isEmpty || parsed.ext == "stream" ? nil : parsed.ext
             source = .custom(
-                BufferedSMBReader(source: connection),
+                BufferedSMBReader(sources: conns),
                 formatHint: smbFormatHint
             )
         } else if let uri, let u = URL(string: uri),
@@ -598,7 +596,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         let activeSub = engine.activeSubtitleTrackIndex
         let resumeAt = engine.currentTime
 
-        // Mint a FRESH SMBConnection + BufferedSMBReader for the reload.
+        // Mint FRESH SMBConnections + BufferedSMBReader for the reload.
         // Do NOT call engine.stop() first — the initial open() works by
         // calling load() directly (which internally stops the old source),
         // and stop() + load() on the same engine can race: stop() signals
@@ -606,25 +604,24 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         // old IOReader, so the new load()'s probe reads against a half-torn-
         // down source and gets EIO (-5). load() handles the transition itself.
         //
-        // The reconnect does a blocking SMB handshake (runAsync semaphore);
-        // keep it off the main actor regardless of threading semantics.
-        let pair = await Task.detached(priority: .userInitiated) {
-            SMBClient.shared.reconnect(for: smbToken)
+        // reconnectAll mints N fresh connections (one per prefetch thread)
+        // and returns the stale extras from the previous session.
+        let result = await Task.detached(priority: .userInitiated) {
+            SMBClient.shared.reconnectAll(for: smbToken, count: 4)
         }.value
-        guard let pair else {
+        guard let result else {
             lastError = "SMB stream reconnect failed for audio track switch"
             emit()
             return
         }
-        let connection = pair.fresh
-        let stale = pair.stale
-        // Close the stale connection from the PREVIOUS audio-track switch —
+        let freshConns = result.fresh
+        // Close stale connections from the PREVIOUS audio-track switch —
         // by now AetherEngine has fully released the old reader (the new
         // load() below replaces the demuxer synchronously).
-        previousStaleSMBConnection?.close()
-        previousStaleSMBConnection = stale
+        for conn in previousStaleSMBConnections { conn.close() }
+        previousStaleSMBConnections = result.staleExtras
         let source: MediaSource = .custom(
-            BufferedSMBReader(source: connection),
+            BufferedSMBReader(sources: freshConns),
             formatHint: smbFormatHint
         )
         lastSource = source
@@ -978,7 +975,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         eventChannel.setStreamHandler(nil)
         eventSink = nil
         UIApplication.shared.isIdleTimerDisabled = false
-        previousStaleSMBConnection?.close()
-        previousStaleSMBConnection = nil
+        for conn in previousStaleSMBConnections { conn.close() }
+        previousStaleSMBConnections.removeAll()
     }
 }

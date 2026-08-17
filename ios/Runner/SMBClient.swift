@@ -50,6 +50,9 @@ final class SMBClient: NSObject {
     /// token embedded in the `dreamplayersmb://` URL handed to the player.
     /// Connection credentials never cross to Dart — the tokens are opaque.
     private var streamConnections: [String: [(token: String, connection: SMBConnection)]] = [:]
+    /// Extra connections for multi-thread prefetch (token -> additional connections).
+    /// These are owned by BufferedSMBReader and closed when the reader is closed.
+    private var streamExtraConnections: [String: [SMBConnection]] = [:]
     private let streamLock = NSLock()
 
     /// The open parameters behind each stream token, so a reopen (audio-track
@@ -550,6 +553,52 @@ final class SMBClient: NSObject {
         return (connection, oldConnection)
     }
 
+    /// Reconnects ALL connections (primary + extras) for a stream token.
+    /// Returns fresh connections (index 0 = primary) and the stale extras
+    /// that the caller must close AFTER the reader finishes switching.
+    func reconnectAll(for token: String, count: Int) -> (fresh: [SMBConnection], staleExtras: [SMBConnection])? {
+        streamLock.lock()
+        guard let params = streamParams[token] else {
+            streamLock.unlock()
+            return nil
+        }
+        let (serverId, share, path) = (params.serverId, params.share, params.path)
+        let oldExtras = streamExtraConnections.removeValue(forKey: token) ?? []
+        streamLock.unlock()
+
+        guard let record = record(id: serverId) else { return nil }
+        let hostPort = record.port == 445 ? record.host : "\(record.host):\(record.port)"
+        guard let server = URL(string: "smb://\(hostPort)") else { return nil }
+        let username = record.username
+        let domain = record.domain
+        let password = password(for: record.id) ?? ""
+
+        var fresh: [SMBConnection] = []
+        for _ in 0..<count {
+            do {
+                let conn = try runAsync {
+                    try await SMBConnection.connect(
+                        server: server, share: share, path: path,
+                        user: username, password: password, domain: domain
+                    )
+                }
+                fresh.append(conn)
+            } catch {
+                return nil
+            }
+        }
+
+        streamLock.lock()
+        if let idx = streamConnections[serverId]?.firstIndex(where: { $0.token == token }) {
+            streamConnections[serverId]?[idx].connection = fresh[0]
+        }
+        if fresh.count > 1 {
+            streamExtraConnections[token] = Array(fresh.dropFirst())
+        }
+        streamLock.unlock()
+        return (fresh, oldExtras)
+    }
+
     /// Returns the playable URL for `path` inside `share` on a saved server.
     ///
     /// Video files get a `dreamplayersmb://<token>.<ext>` URL: the platform
@@ -586,19 +635,29 @@ final class SMBClient: NSObject {
         let username = record.username
         let domain = record.domain
         let password = password(for: record.id) ?? ""
-        let connection = try runAsync {
-            try await SMBConnection.connect(
-                server: server,
-                share: share,
-                path: path,
-                user: username,
-                password: password,
-                domain: domain
-            )
+
+        // Create PREFETCH_THREADS connections for parallel prefetch.
+        var connections: [SMBConnection] = []
+        for _ in 0..<4 {
+            let conn = try runAsync {
+                try await SMBConnection.connect(
+                    server: server,
+                    share: share,
+                    path: path,
+                    user: username,
+                    password: password,
+                    domain: domain
+                )
+            }
+            connections.append(conn)
         }
+
         let token = UUID().uuidString
         streamLock.lock()
-        streamConnections[serverId, default: []].append((token, connection))
+        streamConnections[serverId, default: []].append((token, connections[0]))
+        if connections.count > 1 {
+            streamExtraConnections[token] = Array(connections.dropFirst())
+        }
         streamParams[token] = (serverId, share, path)
         streamLock.unlock()
 
@@ -606,9 +665,75 @@ final class SMBClient: NSObject {
         return "dreamplayersmb://\(token).\(ext.isEmpty ? "stream" : ext)"
     }
 
+    /// Creates `count` independent SMBConnections for the same file, enabling
+    /// multi-thread parallel prefetch.  The first connection is stored in the
+    /// registry (backward-compatible with `connection(for:)`); extras go into
+    /// `streamExtraConnections` and are closed when `closeShare` is called.
+    /// Returns all `count` connections (the first is also the primary).
+    func openShareConnections(
+        serverId: String, share: String, path: String, count: Int
+    ) throws -> [SMBConnection] {
+        guard let record = record(id: serverId) else { throw SMBError.unknownServer }
+        let hostPort = record.port == 445 ? record.host : "\(record.host):\(record.port)"
+        guard let server = URL(string: "smb://\(hostPort)") else {
+            throw SMBError.initFailed(record.host)
+        }
+        let username = record.username
+        let domain = record.domain
+        let password = password(for: record.id) ?? ""
+
+        var connections: [SMBConnection] = []
+        for i in 0..<count {
+            let conn = try runAsync {
+                try await SMBConnection.connect(
+                    server: server, share: share, path: path,
+                    user: username, password: password, domain: domain
+                )
+            }
+            connections.append(conn)
+        }
+
+        let token = UUID().uuidString
+        streamLock.lock()
+        streamConnections[serverId, default: []].append((token, connections[0]))
+        if connections.count > 1 {
+            streamExtraConnections[token] = Array(connections.dropFirst())
+        }
+        streamParams[token] = (serverId, share, path)
+        streamLock.unlock()
+        return connections
+    }
+
+    /// All SMBConnections for a stream token: the primary (stored in
+    /// `streamConnections`) plus any extras from `openShareConnections`.
+    /// The primary connection is at index 0.
+    func connections(for token: String) -> [SMBConnection] {
+        streamLock.lock()
+        defer { streamLock.unlock() }
+        var result: [SMBConnection] = []
+        for (_, items) in streamConnections {
+            if let match = items.first(where: { $0.token == token }) {
+                result.append(match.connection)
+                break
+            }
+        }
+        if let extras = streamExtraConnections[token] {
+            result.append(contentsOf: extras)
+        }
+        return result
+    }
+
     private func closeShare(serverId: String) {
         streamLock.lock()
         let items = streamConnections.removeValue(forKey: serverId) ?? []
+        // Also collect extra connections for tokens owned by this server.
+        var extraTokens: [String] = []
+        for item in items {
+            if let extras = streamExtraConnections.removeValue(forKey: item.token) {
+                for conn in extras { conn.close() }
+            }
+            extraTokens.append(item.token)
+        }
         streamParams = streamParams.filter { $0.value.serverId != serverId }
         streamLock.unlock()
         for item in items {
