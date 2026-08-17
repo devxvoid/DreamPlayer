@@ -591,14 +591,14 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         let activeSub = engine.activeSubtitleTrackIndex
         let resumeAt = engine.currentTime
 
-        // Stop the engine FIRST so its FFmpeg demux thread fully releases
-        // the old BufferedSMBReader (including its prefetch task) before we
-        // mint a new one. Without this, the old reader's prefetch can still
-        // be reading from the stale SMBConnection when the new reader starts,
-        // and the engine's internal reload races the teardown.
-        engine.stop()
-        emit()
-
+        // Mint a FRESH SMBConnection + BufferedSMBReader for the reload.
+        // Do NOT call engine.stop() first — the initial open() works by
+        // calling load() directly (which internally stops the old source),
+        // and stop() + load() on the same engine can race: stop() signals
+        // the demux thread to quit but returns before it fully releases the
+        // old IOReader, so the new load()'s probe reads against a half-torn-
+        // down source and gets EIO (-5). load() handles the transition itself.
+        //
         // The reconnect does a blocking SMB handshake (runAsync semaphore);
         // keep it off the main actor regardless of threading semantics.
         let pair = await Task.detached(priority: .userInitiated) {
@@ -612,8 +612,8 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         let connection = pair.fresh
         let stale = pair.stale
         // Close the stale connection from the PREVIOUS audio-track switch —
-        // by now AetherEngine has fully released the old reader (we stopped
-        // the engine above, so the old reader's prefetch is cancelled).
+        // by now AetherEngine has fully released the old reader (the new
+        // load() below replaces the demuxer synchronously).
         previousStaleSMBConnection?.close()
         previousStaleSMBConnection = stale
         let source: MediaSource = .custom(
@@ -638,12 +638,6 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             if let activeSub, engine.subtitleTracks.contains(where: { $0.id == activeSub }) {
                 engine.selectSubtitleTrack(index: activeSub)
             }
-            // Do NOT close the stale connection here — AetherEngine's
-            // internal reload may still be draining I/O from the old reader
-            // (FFmpeg demux thread), and tearing down the socket mid-read
-            // causes a hard crash (EXC_BAD_ACCESS). The stale connection is
-            // cleaned up by SMBClient.closeShare() when the user leaves the
-            // SMB browser, or by the next reconnect() call which swaps it out.
             emit()
         } catch {
             lastError = String(describing: error)
