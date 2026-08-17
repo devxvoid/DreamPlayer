@@ -222,6 +222,10 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     // SMBConnection (SMBClient owns its lifetime). ----
     private var smbToken: String?
     private var isSMBStream = false
+    /// File extension from the SMB token URL, passed to AetherEngine as a
+    /// `formatHint` so FFmpeg skips the byte-level probe.  `nil` for
+    /// extensionless files (e.g. "stream" fallback in `openShare`).
+    private var smbFormatHint: String?
     /// Stale SMBConnection from the last audio-track switch. Kept alive until
     /// the NEXT switch or teardown so AetherEngine's FFmpeg demux thread can
     /// finish draining I/O without the socket being torn down underneath it.
@@ -422,6 +426,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         var webDAVSource: (url: URL, headers: [String: String], allowSelfSigned: Bool)?
         smbToken = nil
         isSMBStream = false
+        smbFormatHint = nil
         if let path, !path.isEmpty {
             localURL = URL(fileURLWithPath: path)
             source = .url(localURL!)
@@ -439,9 +444,10 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             // connection's lifetime (closed on closeShare / server delete).
             smbToken = parsed.token
             isSMBStream = true
+            smbFormatHint = parsed.ext.isEmpty || parsed.ext == "stream" ? nil : parsed.ext
             source = .custom(
                 BufferedSMBReader(source: connection),
-                formatHint: nil
+                formatHint: smbFormatHint
             )
         } else if let uri, let u = URL(string: uri),
                   (u.scheme?.lowercased() == "http" || u.scheme?.lowercased() == "https"),
@@ -520,9 +526,10 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                             allowSelfSigned: webAllowSelfSigned
                         )
                     }.value
+                    let ext = webURL.pathExtension.lowercased()
                     source = .custom(
                         BufferedSMBReader(source: byteSource),
-                        formatHint: nil
+                        formatHint: ext.isEmpty ? nil : ext
                     )
                 }
                 guard let finalSource = source else {
@@ -618,7 +625,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         previousStaleSMBConnection = stale
         let source: MediaSource = .custom(
             BufferedSMBReader(source: connection),
-            formatHint: nil
+            formatHint: smbFormatHint
         )
         lastSource = source
         do {
@@ -896,8 +903,8 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
 
     /// `dreamplayersmb://<token>.<ext>` -> (token, ext). nil when the URI is not
     /// an SMB stream URL. Token/ext parsed by string so URL quirks (empty path)
-    /// can't break resolution; the extension is informational only (the custom
-    /// source is probed, not format-hinted).
+    /// can't break resolution; the extension is forwarded to AetherEngine as a
+    /// `formatHint` so FFmpeg skips its byte-level format probe.
     private static func smbToken(in uri: String) -> (token: String, ext: String)? {
         let prefix = "dreamplayersmb://"
         guard uri.hasPrefix(prefix) else { return nil }
