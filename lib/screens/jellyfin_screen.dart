@@ -437,7 +437,6 @@ class _JellyfinScreenState extends State<JellyfinScreen> {
   }
 
   Widget _serverList(BuildContext context) {
-    final theme = Theme.of(context);
     if (_servers.isEmpty && _discovered.isEmpty) {
       return const Center(
         child: Column(

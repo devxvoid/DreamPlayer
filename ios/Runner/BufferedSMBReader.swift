@@ -68,10 +68,6 @@ final class BufferedSMBReader: IOReader, @unchecked Sendable {
         // aborts THIS read only; the next read (engine reload reopen) is clean.
         let epoch = cancelEpoch
         cond.lock()
-        if fetchFailed && windowEmpty() {
-            cond.unlock()
-            return -1
-        }
         if !serveIfResident(into: buffer, max: Int(size)) {
             // Position is outside [windowStart, windowStart + count).
             let frontier = windowStart + Int64(window.count)
@@ -195,20 +191,30 @@ final class BufferedSMBReader: IOReader, @unchecked Sendable {
         }
     }
 
-    /// Block until data is resident at `position`, EOF, fetch failure, a
-    /// cancel epoch change (teardown abort), or a 10-second timeout.
-    /// Caller holds `cond`.
+    /// Block until data is resident at `position`, EOF, a cancel epoch
+    /// change (teardown abort), or a 10-second timeout. Transient prefetch
+    /// failures are tolerated: the flag is cleared and the caller waits
+    /// for the prefetch task's automatic retry (~500 ms) to succeed before
+    /// giving up, so a single SMB hiccup during the probe phase does not
+    /// kill the session. Caller holds `cond`.
     private func waitForDataLocked(epoch: UInt64) {
         let deadline = Date().addingTimeInterval(10)
+        var retriesLeft = 3
         while !closed && cancelEpoch == epoch {
             if !windowEmpty() { return }
-            if fetchFailed || eof { return }
-            if Date() >= deadline {
-                // Timeout: return so the read returns 0 (EOF-ish) instead
-                // of blocking the engine forever. The prefetch task will
-                // retry on the next kick.
-                return
+            if eof { return }
+            if fetchFailed {
+                if retriesLeft <= 0 { return }
+                retriesLeft -= 1
+                // Clear so the prefetch retry can set it again on next failure.
+                fetchFailed = false
+                // Wait briefly for the prefetch retry (500 ms sleep + fetch).
+                let retryWait = Date().addingTimeInterval(2)
+                let waitUntil = min(deadline, retryWait)
+                cond.wait(until: waitUntil)
+                continue
             }
+            if Date() >= deadline { return }
             cond.wait(until: deadline)
         }
     }
