@@ -134,7 +134,7 @@ final class BufferedSMBReader: IOReader, @unchecked Sendable {
         }
         position += Int64(toRead)
         lastServed = toRead
-        ringLock.notifyAll()
+        ringLock.broadcast()
         ringLock.unlock()
         return Int32(toRead)
     }
@@ -156,14 +156,14 @@ final class BufferedSMBReader: IOReader, @unchecked Sendable {
             reanchorLocked(at: candidate)
         }
         position = candidate
-        ringLock.notifyAll()
+        ringLock.broadcast()
         return position
     }
 
     func close() {
         ringLock.lock()
         closed = true
-        ringLock.notifyAll()
+        ringLock.broadcast()
         ringLock.unlock()
         for t in prefetchTasks { t.cancel() }
         prefetchTasks.removeAll()
@@ -172,7 +172,7 @@ final class BufferedSMBReader: IOReader, @unchecked Sendable {
     func cancel() {
         ringLock.lock()
         cancelEpoch &+= 1
-        ringLock.notifyAll()
+        ringLock.broadcast()
         ringLock.unlock()
     }
 
@@ -181,8 +181,7 @@ final class BufferedSMBReader: IOReader, @unchecked Sendable {
             source: sources[0],
             ownsSource: false,
             discImageProbeEnabled: discProbe,
-            chunkSize: chunkSize,
-            ringCapacity: min(8 * 1024 * 1024, ringCapacity)
+            chunkSize: chunkSize
         )
     }
 
@@ -205,16 +204,15 @@ final class BufferedSMBReader: IOReader, @unchecked Sendable {
         return Int(end - position)
     }
 
-    private func reanchorLocked(at: Int64? = nil) {
-        position = at ?? position
+    private func reanchorLocked(at newpos: Int64? = nil) {
+        position = newpos ?? position
         bufStart = position
         valid = 0
         bufEof = false
         nextWritePos = position
         pendingChunks.removeAll(keepingCapacity: true)
         ringEpoch &+= 1
-        ringLock.notifyAll()
-        // Prefetch tasks detect the epoch change and self-adjust on next iteration.
+        ringLock.broadcast()
     }
 
     // MARK: - Prefetch
@@ -226,13 +224,14 @@ final class BufferedSMBReader: IOReader, @unchecked Sendable {
         for i in 0..<Self.PREFETCH_THREADS {
             let src = i < sources.count ? sources[i] : sources[0]
             let task = Task.detached(priority: .userInitiated) { [weak self] in
-                self?.prefetchLoop(gen: gen, threadIdx: i, source: src)
+                guard let self else { return }
+                await self.prefetchLoop(gen: gen, threadIdx: i, source: src)
             }
             prefetchTasks.append(task)
         }
     }
 
-    private func prefetchLoop(gen: UInt64, threadIdx: Int, source: ByteRangeSource) {
+    private func prefetchLoop(gen: UInt64, threadIdx: Int, source: ByteRangeSource) async {
         let tmpBuf = UnsafeMutableRawPointer.allocate(byteCount: chunkSize, alignment: 16)
         defer { tmpBuf.deallocate() }
 
@@ -251,7 +250,7 @@ final class BufferedSMBReader: IOReader, @unchecked Sendable {
                 if bufEof { ringLock.wait(); continue }
 
                 // Trim consumed prefix.
-                let consumed = (position - bufStart).clamped(to: 0...)
+                let consumed = Swift.max(position - bufStart, 0)
                 if consumed > 0 {
                     bufStart = position
                     valid -= consumed
@@ -279,7 +278,6 @@ final class BufferedSMBReader: IOReader, @unchecked Sendable {
             do {
                 let data = try await source.read(at: readAt, length: readLen)
                 got = data.count
-                // Copy from Data into tmpBuf.
                 data.withUnsafeBytes { raw in
                     if let base = raw.baseAddress {
                         tmpBuf.copyMemory(from: base, byteCount: got)
@@ -323,25 +321,17 @@ final class BufferedSMBReader: IOReader, @unchecked Sendable {
                         pendingChunks[readAt] = got
                     }
                 }
-                ringLock.notifyAll()
+                ringLock.broadcast()
                 ringLock.unlock()
             } else if got == -1 || (got == 0 && readLen > 0) {
                 ringLock.lock()
                 if epoch == ringEpoch { bufEof = true }
-                ringLock.notifyAll()
+                ringLock.broadcast()
                 ringLock.unlock()
             } else {
                 // Transient error: brief pause then retry.
                 try? await Task.sleep(nanoseconds: 200_000_000)
             }
         }
-    }
-}
-
-// MARK: - Helpers
-
-private extension Comparable {
-    func clamped(to range: ClosedRange<Self>) -> Self {
-        min(max(self, range.lowerBound), range.upperBound)
     }
 }
