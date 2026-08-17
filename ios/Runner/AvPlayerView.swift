@@ -590,6 +590,15 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         if engine.activeAudioTrackIndex == audioIndex { return }
         let activeSub = engine.activeSubtitleTrackIndex
         let resumeAt = engine.currentTime
+
+        // Stop the engine FIRST so its FFmpeg demux thread fully releases
+        // the old BufferedSMBReader (including its prefetch task) before we
+        // mint a new one. Without this, the old reader's prefetch can still
+        // be reading from the stale SMBConnection when the new reader starts,
+        // and the engine's internal reload races the teardown.
+        engine.stop()
+        emit()
+
         // The reconnect does a blocking SMB handshake (runAsync semaphore);
         // keep it off the main actor regardless of threading semantics.
         let pair = await Task.detached(priority: .userInitiated) {
@@ -603,8 +612,8 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         let connection = pair.fresh
         let stale = pair.stale
         // Close the stale connection from the PREVIOUS audio-track switch —
-        // by now AetherEngine has fully released the old reader (we are in a
-        // new switch, so the previous load() has long since completed).
+        // by now AetherEngine has fully released the old reader (we stopped
+        // the engine above, so the old reader's prefetch is cancelled).
         previousStaleSMBConnection?.close()
         previousStaleSMBConnection = stale
         let source: MediaSource = .custom(

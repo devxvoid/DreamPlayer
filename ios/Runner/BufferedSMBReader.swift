@@ -195,13 +195,21 @@ final class BufferedSMBReader: IOReader, @unchecked Sendable {
         }
     }
 
-    /// Block until data is resident at `position`, EOF, fetch failure, or a
-    /// cancel epoch change (teardown abort). Caller holds `cond`.
+    /// Block until data is resident at `position`, EOF, fetch failure, a
+    /// cancel epoch change (teardown abort), or a 10-second timeout.
+    /// Caller holds `cond`.
     private func waitForDataLocked(epoch: UInt64) {
+        let deadline = Date().addingTimeInterval(10)
         while !closed && cancelEpoch == epoch {
             if !windowEmpty() { return }
             if fetchFailed || eof { return }
-            cond.wait()
+            if Date() >= deadline {
+                // Timeout: return so the read returns 0 (EOF-ish) instead
+                // of blocking the engine forever. The prefetch task will
+                // retry on the next kick.
+                return
+            }
+            cond.wait(until: deadline)
         }
     }
 
@@ -250,13 +258,14 @@ final class BufferedSMBReader: IOReader, @unchecked Sendable {
                     self.cond.lock()
                     if !self.closed && !self.eof {
                         self.fetchFailed = true
-                        // Park until the next read/seek kick. A read that hits
-                        // the gap now returns -1 (demux error); a seek re-anchors
-                        // and broadcasts to retry the fetch here.
-                        self.cond.wait()
+                        self.cond.broadcast()
                     }
-                    self.cond.broadcast()
                     self.cond.unlock()
+                    // Retry after a brief pause instead of parking forever —
+                    // transient SMB errors (Wi-Fi blip, NAS hiccup) resolve
+                    // quickly and the next kick from read/seek will clear
+                    // fetchFailed if this retry succeeds.
+                    try? await Task.sleep(nanoseconds: 500_000_000)
                 }
             }
         }
