@@ -1097,6 +1097,7 @@ class ExoPlayerView(
         map["playing"] = player.isPlaying
         map["positionMs"] = player.currentPosition
         map["durationMs"] = if (player.duration == C.TIME_UNSET) 0L else player.duration
+        map["bufferedMs"] = player.bufferedPosition
         map["buffering"] = state == Player.STATE_BUFFERING
         map["ended"] = state == Player.STATE_ENDED
         map["videoCodecs"] = videoFormat?.codecs

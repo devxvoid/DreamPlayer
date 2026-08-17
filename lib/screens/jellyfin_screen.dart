@@ -332,20 +332,44 @@ class _JellyfinScreenState extends State<JellyfinScreen> {
                 _crumbs = const [];
                 _loading = false;
               }),
-            )
-          else
-            IconButton(
-              tooltip: 'Scan local network',
-              icon: const Icon(Icons.wifi_find),
-              onPressed: _scanning ? null : _scanNetwork,
             ),
         ],
       ),
       floatingActionButton: browsing == null
-          ? FloatingActionButton.extended(
-              onPressed: _addServer,
-              icon: const Icon(Icons.add),
-              label: const Text('Add server'),
+          ? Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_scanning)
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 8),
+                    child: SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  )
+                else
+                  FloatingActionButton(
+                    heroTag: 'jellyfin_scan',
+                    onPressed: _scanNetwork,
+                    tooltip: 'Scan network',
+                    child: const Icon(Icons.wifi_find),
+                  ),
+                const SizedBox(height: 12),
+                FloatingActionButton(
+                  heroTag: 'jellyfin_refresh',
+                  onPressed: _loadServers,
+                  tooltip: 'Refresh',
+                  child: const Icon(Icons.refresh),
+                ),
+                const SizedBox(height: 12),
+                FloatingActionButton(
+                  heroTag: 'jellyfin_add',
+                  onPressed: _addServer,
+                  tooltip: 'Add server',
+                  child: const Icon(Icons.add),
+                ),
+              ],
             )
           : null,
       body: _body(context),
@@ -415,44 +439,17 @@ class _JellyfinScreenState extends State<JellyfinScreen> {
   Widget _serverList(BuildContext context) {
     final theme = Theme.of(context);
     if (_servers.isEmpty && _discovered.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.live_tv_outlined, size: 64),
-                const SizedBox(height: 16),
-                Text(
-                  'Add your Jellyfin or Emby server to browse and play your '
-                  'media library',
-                  textAlign: TextAlign.center,
-                  style: theme.textTheme.titleMedium,
-                ),
-                const SizedBox(height: 16),
-                FilledButton.icon(
-                  onPressed: _addServer,
-                  icon: const Icon(Icons.add),
-                  label: const Text('Add server'),
-                ),
-                const SizedBox(height: 8),
-                TextButton.icon(
-                  onPressed: _scanning ? null : _scanNetwork,
-                  icon: _scanning
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.wifi_find),
-                  label: Text(
-                    _scanning ? 'Scanning\u2026' : 'Scan local network',
-                  ),
-                ),
-              ],
+      return const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.live_tv_outlined, size: 48, color: Colors.white38),
+            SizedBox(height: 12),
+            Text(
+              'Nothing yet',
+              style: TextStyle(color: Colors.white54),
             ),
-          ),
+          ],
         ),
       );
     }

@@ -205,20 +205,27 @@ class _WebDavScreenState extends State<WebDavScreen> {
                 _path = '/';
                 _loading = false;
               }),
-            )
-          else
-            IconButton(
-              tooltip: 'Refresh',
-              icon: const Icon(Icons.refresh),
-              onPressed: _loadServers,
             ),
         ],
       ),
       floatingActionButton: browsing == null
-          ? FloatingActionButton.extended(
-              onPressed: _addServer,
-              icon: const Icon(Icons.add),
-              label: const Text('Add server'),
+          ? Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                FloatingActionButton(
+                  heroTag: 'webdav_refresh',
+                  onPressed: _loadServers,
+                  tooltip: 'Refresh',
+                  child: const Icon(Icons.refresh),
+                ),
+                const SizedBox(height: 12),
+                FloatingActionButton(
+                  heroTag: 'webdav_add',
+                  onPressed: _addServer,
+                  tooltip: 'Add server',
+                  child: const Icon(Icons.add),
+                ),
+              ],
             )
           : null,
       body: _body(context),
@@ -281,28 +288,17 @@ class _WebDavScreenState extends State<WebDavScreen> {
 
   Widget _serverList(BuildContext context) {
     if (_servers.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.cloud_outlined, size: 64),
-              const SizedBox(height: 16),
+      return const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.cloud_outlined, size: 48, color: Colors.white38),
+            SizedBox(height: 12),
               Text(
-                'Add your WebDAV server (NAS, Nextcloud, Synology...) to '
-                'browse and play videos from it',
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.titleMedium,
+                'Nothing yet',
+                style: TextStyle(color: Colors.white54),
               ),
-              const SizedBox(height: 16),
-              FilledButton.icon(
-                onPressed: _addServer,
-                icon: const Icon(Icons.add),
-                label: const Text('Add server'),
-              ),
-            ],
-          ),
+          ],
         ),
       );
     }

@@ -730,6 +730,15 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         let positionMs = Int64(engine.currentTime * 1000)
         let durationMs = Int64(engine.duration * 1000)
 
+        // Buffered position: furthest loaded time across AVPlayer's ranges.
+        let bufferedMs: Int64 = {
+            guard let player = findPlayerLayer()?.player,
+                  let ranges = player.currentItem?.loadedTimeRanges,
+                  let last = ranges.last?.timeRangeValue,
+                  last.end.isValid else { return 0 }
+            return Int64(CMTimeGetSeconds(last.end) * 1000)
+        }()
+
         let videoCodec = Self.displayVideoCodec(base: videoCodecName, isDV: isDolbyVision, profile: dvProfile)
         let colorTransfer = Self.colorTransfer(for: engine.videoFormat)
 
@@ -750,6 +759,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             "ended": ended,
             "positionMs": positionMs,
             "durationMs": durationMs,
+            "bufferedMs": bufferedMs,
             "videoCodecs": videoCodec,
             "videoMime": "",
             "videoWidth": videoWidth,

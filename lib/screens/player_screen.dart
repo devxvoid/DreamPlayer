@@ -45,6 +45,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
 
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
+  Duration _buffered = Duration.zero;
   bool _playing = false;
   bool _buffering = false;
   bool _completed = false;
@@ -58,6 +59,11 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
 
   bool _dragging = false;
   double _dragValue = 0;
+
+  /// Auto-retry on transient IO errors (SMB disconnect, network blip).
+  int _ioRetries = 0;
+  static const int _maxIoRetries = 3;
+  bool _retrying = false;
 
   String? _liveVideoCodec;
   String? _liveVideoCodecRaw;
@@ -191,6 +197,33 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
           ? _current.withPlaybackInfo(duration: _duration)
           : _current;
 
+  /// Transient IO errors worth retrying (SMB drops, network blips).
+  static bool _isRetryableIoError(String code) =>
+      code == 'error_code_io_unspecified' ||
+      code == 'error_code_io_network_connection_failed' ||
+      code == 'error_code_io_network_connection_timeout' ||
+      code == 'error_code_timeout';
+
+  /// Reopen the current video at [pos], resetting the retry counter on
+  /// success so a later error starts fresh.
+  Future<void> _reopenAt(Duration pos, Duration dur) async {
+    final video = _current;
+    try {
+      await _exo?.open(
+        video.path ?? '',
+        uri: video.uri,
+        subtitleUri: video.subtitleUri,
+        startPositionMs: pos.inMilliseconds,
+        httpHeaders: video.httpHeaders,
+        allowSelfSigned: video.allowSelfSigned,
+      );
+      _exo?.setFitMode(_fitMode);
+      _ioRetries = 0;
+    } catch (_) {
+      // Reopen itself failed — the error surface will show it.
+    }
+  }
+
   Future<void> _clearResume() async {
     if (_inTests) return;
     final key = _resumeKey;
@@ -243,9 +276,35 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     _playing = e.playing;
     _position = e.position;
     _duration = e.duration;
+    _buffered = e.buffered;
     _buffering = e.buffering;
     _completed = e.ended;
-    if (e.error != null && e.error!.isNotEmpty) _error = _friendlyError(e);
+    // Reset retry counter once playback is healthy (playing + no error).
+    if (_playing && !_retrying) _ioRetries = 0;
+    if (e.error != null && e.error!.isNotEmpty) {
+      final code = e.error!;
+      // Auto-retry on transient IO errors (SMB disconnect, network blip).
+      if (_isRetryableIoError(code) && _ioRetries < _maxIoRetries && !_retrying) {
+        _ioRetries++;
+        _retrying = true;
+        final pos = _position;
+        final dur = _duration;
+        debugPrint('DREAM_RETRY IO error $code, attempt $_ioRetries/$_maxIoRetries, '
+            'pos=${pos.inMilliseconds}ms');
+        // Brief delay then reopen at the saved position.
+        Future.delayed(const Duration(seconds: 2), () {
+          if (!mounted || _retrying != true) return;
+          _retrying = false;
+          _error = null;
+          setState(() {});
+          _reopenAt(pos, dur);
+        });
+        _error = 'Reconnecting\u2026 ($_ioRetries/$_maxIoRetries)';
+        setState(() {});
+        return;
+      }
+      _error = _friendlyError(e);
+    }
     _subtitleOn = e.subtitleOn;
     _subtitleTracks = e.subtitleTracks;
     _selectedSubtitleTrack = e.selectedSubtitleTrack;
@@ -1035,9 +1094,12 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                                 ),
                               ],
                             ),
-                            Slider(
+                            _BufferedSeekBar(
                               value: sliderValue,
                               max: maxMs,
+                              bufferedMs: _buffered.inMilliseconds
+                                  .toDouble()
+                                  .clamp(0, maxMs),
                               onChangeStart: _onSeekStart,
                               onChanged: _onSeekUpdate,
                               onChangeEnd: _onSeekEnd,
@@ -1085,6 +1147,170 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Custom seekbar with a gray buffer-progress indicator behind the active
+/// progress. Flutter's [Slider] has no built-in buffer visualization, so this
+/// draws three layers: background track (dark), buffer fill (medium gray),
+/// progress fill (white), and a thumb circle.
+class _BufferedSeekBar extends StatefulWidget {
+  const _BufferedSeekBar({
+    required this.value,
+    required this.max,
+    required this.bufferedMs,
+    this.onChangeStart,
+    this.onChanged,
+    this.onChangeEnd,
+  });
+
+  final double value;
+  final double max;
+  final double bufferedMs;
+  final ValueChanged<double>? onChangeStart;
+  final ValueChanged<double>? onChanged;
+  final ValueChanged<double>? onChangeEnd;
+
+  @override
+  State<_BufferedSeekBar> createState() => _BufferedSeekBarState();
+}
+
+class _BufferedSeekBarState extends State<_BufferedSeekBar> {
+  static const double _trackHeight = 4;
+  static const double _thumbRadius = 7;
+  static const double _touchHeight = 36; // total tappable area
+  bool _dragging = false;
+  double _dragValue = 0;
+
+  double get _clampedMax => widget.max > 0 ? widget.max : 1;
+
+  double _fractionFromOffset(double dx, double width) {
+    final fraction = (dx / width).clamp(0.0, 1.0);
+    return fraction * _clampedMax;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final currentMs = _dragging ? _dragValue : widget.value;
+    final positionFraction = (currentMs / _clampedMax).clamp(0.0, 1.0);
+    final bufferFraction = (widget.bufferedMs / _clampedMax).clamp(0.0, 1.0);
+
+    return GestureDetector(
+      onHorizontalDragStart: (details) {
+        final box = context.findRenderObject() as RenderBox?;
+        if (box == null) return;
+        final ms = _fractionFromOffset(
+          box.globalToLocal(details.globalPosition).dx,
+          box.size.width,
+        );
+        setState(() {
+          _dragging = true;
+          _dragValue = ms;
+        });
+        widget.onChangeStart?.call(ms);
+      },
+      onHorizontalDragUpdate: (details) {
+        final box = context.findRenderObject() as RenderBox?;
+        if (box == null) return;
+        final ms = _fractionFromOffset(
+          box.globalToLocal(details.globalPosition).dx,
+          box.size.width,
+        );
+        setState(() => _dragValue = ms);
+        widget.onChanged?.call(ms);
+      },
+      onHorizontalDragEnd: (_) {
+        final ms = _dragValue;
+        setState(() => _dragging = false);
+        widget.onChangeEnd?.call(ms);
+      },
+      onTapUp: (details) {
+        final box = context.findRenderObject() as RenderBox?;
+        if (box == null) return;
+        final ms = _fractionFromOffset(
+          box.globalToLocal(details.globalPosition).dx,
+          box.size.width,
+        );
+        widget.onChangeStart?.call(ms);
+        widget.onChanged?.call(ms);
+        widget.onChangeEnd?.call(ms);
+      },
+      child: SizedBox(
+        height: _touchHeight,
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final width = constraints.maxWidth;
+                final thumbX = positionFraction * width;
+                final bufferX = bufferFraction * width;
+                return Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    // Background track
+                    Positioned(
+                      top: (_touchHeight - _trackHeight) / 2,
+                      left: 0,
+                      right: 0,
+                      child: Container(
+                        height: _trackHeight,
+                        decoration: BoxDecoration(
+                          color: Colors.white24,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                    // Buffer fill
+                    Positioned(
+                      top: (_touchHeight - _trackHeight) / 2,
+                      left: 0,
+                      child: Container(
+                        width: bufferX.clamp(0, width),
+                        height: _trackHeight,
+                        decoration: BoxDecoration(
+                          color: Colors.white54,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                    // Progress fill
+                    Positioned(
+                      top: (_touchHeight - _trackHeight) / 2,
+                      left: 0,
+                      child: Container(
+                        width: thumbX.clamp(0, width),
+                        height: _trackHeight,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                    // Thumb
+                    Positioned(
+                      top: (_touchHeight - _thumbRadius * 2) / 2,
+                      left: (thumbX - _thumbRadius).clamp(
+                        -_thumbRadius,
+                        width - _thumbRadius,
+                      ),
+                      child: Container(
+                        width: _thumbRadius * 2,
+                        height: _thumbRadius * 2,
+                        decoration: const BoxDecoration(
+                          color: Colors.white,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+        ),
       ),
     );
   }

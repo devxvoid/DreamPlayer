@@ -388,38 +388,51 @@ class _SmbScreenState extends State<SmbScreen> {
                 _path = '';
                 _loading = false;
               }),
-            )
-          else ...[
-            IconButton(
-              tooltip: 'Scan for servers',
-              icon: _scanning
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.wifi_find),
-              onPressed: _scanning ? null : _discover,
             ),
-            IconButton(
-              tooltip: 'Refresh',
-              icon: const Icon(Icons.refresh),
-              onPressed: _loadServers,
-            ),
-          ],
         ],
       ),
       floatingActionButton: browsing == null
-          ? FloatingActionButton.extended(
-              onPressed: _addServer,
-              icon: const Icon(Icons.add),
-              label: const Text('Add server'),
+          ? Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_scanning)
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 8),
+                    child: SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  )
+                else
+                  FloatingActionButton(
+                    heroTag: 'smb_scan',
+                    onPressed: _discover,
+                    tooltip: 'Scan network',
+                    child: const Icon(Icons.wifi_find),
+                  ),
+                const SizedBox(height: 12),
+                FloatingActionButton(
+                  heroTag: 'smb_refresh',
+                  onPressed: _loadServers,
+                  tooltip: 'Refresh',
+                  child: const Icon(Icons.refresh),
+                ),
+                const SizedBox(height: 12),
+                FloatingActionButton(
+                  heroTag: 'smb_add',
+                  onPressed: _addServer,
+                  tooltip: 'Add server',
+                  child: const Icon(Icons.add),
+                ),
+              ],
             )
           : _share.isEmpty
-              ? FloatingActionButton.extended(
+              ? FloatingActionButton(
+                  heroTag: 'smb_add_share',
                   onPressed: _addShare,
-                  icon: const Icon(Icons.add),
-                  label: const Text('Add share'),
+                  tooltip: 'Add share',
+                  child: const Icon(Icons.add),
                 )
               : null,
       body: _body(context),
@@ -490,34 +503,17 @@ class _SmbScreenState extends State<SmbScreen> {
 
   Widget _serverList(BuildContext context) {
     if (_servers.isEmpty && _discovered.isEmpty && !_scanning) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.dns_outlined, size: 64),
-              const SizedBox(height: 16),
+      return const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.dns_outlined, size: 48, color: Colors.white38),
+            SizedBox(height: 12),
               Text(
-                'Add your NAS or LAN share to play videos from it, or scan '
-                'the network to find one',
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.titleMedium,
+                'Nothing yet',
+                style: TextStyle(color: Colors.white54),
               ),
-              const SizedBox(height: 16),
-              FilledButton.icon(
-                onPressed: _addServer,
-                icon: const Icon(Icons.add),
-                label: const Text('Add server'),
-              ),
-              const SizedBox(height: 8),
-              OutlinedButton.icon(
-                onPressed: _discover,
-                icon: const Icon(Icons.wifi_find),
-                label: const Text('Scan network'),
-              ),
-            ],
-          ),
+          ],
         ),
       );
     }

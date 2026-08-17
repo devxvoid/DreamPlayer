@@ -164,6 +164,7 @@ class ExoPlayerEvent {
     required this.ended,
     required this.positionMs,
     required this.durationMs,
+    this.bufferedMs = 0,
     this.videoCodecs,
     this.videoMime,
     this.videoWidth = 0,
@@ -192,6 +193,7 @@ class ExoPlayerEvent {
   final bool ended;
   final int positionMs;
   final int durationMs;
+  final int bufferedMs;
   final String? videoCodecs;
   final String? videoMime;
   final int videoWidth;
@@ -236,6 +238,7 @@ class ExoPlayerEvent {
 
   Duration get position => Duration(milliseconds: positionMs);
   Duration get duration => Duration(milliseconds: durationMs);
+  Duration get buffered => Duration(milliseconds: bufferedMs);
 
   static ExoPlayerEvent fromMap(Map<dynamic, dynamic> m) {
     int asInt(dynamic v, [int fallback = 0]) => v is num ? v.toInt() : fallback;
@@ -246,6 +249,7 @@ class ExoPlayerEvent {
       ended: m['ended'] == true,
       positionMs: asInt(m['positionMs']),
       durationMs: asInt(m['durationMs']),
+      bufferedMs: asInt(m['bufferedMs']),
       videoCodecs: m['videoCodecs'] as String?,
       videoMime: m['videoMime'] as String?,
       videoWidth: asInt(m['videoWidth']),
