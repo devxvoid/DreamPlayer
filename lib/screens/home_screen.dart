@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'dart:io' show Platform;
 
 import '../app.dart' show appRouteObserver;
 import '../models/video_item.dart';
@@ -13,6 +14,7 @@ import '../widgets/folder_card.dart';
 import '../widgets/video_card.dart';
 import 'file_browser_screen.dart';
 import 'jellyfin_screen.dart';
+import 'smb_screen.dart';
 import 'tmd_details_screen.dart';
 import 'webdav_screen.dart';
 
@@ -593,6 +595,14 @@ class _HomeScreenState extends State<HomeScreen>
               subtitle: const Text('Jellyfin / Emby media server'),
               onTap: () => Navigator.of(context).pop('jellyfin'),
             ),
+            if (Platform.isAndroid) ...[
+              ListTile(
+                leading: const Icon(Icons.folder_shared_outlined),
+                title: const Text('Network shares'),
+                subtitle: const Text('SMB / NAS shares'),
+                onTap: () => Navigator.of(context).pop('smb'),
+              ),
+            ],
             ListTile(
               leading: const Icon(Icons.video_library_outlined),
               title: const Text('Add folder to library'),
@@ -619,6 +629,13 @@ class _HomeScreenState extends State<HomeScreen>
         await Navigator.of(context).push(
           MaterialPageRoute<void>(builder: (_) => const JellyfinScreen()),
         );
+      case 'smb':
+        if (Platform.isAndroid) {
+          await Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => const SmbScreen()),
+          );
+        }
+        break;
       case 'storage':
         await Navigator.of(context).push(
           MaterialPageRoute<void>(builder: (_) => const FileBrowserScreen()),
