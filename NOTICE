@@ -73,10 +73,10 @@ FFmpegBuild (dynamically linked FFmpeg frameworks for AetherEngine)
   License: GNU Lesser General Public License v2.1 or later (no GPL components)
   https://github.com/superuser404notfound/FFmpegBuild
 
-AMSMB2 4.0.0 (SMB2/3 client)
-  Copyright (C) Amir Abbas Mousavian
+SMBClient (SMB2/3 client, bundled via AetherEngineSMB for WebDAV's ByteRangeSource)
+  Copyright (C) 2024 Kishikawa Katsumi
   License: MIT
-  https://github.com/amosavian/AMSMB2
+  https://github.com/kishikawakatsumi/SMBClient
 
 -------------------------------------------------------------------------------
 

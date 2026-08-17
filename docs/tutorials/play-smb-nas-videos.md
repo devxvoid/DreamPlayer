@@ -2,11 +2,11 @@
 
 **Video walkthrough (iOS):** [YouTube Short](https://youtube.com/shorts/a7oR1yxGz2o)
 
-DreamPlayer has no in-app SMB browser anymore (it was hidden in 2026-08 — switching
-audio tracks on an SMB stream could crash the app). Instead, NAS playback goes
-through the **Files app's built-in SMB support** and DreamPlayer's **"Open with"** / file-browser
-integration. Videos play exactly like any other file DreamPlayer receives — HDR/codec chips,
-subtitle picker, resume, everything works.
+DreamPlayer has no in-app SMB browser anymore (it was removed in 2026-08 — it was slow and didn't
+ play every video). Instead, NAS playback goes
+ through the **Files app's built-in SMB support** and DreamPlayer's **"Open with"** / file-browser
+ integration. Videos play exactly like any other file DreamPlayer receives — HDR/codec chips,
+ subtitle picker, resume, everything works.
 
 ## On iPhone / iPad
 

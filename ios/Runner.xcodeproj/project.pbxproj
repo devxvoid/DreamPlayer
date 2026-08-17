@@ -15,15 +15,15 @@
 		A1B2C3D50000000000000001 /* AvPlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000001 /* AvPlayerView.swift */; };
 		A1B2C3D50000000000000002 /* FileBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000002 /* FileBrowser.swift */; };
 		A1B2C3D50000000000000003 /* IntentBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000003 /* IntentBridge.swift */; };
-		A1B2C3D50000000000000007 /* SMBClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000007 /* SMBClient.swift */; };
+		
 		A1B2C3D5000000000000000E /* BufferedSMBReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000000000000D /* BufferedSMBReader.swift */; };
 		A1B2C3D5000000000000000F /* WebDAVClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000000000000E /* WebDAVClient.swift */; };
 		A1B2C3D50000000000000010 /* JellyfinDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000000000000F /* JellyfinDiscovery.swift */; };
 		A1B2C3D50000000000000012 /* CacheCleaner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000011 /* CacheCleaner.swift */; };
 		78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */ = {isa = PBXBuildFile; productRef = 78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */; };
 		A1B2C3D40000000000000006 /* AetherEngine in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D40000000000000005 /* AetherEngine */; };
-		A1B2C3D50000000000000009 /* AMSMB2 in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4000000000000000B /* AMSMB2 */; };
-		A1B2C3D5000000000000000C /* AMSMB2 in Embed Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4000000000000000B /* AMSMB2 */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		
+		
 		A1B2C3D5000000000000000D /* AetherEngineSMB in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4000000000000000C /* AetherEngineSMB */; };
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
@@ -47,7 +47,6 @@
 			dstPath = "";
 			dstSubfolderSpec = 10;
 			files = (
-				A1B2C3D5000000000000000C /* AMSMB2 in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -66,7 +65,7 @@
 		A1B2C3D40000000000000001 /* AvPlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AvPlayerView.swift; sourceTree = "<group>"; };
 		A1B2C3D40000000000000002 /* FileBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileBrowser.swift; sourceTree = "<group>"; };
 		A1B2C3D40000000000000003 /* IntentBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentBridge.swift; sourceTree = "<group>"; };
-		A1B2C3D40000000000000007 /* SMBClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SMBClient.swift; sourceTree = "<group>"; };
+		
 		A1B2C3D4000000000000000D /* BufferedSMBReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BufferedSMBReader.swift; sourceTree = "<group>"; };
 		A1B2C3D4000000000000000E /* WebDAVClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebDAVClient.swift; sourceTree = "<group>"; };
 		A1B2C3D4000000000000000F /* JellyfinDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JellyfinDiscovery.swift; sourceTree = "<group>"; };
@@ -89,7 +88,6 @@
 			files = (
 				78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */,
 				A1B2C3D40000000000000006 /* AetherEngine in Frameworks */,
-				A1B2C3D50000000000000009 /* AMSMB2 in Frameworks */,
 				A1B2C3D5000000000000000D /* AetherEngineSMB in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -150,7 +148,6 @@
 				A1B2C3D40000000000000001 /* AvPlayerView.swift */,
 				A1B2C3D40000000000000002 /* FileBrowser.swift */,
 				A1B2C3D40000000000000003 /* IntentBridge.swift */,
-				A1B2C3D40000000000000007 /* SMBClient.swift */,
 				A1B2C3D4000000000000000D /* BufferedSMBReader.swift */,
 				A1B2C3D4000000000000000E /* WebDAVClient.swift */,
 				A1B2C3D4000000000000000F /* JellyfinDiscovery.swift */,
@@ -199,7 +196,6 @@
 			packageProductDependencies = (
 				78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */,
 				A1B2C3D40000000000000005 /* AetherEngine */,
-				A1B2C3D4000000000000000B /* AMSMB2 */,
 				A1B2C3D4000000000000000C /* AetherEngineSMB */,
 			);
 			productName = Runner;
@@ -238,7 +234,6 @@
 			packageReferences = (
 				781AD8BC2B33823900A9FFBB /* XCLocalSwiftPackageReference "Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage" */,
 				A1B2C3D40000000000000004 /* XCRemoteSwiftPackageReference "AetherEngine" */,
-				A1B2C3D4000000000000000A /* XCRemoteSwiftPackageReference "AMSMB2" */,
 			);
 			productRefGroup = 97C146EF1CF9000F007C117D /* Products */;
 			projectDirPath = "";
@@ -324,7 +319,6 @@
 				A1B2C3D50000000000000001 /* AvPlayerView.swift in Sources */,
 				A1B2C3D50000000000000002 /* FileBrowser.swift in Sources */,
 				A1B2C3D50000000000000003 /* IntentBridge.swift in Sources */,
-				A1B2C3D50000000000000007 /* SMBClient.swift in Sources */,
 				A1B2C3D5000000000000000E /* BufferedSMBReader.swift in Sources */,
 				A1B2C3D5000000000000000F /* WebDAVClient.swift in Sources */,
 				A1B2C3D50000000000000010 /* JellyfinDiscovery.swift in Sources */,
@@ -687,15 +681,7 @@
 				minimumVersion = 6.21.0;
 			};
 		};
-		A1B2C3D4000000000000000A /* XCRemoteSwiftPackageReference "AMSMB2" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/amosavian/AMSMB2";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 4.0.0;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
+		/* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */ = {
@@ -706,11 +692,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A1B2C3D40000000000000004 /* XCRemoteSwiftPackageReference "AetherEngine" */;
 			productName = AetherEngine;
-		};
-		A1B2C3D4000000000000000B /* AMSMB2 */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = A1B2C3D4000000000000000A /* XCRemoteSwiftPackageReference "AMSMB2" */;
-			productName = AMSMB2;
 		};
 		A1B2C3D4000000000000000C /* AetherEngineSMB */ = {
 			isa = XCSwiftPackageProductDependency;

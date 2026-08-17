@@ -20,8 +20,8 @@ import AetherEngineSMB
 ///   triggers a re-anchor.
 ///
 /// Lifecycle: `cancel()` unblocks a pending read; `close()` stops prefetch
-/// tasks and does NOT close the underlying sources (SMBClient owns their
-/// lifetime).
+/// tasks and does NOT close the underlying sources (the source provider owns
+/// their lifetime).
 final class BufferedSMBReader: IOReader, @unchecked Sendable {
 
     // ---- Configuration ----

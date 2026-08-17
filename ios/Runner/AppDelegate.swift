@@ -34,7 +34,6 @@ import UIKit
     )
     FileBrowser.register(with: messenger)
     IntentBridge.shared.configure(with: messenger)
-    SMBClient.register(with: messenger)
     WebDAVClient.register(with: messenger)
     JellyfinDiscovery.register(with: messenger)
     CacheCleaner.register(with: messenger)

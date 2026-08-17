@@ -29,7 +29,7 @@ A cross-platform video player built with **Flutter**, designed for high-end play
 - **Audio track selection** — pick any audio track mid-playback; the sheet shows the full track name and channels (e.g. `DTS-HD MA 5.1`).
 - **Aspect ratio / fit-mode picker** — Fit, Crop to screen, Stretch to screen, 16:9, or 4:3 from the player's aspect button; the choice persists per video and is re-applied on every open.
 - **Subtitles — embedded + sideloaded with a full track picker** — every subtitle file sitting next to the video (SRT, SSA/ASS, WebVTT, TTML, SAMI, MicroDVD, MPL2, SubViewer) auto-attaches and the best match auto-selects; the CC button opens a picker over embedded container tracks plus all sideloaded files, with Off. Non-UTF-8 sidecars are re-encoded automatically. Cues are drawn by the host on both platforms and anchored to the video itself, so text and PGS/DVB bitmap subtitles hug the picture (not the screen edge) in portrait, landscape, and through rotation.
-- **NAS / LAN playback** — stream files from network shares via **CX Explorer → "Open with"** on Android (CX serves them over a local HTTP proxy at full speed) and via the **Files app → "Open with"** on iPad. The in-app SMB browser existed on iPad (AMSMB2) but is hidden from the home screen (2026-08): switching audio tracks on an SMB stream could crash the app, and the picker/Open-with paths cover local + NAS workflows without it. See the **[SMB / NAS playback tutorial](docs/tutorials/play-smb-nas-videos.md)** ([video walkthrough](https://youtube.com/shorts/a7oR1yxGz2o)).
+- **NAS / LAN playback** — stream files from network shares via **in-app WebDAV** and **in-app Jellyfin**, plus **CX Explorer → "Open with"** on Android (CX serves SMB over a local HTTP proxy at full speed) and the **Files app → "Open with"** on iPad (Files has its own SMB/network connection support). The in-app SMB browser existed on iPad (AMSMB2) but was removed (2026-08): it was slow and didn't play every video, while the WebDAV/Jellyfin/CX/Files paths are faster. See the **[SMB / NAS playback tutorial](docs/tutorials/play-smb-nas-videos.md)** ([video walkthrough](https://youtube.com/shorts/a7oR1yxGz2o)).
 - **In-app file browser** — browse the whole device and play any video, no import needed: Android internal + SD storage, and on iPad a **Files** root that opens the system Files-app home (iCloud Drive, On My iPad, Downloads, other providers), plus the app's Documents folder and bookmarked folders.
 - **"Open with" integration** — tap any video on the device and open it in DreamPlayer; works with file managers like CX Explorer (including their network-stream handoff via a local HTTP proxy).
 - **WebDAV playback** — browse WebDAV servers and stream videos straight into the player on **both** platforms: add/edit/delete servers with an inline connection test, per-server **self-signed HTTPS** opt-in (default off), and credentials stored encrypted (Android Keystore / iOS Keychain — never plaintext, never sent to Dart).
@@ -52,7 +52,7 @@ A cross-platform video player built with **Flutter**, designed for high-end play
 | Video decode | Android MediaCodec (hardware DV/HEVC/AVC — vendor-agnostic: Qualcomm `c2.qti.*`/`OMX.qcom.*`, MediaTek `c2.mtk.*`, Exynos `c2.samsung.*`; FFmpeg is audio-only fallback) |
 | Audio decode | Media3 `FFmpegAudioRenderer` extension (`libmedia3ext.so`) |
 | Subtitles | Media3 subtitle stack + custom SAMI/MicroDVD/MPL2/SubViewer parsers; auto-paired siblings from the video's folder; host-drawn text + PGS/DVB cues anchored to the video |
-| NAS playback (iPad) | Via Files app → "Open with" + bookmarked folders (in-app SMB browser hidden 2026-08 — see Roadmap) |
+| NAS playback (iPad) | Via Files app → "Open with" + bookmarked folders, in-app WebDAV, and in-app Jellyfin (in-app SMB removed 2026-08 — see Roadmap) |
 | NAS playback (Android) | Via CX Explorer → "Open with" (CX streams over a local HTTP proxy) |
 | WebDAV | In-app server list + folder browsing + streaming (Android `WebDAVClient.kt` / iOS `WebDAVClient.swift`); encrypted credentials; per-server self-signed HTTPS toggle |
 | Jellyfin / Emby | Pure-Dart REST client (server add + LAN auto-discovery + sign-in + browse); direct-play with the user token, self-signed HTTPS opt-in |
@@ -134,7 +134,6 @@ lib/
     tmdb_client.dart            # TMDB metadata: filename parser, API, cache + facade
     open_intent.dart            # "Open with" intent bridge
     support_links.dart          # donation links (Razorpay, GitHub Sponsors)
-    smb_client.dart             # SMB channel wrapper (ipad in-app shares; hidden from the UI)
   screens/
     home_screen.dart            # Continue watching grid + **+** source menu (Jellyfin / WebDAV / storage / add folder)
     player_screen.dart          # ExoPlayer/AetherEngine playback + live chips + controls + subtitle/audio/aspect pickers
@@ -142,7 +141,6 @@ lib/
     jellyfin_screen.dart        # Jellyfin/Emby server list + discovery + sign-in → libraries → folders → play
     file_browser_screen.dart    # in-app device file browser
     webdav_screen.dart          # WebDAV server list → folders → play (self-signed toggle)
-    smb_screen.dart             # in-app SMB share browser (hidden from the UI 2026-08)
     settings_screen.dart        # settings + About + open-source licenses
   widgets/
     video_card.dart             # library card with HDR/audio/source badges
@@ -157,9 +155,8 @@ android/app/src/main/kotlin/com/dreamplayer/app/
   MulticastLockManager.kt       # Wi-Fi MulticastLock + Jellyfin UDP-7359 discovery probe
   MainActivity.kt               # registers platform views + intent handling
 ios/Runner/
-  AvPlayerView.swift            # AetherEngine platform view + channels; host SubtitleOverlayView; SMB via AetherEngineSMB custom source (unused — entry hidden)
-  BufferedSMBReader.swift       # read-ahead sliding-window IOReader (32 MiB) for SMB/WebDAV playback
-  SMBClient.swift               # SMB client (channel dreamplayer/smb): AMSMB2 browse + AetherEngineSMB playback connections (unused — entry hidden)
+  AvPlayerView.swift            # AetherEngine platform view + channels; host SubtitleOverlayView; WebDAV http(s) streams via WebDAVByteRangeSource
+  BufferedSMBReader.swift       # read-ahead sliding-window IOReader (32 MiB) for WebDAV playback
   WebDAVClient.swift            # WebDAV browse/test channel (Keychain credentials)
   JellyfinDiscovery.swift       # Jellyfin UDP-7359 broadcast probe (channel dreamplayer/multicast)
   FileBrowser.swift             # Files-app home + Documents + bookmarked-folder browsing channel
@@ -187,7 +184,7 @@ test/
 - [x] TMDB movie metadata details screen (poster/art, rating, genres, cast; Resume/Play; Fix match)
 - [x] Aspect ratio / fit-mode picker (Fit / Crop / Stretch / 16:9 / 4:3, persists per video)
 - [x] Continue watching with source badges (WebDAV / CX SMB / Files/SMB / Files / Network / Jellyfin)
-- [~] In-app SMB/LAN playback on iPad (AMSMB2 browse + stream) — **hidden 2026-08**: switching audio tracks on an SMB stream could crash the app; NAS files reach the app via CX/Files "Open with" instead. Code stays in the tree as a rebuild blueprint.
+- [~] In-app SMB/LAN playback on iPad (AMSMB2 browse + stream) — **removed 2026-08**: it was slow and didn't play every video; NAS files reach the app faster via WebDAV, Jellyfin, or CX/Files "Open with". Blueprint preserved in AGENTS.md.
 - [x] User-added folder library (add a TV-show/movie folder → TMDB poster + episode list; nothing is auto-scanned)
 - [x] Jellyfin folders in the home library (add from the Jellyfin browser → TMDB poster + server episode list)
 - [x] Static HDR10 detection for MKV files without Colour element (probes HEVC SEI 137/144)
@@ -217,7 +214,7 @@ Third-party components are used under their own licenses:
 | nextlib-media3ext (Android FFmpeg) | GPLv3 |
 | AetherEngine (iOS engine) | LGPL-3.0 + Apple Store/DRM exception |
 | FFmpeg frameworks (iOS, via FFmpegBuild) | LGPL-2.1+ |
-| AMSMB2 (iOS SMB client) | MIT |
+| SMBClient (iOS, via AetherEngineSMB for WebDAV) | MIT |
 | Flutter / Dart | BSD-3-Clause |
 | permission_handler, flutter_displaymode, cupertino_icons | MIT |
 | shared_preferences | BSD-3-Clause |

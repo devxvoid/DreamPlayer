@@ -213,24 +213,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     private var lastSource: MediaSource?
     private var lastLoadOptions = LoadOptions()
 
-    // ---- SMB stream (see SMBClient.openShare). Kept so an audio-track switch
-    // reopens with a FRESH SMBIOReader on a FRESH connection: the engine's
-    // retained-reader reload (keepCustomReader) reuses one SMBIOReader whose
-    // cancel() from the old session teardown can poison the new probe's first
-    // read (returns -1 → EPERM "Demuxer: open failed"). ownsSource: false so
-    // the engine closing the previous reader doesn't tear down the shared
-    // SMBConnection (SMBClient owns its lifetime). ----
-    private var smbToken: String?
-    private var smbServerId: String?
-    private var isSMBStream = false
-    /// File extension from the SMB token URL, passed to AetherEngine as a
-    /// `formatHint` so FFmpeg skips the byte-level probe.  `nil` for
-    /// extensionless files (e.g. "stream" fallback in `openShare`).
-    private var smbFormatHint: String?
-    /// Stale SMBConnection from the last audio-track switch. Kept alive until
-    /// the NEXT switch or teardown so AetherEngine's FFmpeg demux thread can
-    /// finish draining I/O without sockets being torn down.
-    private var previousStaleSMBConnection: SMBConnection?
+    
 
     init(messenger: FlutterBinaryMessenger, viewId: Int64, frame: CGRect) {
         container = AetherPlayerView(frame: frame)
@@ -304,16 +287,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                     result(self.stateMap())
                 case "setAudioTrack":
                     let index = (args?["index"] as? NSNumber)?.intValue ?? -1
-                    if self.isSMBStream {
-                        // The engine's selectAudioTrack reload reuses the RETAINED
-                        // SMBIOReader; its teardown cancel() can poison the new probe's
-                        // first read (EPERM "Demuxer: open failed"). Reopen with a
-                        // FRESH connection + reader and select the stream via
-                        // load(audioSourceStreamIndex:) instead.
-                        await self.reopenSMBStream(audioIndex: index)
-                    } else {
-                        self.engine?.selectAudioTrack(index: index)
-                    }
+                    self.engine?.selectAudioTrack(index: index)
                     result(nil)
                 case "setSubtitles":
                     let on = (args?["on"] as? Bool) ?? true
@@ -414,52 +388,15 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         let httpHeaders = (args?["headers"] as? [String: String]) ?? [:]
         let allowSelfSigned = (args?["allowSelfSigned"] as? Bool) ?? false
 
-        // SMB streams arrive as `dreamplayersmb://<token>.<ext>` (see
-        // SMBClient.openShare): resolve the token to the live SMBConnection
-        // and load it as a custom IOReader source. AetherEngine's FFmpeg has no
-        // network stack, so a loopback HTTP bridge is the wrong shape — this is
-        // the engine's native SMB path (AetherEngineSMB).
-        var source: MediaSource?
-        var localURL: URL?
         // WebDAV source pending construction: `makeByteRangeSource` does a
         // blocking size probe, so it must run off the main thread — the async
         // load task below builds it.
+        var source: MediaSource?
+        var localURL: URL?
         var webDAVSource: (url: URL, headers: [String: String], allowSelfSigned: Bool)?
-        smbToken = nil
-        isSMBStream = false
-        smbFormatHint = nil
         if let path, !path.isEmpty {
             localURL = URL(fileURLWithPath: path)
             source = .url(localURL!)
-        } else if let uri, let parsed = Self.smbToken(in: uri) {
-            let conns = SMBClient.shared.connections(for: parsed.token)
-            guard !conns.isEmpty else {
-                result(FlutterError(code: "smb_stream", message: "SMB stream token not found", details: nil))
-                return
-            }
-            // Single-connection prefetch: BufferedSMBReader runs one read-ahead
-            // task on the one SMB connection. (A 4-connection parallel design
-            // failed to play anything on-device.)
-            smbToken = parsed.token
-            smbServerId = parsed.serverId
-            isSMBStream = true
-            // Mark server as active so closeShare won't tear down connections
-            // while we're still playing.
-            if !parsed.serverId.isEmpty {
-                SMBClient.shared.markPlayerActive(serverId: parsed.serverId)
-            }
-            if parsed.ext.isEmpty || parsed.ext == "stream" {
-                // Extensionless file on the NAS (e.g. "LG") — read the first
-                // 16 bytes and guess the container so FFmpeg doesn't fail its
-                // byte-level probe with "custom probe failed".
-                smbFormatHint = Self.sniffFormatFromSMB(conns[0])
-            } else {
-                smbFormatHint = parsed.ext
-            }
-            source = .custom(
-                BufferedSMBReader(source: conns[0], chunkSize: Self.smbChunkSize),
-                formatHint: smbFormatHint
-            )
         } else if let uri, let u = URL(string: uri),
                   (u.scheme?.lowercased() == "http" || u.scheme?.lowercased() == "https"),
                   !httpHeaders.isEmpty || allowSelfSigned {
@@ -468,10 +405,10 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             // TLS validation can't be bypassed), so serve the stream as a
             // custom ByteRangeSource — each read is an independent HTTP Range
             // request carrying the Authorization header on the permissive or
-            // default-trust session. Wrapped in BufferedSMBReader for the same
-            // read-ahead reason as SMB (the loopback producer starves on
-            // per-read network round-trips). The source is stateless per read,
-            // so the engine's internal reload on audio-track switch is safe.
+            // default-trust session. Wrapped in BufferedSMBReader for read-ahead (the
+            // loopback producer starves on per-read network round-trips). The
+            // source is stateless per read, so the engine's internal reload on
+            // audio-track switch is safe.
             localURL = u
             webDAVSource = (u, httpHeaders, allowSelfSigned)
         } else if let uri, let u = URL(string: uri) {
@@ -591,75 +528,6 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             }
         } catch {
             lastError = String(describing: error)
-        }
-    }
-
-    /// Audio-track switch on an SMB stream. AetherEngine's `selectAudioTrack`
-    /// reload reuses the RETAINED custom `SMBIOReader`: its teardown `cancel()`
-    /// marks the CURRENT in-flight read cancelled, so if it lands while the new
-    /// probe is reading the same shared reader, that read aborts with -1
-    /// (FFmpeg maps to EPERM, "Demuxer: open failed (Operation not
-    /// permitted)"). A fresh SMBConnection per reopen sidesteps this entirely:
-    /// `SMBClient.reconnect(for:)` mints a new transport, so no two sessions
-    /// ever share an `SMBConnection` / `FileReader` mid-teardown.
-    private func reopenSMBStream(audioIndex: Int) async {
-        guard let engine, let smbToken else { return }
-        guard audioIndex >= 0, engine.audioTracks.contains(where: { $0.id == audioIndex }) else { return }
-        if engine.activeAudioTrackIndex == audioIndex { return }
-        let activeSub = engine.activeSubtitleTrackIndex
-        let resumeAt = engine.currentTime
-
-        // Mint a FRESH SMBConnection + BufferedSMBReader for the reload.
-        // Do NOT call engine.stop() first — the initial open() works by
-        // calling load() directly (which internally stops the old source),
-        // and stop() + load() on the same engine can race: stop() signals
-        // the demux thread to quit but returns before it fully releases the
-        // old IOReader, so the new load()'s probe reads against a half-torn-
-        // down source and gets EIO (-5). load() handles the transition itself.
-        //
-        // The reconnect does a blocking SMB handshake (runAsync semaphore);
-        // keep it off the main actor regardless of threading semantics.
-        let pair = await Task.detached(priority: .userInitiated) {
-            SMBClient.shared.reconnect(for: smbToken)
-        }.value
-        guard let pair else {
-            lastError = "SMB stream reconnect failed for audio track switch"
-            emit()
-            return
-        }
-        let connection = pair.fresh
-        let stale = pair.stale
-        // Close the stale connection from the PREVIOUS audio-track switch —
-        // by now AetherEngine has fully released the old reader (the new
-        // load() below replaces the demuxer synchronously).
-        previousStaleSMBConnection?.close()
-        previousStaleSMBConnection = stale
-        let source: MediaSource = .custom(
-            BufferedSMBReader(source: connection, chunkSize: Self.smbChunkSize),
-            formatHint: smbFormatHint
-        )
-        lastSource = source
-        do {
-            let probe = try await engine.load(
-                source: source,
-                startPosition: resumeAt,
-                options: lastLoadOptions,
-                audioSourceStreamIndex: Int32(audioIndex)
-            )
-            if let probe {
-                videoCodecName = probe.videoCodecName
-                videoWidth = Int(probe.videoWidth)
-                videoHeight = Int(probe.videoHeight)
-                isDolbyVision = probe.isDolbyVision
-                dvProfile = probe.dvProfile
-            }
-            if let activeSub, engine.subtitleTracks.contains(where: { $0.id == activeSub }) {
-                engine.selectSubtitleTrack(index: activeSub)
-            }
-            emit()
-        } catch {
-            lastError = String(describing: error)
-            emit()
         }
     }
 
@@ -912,39 +780,6 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         return URL(string: s)
     }
 
-    /// VLC's smb2 access module caps every SMB read at 256 KiB
-    /// (libvlc modules/access/smb2.c FileRead) because a larger request
-    /// completes only after the whole range is fetched as many serial
-    /// round-trips — high latency before the first byte. Match it so the
-    /// ring's first chunk lands fast enough for FFmpeg's probe.
-    private static let smbChunkSize = 256 * 1024
-
-    /// `dreamplayersmb://<token>.<ext>` -> (token, ext). nil when the URI is not
-    /// an SMB stream URL. Token/ext parsed by string so URL quirks (empty path)
-    /// can't break resolution; the extension is forwarded to AetherEngine as a
-    /// `formatHint` so FFmpeg skips its byte-level format probe.
-    private static func smbToken(in uri: String) -> (token: String, ext: String, serverId: String)? {
-        let prefix = "dreamplayersmb://"
-        guard uri.hasPrefix(prefix) else { return nil }
-        let rest = String(uri.dropFirst(prefix.count))
-        guard !rest.isEmpty else { return nil }
-        // Format: dreamplayersmb://<serverId>.<token>.<ext>
-        let parts = rest.split(separator: ".", maxSplits: 2)
-        guard parts.count >= 2 else {
-            // Legacy format without serverId: dreamplayersmb://<token>.<ext>
-            let token = (rest as NSString).deletingPathExtension
-            let ext = (rest as NSString).pathExtension
-            guard !token.isEmpty else { return nil }
-            return (token, ext, "")
-        }
-        let serverId = String(parts[0])
-        let tokenExt = String(parts[1...].joined(separator: "."))
-        let token = (tokenExt as NSString).deletingPathExtension
-        let ext = (tokenExt as NSString).pathExtension
-        guard !token.isEmpty else { return nil }
-        return (token, ext, serverId)
-    }
-
     // MARK: - Sidecar subtitle auto-pairing
 
     private static let subtitleExtensions: Set<String> = ["srt", "ass", "ssa", "vtt", "webvtt"]
@@ -986,46 +821,6 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         }
     }
 
-    /// Read the first 16 bytes from an SMB connection and guess the container
-    /// format from magic bytes, so FFmpeg can skip its (failing) byte-level
-    /// probe for extensionless files on the NAS.
-    private static func sniffFormatFromSMB(_ conn: ByteRangeSource) -> String? {
-        let semaphore = DispatchSemaphore(value: 0)
-        var result: String?
-        Task.detached(priority: .userInitiated) {
-            defer { semaphore.signal() }
-            guard let data = try? await conn.read(at: 0, length: 16), data.count >= 4 else {
-                return
-            }
-            let bytes = [UInt8](data)
-            // ftyp .... = MP4 / MOV / M4A
-            if bytes.count >= 8 && bytes[4] == 0x66 && bytes[5] == 0x74 &&
-               bytes[6] == 0x79 && bytes[7] == 0x70 { result = "mp4"; return }
-            // EBML = Matroska / WebM
-            if bytes[0] == 0x1A && bytes[1] == 0x45 && bytes[2] == 0xDF && bytes[3] == 0xA3 {
-                result = "mkv"; return
-            }
-            // RIFF .... AVI = AVI
-            if bytes[0] == 0x52 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x46 &&
-               bytes.count >= 12 && bytes[8] == 0x41 && bytes[9] == 0x56 &&
-               bytes[10] == 0x49 && bytes[11] == 0x20 { result = "avi"; return }
-            // 0x47 = MPEG-TS sync byte
-            if bytes[0] == 0x47 { result = "ts"; return }
-            // FLV header: 'F' 'L' 'V'
-            if bytes[0] == 0x46 && bytes[1] == 0x4C && bytes[2] == 0x56 { result = "flv"; return }
-            // ID3 = MP3 with ID3 tag
-            if bytes[0] == 0x49 && bytes[1] == 0x44 && bytes[2] == 0x33 { result = "mp3"; return }
-            // OggS = Ogg container
-            if bytes[0] == 0x4F && bytes[1] == 0x67 && bytes[2] == 0x67 && bytes[3] == 0x53 {
-                result = "ogg"; return
-            }
-            // \x00\x00\x01 = MPEG-PS / MPEG-TS pack start
-            if bytes[0] == 0x00 && bytes[1] == 0x00 && bytes[2] == 0x01 { result = "mpeg"; return }
-        }
-        semaphore.wait()
-        return result
-    }
-
     /// "House.S02E04.eng" -> "eng"; nil when the final dot-token is not a language code.
     private static func languageTag(in baseName: String) -> String? {
         guard let last = baseName.split(separator: ".").last else { return nil }
@@ -1047,12 +842,5 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         eventChannel.setStreamHandler(nil)
         eventSink = nil
         UIApplication.shared.isIdleTimerDisabled = false
-        previousStaleSMBConnection?.close()
-        previousStaleSMBConnection = nil
-        // Release the active-player lock so closeShare can clean up connections.
-        if let sid = smbServerId, !sid.isEmpty {
-            SMBClient.shared.markPlayerClosed(serverId: sid)
-        }
-        smbServerId = nil
     }
 }
