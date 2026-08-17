@@ -3,6 +3,11 @@
 All notable changes to DreamPlayer are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## 0.1.8
+
+- **In-app SMB removed from iOS (and Android)** — the iPad AMSMB2 + AetherEngineSMB browser and playback were deleted: it was slow, didn't play every video, and audio-track switching could crash the app. The "Network shares" home entry is gone on all platforms. NAS playback now goes through **in-app WebDAV**, **in-app Jellyfin**, **CX Explorer → "Open with"** (Android), and **Files app → "Open with"** (iPad) — all faster and more reliable. `BufferedSMBReader` stays for WebDAV's read-ahead; `AetherEngineSMB` stays for WebDAV's `ByteRangeSource`. Full SMB implementation notes preserved in AGENTS.md as a revival blueprint.
+- **Source badges updated** — continue-watching cards still show `CX SMB` for CX Explorer handoffs and `Files / SMB` for iOS bookmarked folders (Files app SMB), but the legacy `SMB` badge (in-app `smb:` resume keys) is now historical only.
+
 ## 0.1.7
 
 - **Static HDR10 detection for MKV files without Colour element (Android)** — some HEVC MKVs omit the MKV `Colour` element; the PQ/BT.2020 mastering metadata lives only in the HEVC SEI (payload type 137 Mastering Display Colour Volume, payload type 144 Content Light Level). `ExoPlayerView.kt` now probes the first ~10 MB of video samples on a background thread with `MediaExtractor`, scanning Annex-B / AVCC NALs for these SEI payloads. When found, `hdr10Content=true` is set and `stateMap` emits `desired=5.0` + `colorTransfer=6`, engaging the HDR headroom / window color mode path for true HDR10 passthrough even without container-level signalling. Verified on-device: a test MKV with no Colour element but with SEI 137/144 now shows the HDR10 chip and triggers the EDR ramp.

@@ -89,7 +89,7 @@ The key is compiled in at build time (never shown in the UI, never committed); t
 
 ## Download
 
-Prebuilt binaries are attached to each [GitHub Release](https://github.com/mangeshghodke/DreamPlayer/releases). The current release is **0.1.7**; previous releases follow the **0.1.x** and **0.0.x** lines.
+Prebuilt binaries are attached to each [GitHub Release](https://github.com/mangeshghodke/DreamPlayer/releases). The current release is **0.1.8**; previous releases follow the **0.1.x** and **0.0.x** lines.
 
 - **Android** — per-architecture release APKs (`arm64-v8a`, `armeabi-v7a`, `x86_64`) plus a **universal** APK that installs on any device. (An Android App Bundle is not published yet — Play Store distribution isn't set up.)
 - **iOS / iPadOS** — the versioned `DreamPlayer-<version>.ipa` (e.g. `DreamPlayer-0.1.1.ipa`) is **unsigned** (Apple only allows App Store / TestFlight installs), so sideload it with a free Apple ID via **SideStore** or **AltStore** (guide below).
