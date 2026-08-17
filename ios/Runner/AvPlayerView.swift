@@ -458,7 +458,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                 smbFormatHint = parsed.ext
             }
             source = .custom(
-                BufferedSMBReader(sources: conns),
+                BufferedSMBReader(sources: conns, chunkSize: Self.smbChunkSize),
                 formatHint: smbFormatHint
             )
         } else if let uri, let u = URL(string: uri),
@@ -635,7 +635,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         for conn in previousStaleSMBConnections { conn.close() }
         previousStaleSMBConnections = result.staleExtras
         let source: MediaSource = .custom(
-            BufferedSMBReader(sources: freshConns),
+            BufferedSMBReader(sources: freshConns, chunkSize: Self.smbChunkSize),
             formatHint: smbFormatHint
         )
         lastSource = source
@@ -911,6 +911,13 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         if s.hasPrefix("/") { return URL(fileURLWithPath: s) }
         return URL(string: s)
     }
+
+    /// VLC's smb2 access module caps every SMB read at 256 KiB
+    /// (libvlc modules/access/smb2.c FileRead) because a larger request
+    /// completes only after the whole range is fetched as many serial
+    /// round-trips — high latency before the first byte. Match it so the
+    /// ring's first chunk lands fast enough for FFmpeg's probe.
+    private static let smbChunkSize = 256 * 1024
 
     /// `dreamplayersmb://<token>.<ext>` -> (token, ext). nil when the URI is not
     /// an SMB stream URL. Token/ext parsed by string so URL quirks (empty path)

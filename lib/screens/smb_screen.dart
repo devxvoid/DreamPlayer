@@ -6,8 +6,8 @@ import '../services/smb_client.dart';
 import 'tmd_details_screen.dart';
 
 /// SMB / LAN-share browser: saved servers -> shares -> folders -> videos.
-/// Playback streams through the native SMB client (local proxy URL on iOS),
-/// one `openShare` URL per playlist item, torn down on return.
+/// Playback streams through the native SMB client (local proxy URL on iOS);
+/// tapping a video opens a single `openShare` URL, torn down on return.
 class SmbScreen extends StatefulWidget {
   const SmbScreen({super.key});
 
@@ -33,7 +33,7 @@ class _SmbScreenState extends State<SmbScreen> {
   List<SmbDiscovered> _discovered = const [];
   bool _scanning = false;
 
-  /// True while opening stream URLs for the folder playlist.
+  /// True while opening the tapped video's stream URL.
   bool _opening = false;
 
   bool get _atBrowseRoot => _browsing == null || (_share.isEmpty && _path.isEmpty);
@@ -181,78 +181,61 @@ class _SmbScreenState extends State<SmbScreen> {
     final server = _browsing;
     if (server == null || _opening) return;
 
-    // Playlist = every video in this folder, so playback auto-advances to the
-    // next episode when one ends (play-next-episode). Open a stream URL per
-    // video up-front; the tapped one must succeed, the rest are best-effort.
-    final videos = _entries.where((e) => !e.isDirectory).toList();
-    final index = videos.indexWhere((e) => e.path == entry.path);
+    // Only the tapped video's stream URL is needed (play-next was removed), so
+    // open just it and navigate immediately — the folder loop that opened every
+    // video up-front made TMDB details feel slow (ring spinner while N serial
+    // openShare round-trips ran).
+    final index = _entries.indexWhere((e) => !e.isDirectory && e.path == entry.path);
     if (index < 0) return;
+    final video = _entries[index];
 
     setState(() => _opening = true);
-    final urls = <String?>[];
+    String? videoUrl;
+    String? subtitleUrl;
     try {
-      for (var i = 0; i < videos.length; i++) {
+      videoUrl = await _smb.openShare(server.id, _share, video.path);
+      final subPath = video.subtitlePath;
+      if (subPath != null && subPath.isNotEmpty) {
         try {
-          final videoUrl = await _smb.openShare(server.id, _share, videos[i].path);
-          String? subtitleUrl;
-          final subPath = videos[i].subtitlePath;
-          if (subPath != null && subPath.isNotEmpty) {
-            try {
-              subtitleUrl = await _smb.openShare(server.id, _share, subPath);
-            } on PlatformException {
-              subtitleUrl = null;
-            }
-          }
-          urls.add(videoUrl);
-          _videoSubtitleUrls[videoUrl] = subtitleUrl;
+          subtitleUrl = await _smb.openShare(server.id, _share, subPath);
         } on PlatformException {
-          urls.add(null);
+          subtitleUrl = null;
         }
       }
+    } on PlatformException {
+      videoUrl = null;
     } finally {
       if (mounted) setState(() => _opening = false);
     }
 
     if (!mounted) return;
-    final target = urls[index];
-    if (target == null) {
+    if (videoUrl == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Could not open ${entry.name}')),
       );
       return;
     }
 
-    final playlist = [
-      for (var i = 0; i < videos.length; i++)
-        if (urls[i] != null)
-          VideoItem(
-            id: 'smb_${videos[i].path}_${DateTime.now().microsecondsSinceEpoch}',
-            title: videos[i].name,
-            uri: urls[i],
-            // Loopback proxy URLs rotate per session; key resume on the stable
-            // remote location instead.
-            resumeKey: 'smb_${server.id}/$_share${videos[i].path}',
-            subtitleUri: _videoSubtitleUrls[urls[i]],
-            duration: Duration.zero,
-            sizeBytes: videos[i].size,
-          ),
-    ];
-    final playIndex = playlist.indexWhere(
-      (item) => item.uri == urls[index],
+    final item = VideoItem(
+      id: 'smb_${video.path}_${DateTime.now().microsecondsSinceEpoch}',
+      title: video.name,
+      uri: videoUrl,
+      // Loopback proxy URLs rotate per session; key resume on the stable
+      // remote location instead.
+      resumeKey: 'smb_${server.id}/$_share${video.path}',
+      subtitleUri: subtitleUrl,
+      duration: Duration.zero,
+      sizeBytes: video.size,
     );
-    if (playIndex < 0 || playlist.isEmpty) return;
 
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => TmdDetailsScreen(video: playlist[playIndex]),
+        builder: (_) => TmdDetailsScreen(video: item),
       ),
     );
-    // Playback session over: tear down the SMB streams and disconnect.
+    // Playback session over: tear down the SMB stream and disconnect.
     _smb.closeShare(server.id);
   }
-
-  /// Stream URL -> paired subtitle URL for the current folder playlist.
-  final Map<String, String?> _videoSubtitleUrls = {};
 
   Future<void> _goUp() async {
     if (_browsing == null) {
