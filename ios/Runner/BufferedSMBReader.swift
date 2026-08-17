@@ -247,7 +247,6 @@ final class BufferedSMBReader: IOReader, @unchecked Sendable {
     private func startPrefetchers() {
         prefetchGen &+= 1
         let gen = prefetchGen
-        prefetchTasks.removeAll { $0.isCompleted }
         let count = min(Self.PREFETCH_THREADS, sources.count)
         for i in 0..<count {
             let src = sources[i]
