@@ -521,14 +521,18 @@ class ParsedFileName {
       RegExp(r'\bS(\d{1,2})\b', caseSensitive: false);
 
   static const List<String> _noise = [
-    '1080p', '720p', '2160p', '480p', '4k', 'uhd', 'hd',
+    '1080p', '720p', '2160p', '480p', '4k', 'uhd', 'hd', 'sdr',
     'bluray', 'blu-ray', 'bdremux', 'remux', 'web-dl',     'webdl', 'webrip', 'web',
     'hdtv', 'dvdrip', 'h264', 'h265', 'x264', 'x265', 'hevc', 'avc', 'av1', 'vp9',
-    'aac', 'ac3', 'eac3', 'dts', 'dts-hd', 'truehd', 'atmos', 'flac', 'opus', 'mp3',
-    'ddp', '5.1', '7.1', '2.0', '10bit', '8bit', 'hdr', 'hdr10', 'hdr10plus', 'dolby',
+    'aac', 'ac3', 'eac3', 'dts', 'dts-hd', 'truehd', 'atmos', 'ma', 'flac', 'opus',
+    'mp3',
+    'ddp', '5.1', '7.1', '2.0', '10bit', '8bit', 'hdr', 'hdr10', 'hdr10plus',
+    'dolby',
     'vision', 'dv', 'hdr10+', 'multi', 'proper', 'repack', 'internal', 'extended',
     'unrated', 'directors', 'cut', 'imax', 'complete',
-    'english', 'eng', 'nf', 'netflix', 'amzn', 'amazon', 'hbo', 'hulu',
+    'english', 'eng', 'hindi', 'tamil', 'telugu', 'korean', 'japanese', 'spanish',
+    'french', 'german', 'uncut', 'esub', 'subs', 'subtitle', 'tk',
+    'nf', 'netflix', 'amzn', 'amazon', 'hbo', 'hulu', 'hdhub4u', 'hdbr',
   ];
 
   static ParsedFileName parse(String fileName) {
@@ -539,10 +543,55 @@ class ParsedFileName {
       if (ext.length <= 4) name = name.substring(0, dot);
     }
 
+    // Audio/subtitle metadata often lives in brackets
+    // (`[Hindi AMZN DDP 2.0 224kbps + English DTS-HD MA 5.1]`) or parens
+    // (`(Hindi DDP 5.1  Korean DTS 5.1)`). Drop the whole group so the search
+    // query is the title, not the audio track list — unless the group carries
+    // the episode tag (`[S02E04]`) or the year (`(2013)`), which must stay for
+    // episode / year detection.
+    bool keepGroup(String s) =>
+        _episodePattern.hasMatch(s) ||
+        _episodeShortPattern.hasMatch(s) ||
+        _yearPattern.hasMatch(s);
+    name = name.replaceAllMapped(
+      RegExp(r'\[[^\]]*\]'),
+      (m) => keepGroup(m.group(0)!) ? m.group(0)! : ' ',
+    );
+    name = name.replaceAllMapped(
+      RegExp(r'\([^)]*\)'),
+      (m) => keepGroup(m.group(0)!) ? m.group(0)! : ' ',
+    );
+
+    // Bitrate annotations (`224kbps`, `640kbps`).
+    name = name.replaceAll(RegExp(r'\b\d+\s?kbps\b', caseSensitive: false), ' ');
+
     // Release-group suffix is conventionally attached with a dash
-    // (e.g. `...x265-GROUP`). Drop everything from the last dash on.
+    // (e.g. `...x265-GROUP`). Drop everything from the last dash on. When the
+    // group is followed by a site/domain (`USURY-4kHdHub.com`), the segment
+    // after the final dash contains a dot — additionally drop the group token
+    // sitting right before the dash when it's an all-caps release-group name
+    // (`USURY`), so the search query stays title-only.
     final dash = name.lastIndexOf('-');
-    if (dash > 0) name = name.substring(0, dash);
+    if (dash > 0) {
+      final beforeDash = name.substring(0, dash);
+      final site = name.substring(dash + 1);
+      if (site.contains('.')) {
+        final space = beforeDash.lastIndexOf(' ');
+        if (space > 0) {
+          final groupToken = beforeDash.substring(space + 1);
+          if (groupToken.length <= 12 &&
+              groupToken == groupToken.toUpperCase()) {
+            name = beforeDash.substring(0, space);
+          } else {
+            name = beforeDash;
+          }
+        } else {
+          name = beforeDash;
+        }
+      } else {
+        name = beforeDash;
+      }
+    }
 
     final episodeMatch = _episodePattern.firstMatch(name);
     final shortEpisodeMatch = _episodeShortPattern.firstMatch(name);
@@ -592,6 +641,11 @@ class ParsedFileName {
 
   static String _cleanName(String raw) {
     var cleaned = raw;
+    // Underscore/bracket-glued tags (`_1080p`, `_[S02E04]_`) defeat the
+    // word-boundary noise rules (underscore is a word char, `[`/`]` aren't);
+    // normalize them to spaces up front. Dots and dashes stay until the
+    // codec-glue regex runs below.
+    cleaned = cleaned.replaceAll(RegExp(r'[_\[\](){}]'), ' ');
     // Codec tags glued to their channel layout (e.g. `DDP5.1`, `AC3.5.1`).
     cleaned = cleaned.replaceAll(
       RegExp(r'\b[a-z]{2,}\d+\.\d+\b', caseSensitive: false),
@@ -990,14 +1044,18 @@ class TmdService extends ChangeNotifier {
 
   final TmdApi _api = TmdApi();
   Map<String, TmdMeta> _cache = {};
-  final Set<String> _pending = {};
+  final Map<String, Future<TmdMeta?>> _pending = {};
+
+  /// In-flight season/episode detail fetches (dedup only; these return
+  /// non-[TmdMeta] types so they can't share the [_pending] future map).
+  final Set<String> _pendingDetail = {};
   bool _loaded = false;
 
   bool get loaded => _loaded;
 
   TmdMeta? metaFor(String identityKey) => _cache[identityKey];
 
-  bool isResolving(String identityKey) => _pending.contains(identityKey);
+  bool isResolving(String identityKey) => _pending.containsKey(identityKey);
 
   Future<void> ensureLoaded() async {
     if (_loaded) return;
@@ -1008,29 +1066,45 @@ class TmdService extends ChangeNotifier {
 
   /// Returns cached metadata, or resolves it from TMDB (search + match) and
   /// caches it. Returns null when there's no key configured or no match found.
+  ///
+  /// Concurrent calls for the same key share one in-flight search (the second
+  /// caller awaits the first's future) so a prefetch racing a tap never yields
+  /// a false "no match".
   Future<TmdMeta?> resolve(VideoItem video) async {
     final identityKey = TmdStore.identityKeyFor(video);
     if (identityKey.isEmpty) return null;
     await ensureLoaded();
     final cached = _cache[identityKey];
-    if (cached != null) return cached;
-    if (_pending.contains(identityKey)) return null;
+    if (cached != null) {
+      return cached;
+    }
+    final inFlight = _pending[identityKey];
+    if (inFlight != null) {
+      return inFlight;
+    }
 
     final parsed = ParsedFileName.parse(video.title);
     if (parsed.title.isEmpty) return null;
 
-    _pending.add(identityKey);
+    final future = _resolveNow(identityKey, parsed);
+    _pending[identityKey] = future;
     try {
-      final match = await _api.bestMatch(parsed);
-      if (match == null) return null;
-      final meta = TmdMeta(movie: match.movie);
-      _cache[identityKey] = meta;
-      await TmdStore.save(identityKey, meta);
-      return meta;
+      return await future;
     } finally {
       _pending.remove(identityKey);
       notifyListeners();
     }
+  }
+
+  Future<TmdMeta?> _resolveNow(String identityKey, ParsedFileName parsed) async {
+    final match = await _api.bestMatch(parsed);
+    if (match == null) {
+      return null;
+    }
+    final meta = TmdMeta(movie: match.movie);
+    _cache[identityKey] = meta;
+    await TmdStore.save(identityKey, meta);
+    return meta;
   }
 
   /// Resolves a folder's name against TMDB (TV preferred) so its library card
@@ -1040,23 +1114,29 @@ class TmdService extends ChangeNotifier {
     await ensureLoaded();
     final cached = _cache[metadataKey];
     if (cached != null) return cached;
-    if (_pending.contains(metadataKey)) return null;
+    final inFlight = _pending[metadataKey];
+    if (inFlight != null) return inFlight;
 
     final parsed = ParsedFileName.parse(folderName);
     if (parsed.title.isEmpty) return null;
 
-    _pending.add(metadataKey);
+    final future = _resolveFolderNow(metadataKey, parsed.title);
+    _pending[metadataKey] = future;
     try {
-      final match = await _api.bestForQuery(parsed.title);
-      if (match == null) return null;
-      final meta = TmdMeta(movie: match.movie);
-      _cache[metadataKey] = meta;
-      await TmdStore.save(metadataKey, meta);
-      return meta;
+      return await future;
     } finally {
       _pending.remove(metadataKey);
       notifyListeners();
     }
+  }
+
+  Future<TmdMeta?> _resolveFolderNow(String metadataKey, String query) async {
+    final match = await _api.bestForQuery(query);
+    if (match == null) return null;
+    final meta = TmdMeta(movie: match.movie);
+    _cache[metadataKey] = meta;
+    await TmdStore.save(metadataKey, meta);
+    return meta;
   }
 
   /// Fetches full details (synopsis, cast, runtime) for a matched video.
@@ -1087,9 +1167,9 @@ class TmdService extends ChangeNotifier {
     final already = cached.seasons[seasonNumber];
     if (already != null) return already;
     final pendingKey = '$identityKey#s$seasonNumber';
-    if (_pending.contains(pendingKey)) return null;
+    if (_pendingDetail.contains(pendingKey)) return null;
 
-    _pending.add(pendingKey);
+    _pendingDetail.add(pendingKey);
     try {
       final episodes = await _api.seasonEpisodes(cached.movie, seasonNumber);
       if (episodes.isEmpty) return null;
@@ -1100,7 +1180,7 @@ class TmdService extends ChangeNotifier {
     } catch (_) {
       return null;
     } finally {
-      _pending.remove(pendingKey);
+      _pendingDetail.remove(pendingKey);
       notifyListeners();
     }
   }
@@ -1130,9 +1210,9 @@ class TmdService extends ChangeNotifier {
       return existing;
     }
     final pendingKey = '$identityKey#e$seasonNumber.$episodeNumber';
-    if (_pending.contains(pendingKey)) return null;
+    if (_pendingDetail.contains(pendingKey)) return null;
 
-    _pending.add(pendingKey);
+    _pendingDetail.add(pendingKey);
     try {
       final enriched = await _api.episodeDetails(
         cached.movie,
@@ -1146,7 +1226,7 @@ class TmdService extends ChangeNotifier {
     } catch (_) {
       return existing;
     } finally {
-      _pending.remove(pendingKey);
+      _pendingDetail.remove(pendingKey);
       notifyListeners();
     }
   }

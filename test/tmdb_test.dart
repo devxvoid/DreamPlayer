@@ -93,6 +93,38 @@ void main() {
       expect(parsed.title, 'I Will Find You');
       expect(parsed.seriesName, 'I Will Find You');
     });
+
+    test('strips bracket audio metadata from the search title', () {
+      final parsed = ParsedFileName.parse(
+        'Her (2013) 1080p BluRay REMUX AVC x264 '
+        '[Hindi AMZN DDP 2.0 224kbps + English DTS-HD MA 5.1] '
+        'ESub-(FraMeSToR-4kHdHub).mkv',
+      );
+      expect(parsed.title, 'Her');
+      expect(parsed.year, 2013);
+    });
+
+    test('strips MA / SDR / Hindi noise from the search title', () {
+      final parsed = ParsedFileName.parse(
+        'Silence.2016.1080p.BluRay.REMUX.AVC.English.DTS-HD.MA.5.1-FraMeSToR.mkv',
+      );
+      expect(parsed.title, 'Silence');
+      expect(parsed.year, 2016);
+
+      final hdHub = ParsedFileName.parse(
+        '24.2016.UNCUT.4K-2160p.SDR.TK.WEB-DL.Hindi.DDP5.1-Tamil.DD5.1.'
+        'HEVC.x265-HDHub4u.Ms.mkv',
+      );
+      expect(hdHub.title, '24');
+      expect(hdHub.year, 2016);
+
+      final oldboy = ParsedFileName.parse(
+        'Oldboy 2003 1080p BluRay [Hindi DDP 5.1   Korean DTS 5.1] x264 '
+        'USURY-4kHdHub.com.mkv',
+      );
+      expect(oldboy.title, 'Oldboy');
+      expect(oldboy.year, 2003);
+    });
   });
 
   group('TmdStore', () {
