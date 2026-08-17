@@ -5,8 +5,8 @@ pulled into the GitHub Release body automatically by `.github/workflows/release.
 
 ## 0.1.8
 
-- **In-app SMB removed from iOS (and Android)** — the iPad AMSMB2 + AetherEngineSMB browser and playback were deleted: it was slow, didn't play every video, and audio-track switching could crash the app. The "Network shares" home entry is gone on all platforms. NAS playback now goes through **in-app WebDAV**, **in-app Jellyfin**, **CX Explorer → "Open with"** (Android), and **Files app → "Open with"** (iPad) — all faster and more reliable. `BufferedSMBReader` stays for WebDAV's read-ahead; `AetherEngineSMB` stays for WebDAV's `ByteRangeSource`. Full SMB implementation notes preserved in AGENTS.md as a revival blueprint.
-- **Source badges updated** — continue-watching cards still show `CX SMB` for CX Explorer handoffs and `Files / SMB` for iOS bookmarked folders (Files app SMB), but the legacy `SMB` badge (in-app `smb:` resume keys) is now historical only.
+- **In-app SMB removed from iOS** — the iPad AMSMB2 + AetherEngineSMB browser and playback were deleted: it was slow, didn't play every video, and audio-track switching could crash the app. The "Network shares" home entry is gone on iOS. **Android SMB stays** — the `SmbScreen` + `SmbClient` (jcifs-ng browse + `SmbDataSource` streaming) remain; the "Network shares" entry shows on Android only. NAS playback: **Android** → in-app SMB browser, CX Explorer "Open with", WebDAV, Jellyfin; **iPad** → Files app "Open with", in-app WebDAV, in-app Jellyfin. `BufferedSMBReader` stays for WebDAV's read-ahead; `AetherEngineSMB` stays for WebDAV's `ByteRangeSource`. Full iOS SMB implementation notes preserved in AGENTS.md as a revival blueprint.
+- **Source badges** — continue-watching cards show `CX SMB` (Android handoff), `Files / SMB` (iOS Files-app SMB), and legacy `SMB` (old in-app `smb:` keys, historical only).
 
 ## 0.1.7
 
