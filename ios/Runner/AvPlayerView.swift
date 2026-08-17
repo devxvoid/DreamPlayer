@@ -442,7 +442,15 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             // ring buffer ahead of the cursor.
             smbToken = parsed.token
             isSMBStream = true
-            smbFormatHint = parsed.ext.isEmpty || parsed.ext == "stream" ? nil : parsed.ext
+            if parsed.ext.isEmpty || parsed.ext == "stream" {
+                // Extensionless file on the NAS (e.g. "LG") — read the first
+                // 16 bytes and guess the container so FFmpeg doesn't fail its
+                // byte-level probe with "custom probe failed".
+                smbFormatHint = Self.sniffFormatFromSMB(conns[0])
+                print("smb-sniff: extensionless -> \(smbFormatHint ?? "nil")")
+            } else {
+                smbFormatHint = parsed.ext
+            }
             source = .custom(
                 BufferedSMBReader(sources: conns),
                 formatHint: smbFormatHint
@@ -952,6 +960,46 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                 formatHint: f.pathExtension.lowercased()
             )
         }
+    }
+
+    /// Read the first 16 bytes from an SMB connection and guess the container
+    /// format from magic bytes, so FFmpeg can skip its (failing) byte-level
+    /// probe for extensionless files on the NAS.
+    private static func sniffFormatFromSMB(_ conn: ByteRangeSource) -> String? {
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: String?
+        Task.detached(priority: .userInitiated) {
+            defer { semaphore.signal() }
+            guard let data = try? await conn.read(at: 0, length: 16), data.count >= 4 else {
+                return
+            }
+            let bytes = [UInt8](data)
+            // ftyp .... = MP4 / MOV / M4A
+            if bytes.count >= 8 && bytes[4] == 0x66 && bytes[5] == 0x74 &&
+               bytes[6] == 0x79 && bytes[7] == 0x70 { result = "mp4"; return }
+            // EBML = Matroska / WebM
+            if bytes[0] == 0x1A && bytes[1] == 0x45 && bytes[2] == 0xDF && bytes[3] == 0xA3 {
+                result = "mkv"; return
+            }
+            // RIFF .... AVI = AVI
+            if bytes[0] == 0x52 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x46 &&
+               bytes.count >= 12 && bytes[8] == 0x41 && bytes[9] == 0x56 &&
+               bytes[10] == 0x49 && bytes[11] == 0x20 { result = "avi"; return }
+            // 0x47 = MPEG-TS sync byte
+            if bytes[0] == 0x47 { result = "ts"; return }
+            // FLV header: 'F' 'L' 'V'
+            if bytes[0] == 0x46 && bytes[1] == 0x4C && bytes[2] == 0x56 { result = "flv"; return }
+            // ID3 = MP3 with ID3 tag
+            if bytes[0] == 0x49 && bytes[1] == 0x44 && bytes[2] == 0x33 { result = "mp3"; return }
+            // OggS = Ogg container
+            if bytes[0] == 0x4F && bytes[1] == 0x67 && bytes[2] == 0x67 && bytes[3] == 0x53 {
+                result = "ogg"; return
+            }
+            // \x00\x00\x01 = MPEG-PS / MPEG-TS pack start
+            if bytes[0] == 0x00 && bytes[1] == 0x00 && bytes[2] == 0x01 { result = "mpeg"; return }
+        }
+        semaphore.wait()
+        return result
     }
 
     /// "House.S02E04.eng" -> "eng"; nil when the final dot-token is not a language code.

@@ -7,14 +7,14 @@ import AetherEngineSMB
 /// Ports the Android `SmbDataSource` design (4 parallel prefetch threads, each
 /// with its own SMB handle / TCP connection) to iOS:
 ///
-/// - **Ring buffer** (default 96 MiB) keeps data ahead of the read cursor.
+/// - **Ring buffer** (96 MiB) keeps data ahead of the read cursor.
 /// - **4 prefetch tasks** each read different regions of the file simultaneously
 ///   via their own `ByteRangeSource`, then copy into the ring under lock (with
 ///   epoch check to prevent stale writes from killed/restarted tasks).
 /// - **Out-of-order completion** merges chunks that land ahead of the contiguous
 ///   write frontier.
 /// - `read()` serves from the ring; `seek()` within the ring is a cheap cursor
-///   move; outside triggers a re-anchor.
+///   move; outside triggers a re-anchor that kills + restarts prefetchers.
 ///
 /// Lifecycle: `cancel()` unblocks a pending read; `close()` stops prefetch
 /// tasks and does NOT close the underlying sources (SMBClient owns their
@@ -85,12 +85,19 @@ final class BufferedSMBReader: IOReader, @unchecked Sendable {
         self.ringCapacity = ringCapacity
         fileSize = sources.first?.byteSize ?? 0
         allocateRing()
+        // Prefetchers start immediately — gen 0 is captured by each task.
         startPrefetchers()
     }
 
     var discImageProbeEnabled: Bool { discProbe }
 
     deinit {
+        ringLock.lock()
+        closed = true
+        prefetchGen &+= 1
+        ringLock.broadcast()
+        ringLock.unlock()
+        for t in prefetchTasks { t.cancel() }
         if ownsSources { sources.forEach { $0.close() } }
         ring?.deallocate()
     }
@@ -109,12 +116,11 @@ final class BufferedSMBReader: IOReader, @unchecked Sendable {
             while availableLocked() == 0 && !bufEof && !closed && cancelEpoch == epoch {
                 if Date() >= deadline { break }
                 ringLock.wait(until: deadline)
-                // If prefetch died from a transient error, restart tasks.
+                // If prefetch died from a transient error, clean dead tasks and restart.
                 if availableLocked() == 0 && !bufEof && retriesLeft > 0 {
                     retriesLeft -= 1
-                    ringLock.unlock()
+                    cleanDeadTasks()
                     startPrefetchers()
-                    ringLock.lock()
                 }
             }
         }
@@ -163,6 +169,7 @@ final class BufferedSMBReader: IOReader, @unchecked Sendable {
     func close() {
         ringLock.lock()
         closed = true
+        prefetchGen &+= 1
         ringLock.broadcast()
         ringLock.unlock()
         for t in prefetchTasks { t.cancel() }
@@ -204,22 +211,51 @@ final class BufferedSMBReader: IOReader, @unchecked Sendable {
         return Int(end - position)
     }
 
-    private func reanchorLocked(at newpos: Int64? = nil) {
-        position = newpos ?? position
+    /// Re-anchor ring to a new position (outside current window).
+    /// Kills old prefetchers, resets ring state, starts fresh prefetchers.
+    /// Caller holds ringLock.
+    private func reanchorLocked(at newpos: Int64) {
+        // 1. Kill old prefetchers — increment gen so they exit on next check.
+        prefetchGen &+= 1
+        ringLock.broadcast()
+        // Release lock briefly so old tasks can observe the gen change and exit.
+        // The caller (seek) holds no external state that could race.
+        ringLock.unlock()
+        for t in prefetchTasks { t.cancel() }
+        prefetchTasks.removeAll()
+        ringLock.lock()
+
+        // 2. Reset ring state.
+        position = newpos
         bufStart = position
         valid = 0
         bufEof = false
         nextWritePos = position
         pendingChunks.removeAll(keepingCapacity: true)
         ringEpoch &+= 1
+
+        // 3. Start fresh prefetchers.
+        startPrefetchers()
         ringLock.broadcast()
     }
 
-    // MARK: - Prefetch
+    // MARK: - Prefetch management
 
     private static let PREFETCH_THREADS = 4
 
+    /// Remove finished/cancelled tasks from the array. Caller holds ringLock.
+    private func cleanDeadTasks() {
+        prefetchTasks.removeAll { $0.isCancelled }
+        // Also remove tasks that have finished (isCancelled is the best we can
+        // check without awaiting; a finished-but-not-cancelled task will be
+        // cleaned on the next call).
+    }
+
+    /// Start 4 prefetch tasks.  Caller holds ringLock.
+    /// Increments prefetchGen so any lingering old tasks will exit.
     private func startPrefetchers() {
+        // Increment gen so old tasks (if any) will exit on their next check.
+        prefetchGen &+= 1
         let gen = prefetchGen
         for i in 0..<Self.PREFETCH_THREADS {
             let src = i < sources.count ? sources[i] : sources[0]
