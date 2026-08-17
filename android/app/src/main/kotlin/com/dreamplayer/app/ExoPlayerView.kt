@@ -6,6 +6,7 @@ import android.content.pm.ActivityInfo
 import android.media.MediaCodecList
 import android.media.MediaExtractor
 import android.media.MediaFormat
+import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -20,6 +21,8 @@ import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.BaseDataSource
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
@@ -169,10 +172,42 @@ class ExoPlayerView(
         }
     }
 
-    private val dataSourceFactory = DefaultDataSource.Factory(
-        activity,
-        httpDataSourceFactory,
-    )
+    /// Routes URIs to the correct data source based on scheme:
+    ///  - smb:// → SmbDataSource (jcifs-ng streaming with ring buffer)
+    ///  - everything else → DefaultDataSource (local + OkHttp for http/https)
+    private val dataSourceFactory = object : DataSource.Factory {
+        private val local = DefaultDataSource.Factory(activity, httpDataSourceFactory)
+
+        override fun createDataSource(): DataSource = MultiplexDataSource(local, activity)
+    }
+
+    /// A [DataSource] that inspects the URI scheme on [open] and delegates to
+    /// [SmbDataSource] for `smb://` or to [local] for everything else.
+    private class MultiplexDataSource(
+        private val local: DefaultDataSource.Factory,
+        private val context: Context,
+    ) : BaseDataSource(/* isNetwork= */ true) {
+        private var delegate: DataSource? = null
+
+        override fun open(dataSpec: DataSpec): Long {
+            delegate = if (dataSpec.uri.scheme == "smb") {
+                SmbDataSource(context)
+            } else {
+                local.createDataSource()
+            }
+            return delegate!!.open(dataSpec)
+        }
+
+        override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
+            delegate!!.read(buffer, offset, length)
+
+        override fun getUri(): Uri? = delegate?.uri
+
+        override fun close() {
+            delegate?.close()
+            delegate = null
+        }
+    }
 
     private val subtitleParserFactory = DreamSubtitleParserFactory()
 

@@ -13,6 +13,7 @@ import '../widgets/folder_card.dart';
 import '../widgets/video_card.dart';
 import 'file_browser_screen.dart';
 import 'jellyfin_screen.dart';
+import 'smb_screen.dart';
 import 'tmd_details_screen.dart';
 import 'webdav_screen.dart';
 
@@ -594,6 +595,12 @@ class _HomeScreenState extends State<HomeScreen>
               onTap: () => Navigator.of(context).pop('jellyfin'),
             ),
             ListTile(
+              leading: const Icon(Icons.folder_shared_outlined),
+              title: const Text('Network shares'),
+              subtitle: const Text('SMB / NAS shares'),
+              onTap: () => Navigator.of(context).pop('smb'),
+            ),
+            ListTile(
               leading: const Icon(Icons.video_library_outlined),
               title: const Text('Add folder to library'),
               subtitle: const Text('A TV-show folder, a movie folder\u2026'),
@@ -618,6 +625,10 @@ class _HomeScreenState extends State<HomeScreen>
       case 'jellyfin':
         await Navigator.of(context).push(
           MaterialPageRoute<void>(builder: (_) => const JellyfinScreen()),
+        );
+      case 'smb':
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => const SmbScreen()),
         );
       case 'storage':
         await Navigator.of(context).push(

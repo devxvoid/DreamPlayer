@@ -31,6 +31,9 @@ class MainActivity : FlutterActivity() {
         MulticastLockManager(this).configure(
             MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dreamplayer/multicast"),
         )
+        SMBClient(this).configure(
+            MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SMBClient.CHANNEL),
+        )
         intentChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "dreamplayer/intent",

@@ -222,6 +222,10 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     // SMBConnection (SMBClient owns its lifetime). ----
     private var smbToken: String?
     private var isSMBStream = false
+    /// Stale SMBConnection from the last audio-track switch. Kept alive until
+    /// the NEXT switch or teardown so AetherEngine's FFmpeg demux thread can
+    /// finish draining I/O without the socket being torn down underneath it.
+    private var previousStaleSMBConnection: SMBConnection?
 
     init(messenger: FlutterBinaryMessenger, viewId: Int64, frame: CGRect) {
         container = AetherPlayerView(frame: frame)
@@ -598,6 +602,11 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         }
         let connection = pair.fresh
         let stale = pair.stale
+        // Close the stale connection from the PREVIOUS audio-track switch —
+        // by now AetherEngine has fully released the old reader (we are in a
+        // new switch, so the previous load() has long since completed).
+        previousStaleSMBConnection?.close()
+        previousStaleSMBConnection = stale
         let source: MediaSource = .custom(
             BufferedSMBReader(source: connection),
             formatHint: nil
@@ -620,9 +629,12 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             if let activeSub, engine.subtitleTracks.contains(where: { $0.id == activeSub }) {
                 engine.selectSubtitleTrack(index: activeSub)
             }
-            // The engine has now swapped the stale reader/connection out; safe
-            // to release the displaced connection.
-            stale?.close()
+            // Do NOT close the stale connection here — AetherEngine's
+            // internal reload may still be draining I/O from the old reader
+            // (FFmpeg demux thread), and tearing down the socket mid-read
+            // causes a hard crash (EXC_BAD_ACCESS). The stale connection is
+            // cleaned up by SMBClient.closeShare() when the user leaves the
+            // SMB browser, or by the next reconnect() call which swaps it out.
             emit()
         } catch {
             lastError = String(describing: error)
@@ -946,5 +958,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         eventChannel.setStreamHandler(nil)
         eventSink = nil
         UIApplication.shared.isIdleTimerDisabled = false
+        previousStaleSMBConnection?.close()
+        previousStaleSMBConnection = nil
     }
 }

@@ -66,4 +66,10 @@ dependencies {
     // Prebuilt Media3 FFmpeg extension (GPLv3): software decode for
     // DTS/DTS-HD, TrueHD/MLP, E-AC3, AC3 where MediaCodec has no decoder.
     implementation("io.github.anilbeesetti:nextlib-media3ext:1.10.1-0.13.0")
+    // SMB2/3 client (jcifs-ng) — Nova and CX File Explorer's SMB library;
+    // measured ~75 MB/s on the real NAS vs ~4-6 MB/s for smbj.
+    implementation("eu.agno3.jcifs:jcifs-ng:2.1.10")
+    // slf4j-nop: jcifs-ng requires an SLF4J binding at runtime; the no-op
+    // binding avoids pulling in a logging framework.
+    implementation("org.slf4j:slf4j-nop:2.0.13")
 }
