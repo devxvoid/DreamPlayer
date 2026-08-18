@@ -55,6 +55,11 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   /// is recreated on unlock) so [didChangeAppLifecycleState] can detect that
   /// the media was lost and reopen it.
   bool _hadMedia = false;
+  /// True when the current source is a network stream (SMB / WebDAV) whose
+  /// underlying TCP connection is killed when iOS backgrounds the app.
+  /// On resume, the engine still reports paused (not IDLE) but the reader is
+  /// dead — we must force-reload instead of just calling play().
+  bool _isNetworkSource = false;
   String? _error;
 
   bool _dragging = false;
@@ -149,6 +154,13 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       }
       return;
     }
+    // Track network sources (SMB / WebDAV) so resume-after-background
+    // force-reloads instead of just calling play() on a dead reader.
+    final uri = video.uri;
+    _isNetworkSource = uri != null &&
+        (uri.startsWith('smb://') ||
+         ((uri.startsWith('http://') || uri.startsWith('https://')) &&
+          (video.httpHeaders.isNotEmpty || video.allowSelfSigned)));
     Duration? resume;
     if (!_inTests) {
       resume = await ResumeStore.positionFor(_resumeKey);
@@ -416,6 +428,12 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     // opened screen or an ended movie isn't spuriously reopened.
     if (state.state == _nativeStateIdle && _hadMedia && !_completed) {
       // `open` autoplays and re-applies the saved resume position.
+      await _openCurrent();
+    } else if (_isNetworkSource && _hadMedia && !_completed) {
+      // iOS kills TCP connections when the app is backgrounded. The engine
+      // still reports paused (not IDLE) but the underlying reader (SMB
+      // FileReader, WebDAV session) is dead and will buffer forever.
+      // Force-reload with a fresh source to re-establish the connection.
       await _openCurrent();
     } else {
       // The media survived; we paused on background, so continue playing.

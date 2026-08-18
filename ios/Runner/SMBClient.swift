@@ -132,7 +132,7 @@ final class SMBChannel: NSObject {
             result(nil)
         case "discoverServers":
             Task.detached { [weak self] in
-                let hosts = self?.discoverServers() ?? []
+                let hosts = await self?.discoverServersAsync() ?? []
                 self?.respond(result, hosts)
             }
         case "checkServer":
@@ -506,7 +506,15 @@ final class SMBChannel: NSObject {
 
     // MARK: - LAN discovery
 
-    private func discoverServers() -> [[String: Any]] {
+    private func discoverServersAsync() async -> [[String: Any]] {
+        await withCheckedContinuation { cont in
+            DispatchQueue.global(qos: .userInitiated).async {
+                cont.resume(returning: self.discoverServersSync())
+            }
+        }
+    }
+
+    private func discoverServersSync() -> [[String: Any]] {
         guard let subnet = localSubnet() else { return [] }
         let queue = DispatchQueue(label: "smb.discover", attributes: .concurrent)
         let group = DispatchGroup()

@@ -212,6 +212,8 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     // ---- Last-opened source (needed to reload when the engine parks in .ended). ----
     private var lastSource: MediaSource?
     private var lastLoadOptions = LoadOptions()
+    private var lastSmbURL: String?  // smb:// URI; needed to re-resolve a fresh source on reload
+    private var lastWebDAVInfo: (url: URL, headers: [String: String], allowSelfSigned: Bool)?
 
     
 
@@ -287,7 +289,21 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                     result(self.stateMap())
                 case "setAudioTrack":
                     let index = (args?["index"] as? NSNumber)?.intValue ?? -1
-                    self.engine?.selectAudioTrack(index: index)
+                    if self.lastSmbURL != nil || self.lastWebDAVInfo != nil {
+                        // Custom IOReader sources are consumed; the engine's
+                        // internal reload on track-switch hits "open failed".
+                        // Reload with a fresh source, then select the track.
+                        let position = self.engine?.currentTime ?? 0
+                        let targetIndex = index
+                        Task { @MainActor [weak self] in
+                            guard let self else { return }
+                            await self.reloadSession(at: position)
+                            self.engine?.selectAudioTrack(index: targetIndex)
+                            self.emit()
+                        }
+                    } else {
+                        self.engine?.selectAudioTrack(index: index)
+                    }
                     result(nil)
                 case "setSubtitles":
                     let on = (args?["on"] as? Bool) ?? true
@@ -439,6 +455,8 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         videoHeight = 0
         isDolbyVision = false
         dvProfile = nil
+        lastSmbURL = nil
+        lastWebDAVInfo = nil
         subtitleOverlay.clear()
         emit()
 
@@ -504,6 +522,8 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                     return
                 }
                 self.lastSource = finalSource
+                self.lastSmbURL = smbSource
+                self.lastWebDAVInfo = webDAVSource
                 let probe = try await engine.load(source: finalSource, startPosition: startPosition, options: options)
                 if let probe {
                     self.videoCodecName = probe.videoCodecName
@@ -529,11 +549,16 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     /// Replays the last-opened source at `position` seconds. AetherEngine treats
     /// `.ended` as terminal (seek/play are no-ops there), so a replay / scrubber
     /// pull-back after the end card reloads the session instead.
+    /// For SMB / WebDAV custom sources the underlying IOReader is consumed and
+    /// can't rewind, so we re-resolve a fresh source instead of reusing `lastSource`.
     private func reloadSession(at position: Double) async {
-        guard let engine, let lastSource else { return }
+        guard let engine else { return }
         let activeSub = engine.activeSubtitleTrackIndex
         do {
-            let probe = try await engine.load(source: lastSource, startPosition: position, options: lastLoadOptions)
+            let freshSource = try await buildFreshSource()
+            guard let freshSource else { return }
+            lastSource = freshSource
+            let probe = try await engine.load(source: freshSource, startPosition: position, options: lastLoadOptions)
             if let probe {
                 videoCodecName = probe.videoCodecName
                 videoWidth = Int(probe.videoWidth)
@@ -547,6 +572,37 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         } catch {
             lastError = String(describing: error)
         }
+    }
+
+    /// Builds a fresh `MediaSource` from the stored open info.
+    /// SMB: re-resolves the smb:// URI → new FileReader → new BufferedSMBReader.
+    /// WebDAV: new HTTP session → new BufferedSMBReader.
+    /// Local file: reuses the file URL (always re-openable).
+    private func buildFreshSource() async throws -> MediaSource? {
+        if let smbURL = lastSmbURL {
+            let resolved = try await Task.detached(priority: .userInitiated) {
+                try await SMBChannel.shared.resolveStreamURL(smbURL)
+            }.value
+            let ext = URL(string: smbURL)?.pathExtension.lowercased() ?? ""
+            return .custom(
+                BufferedSMBReader(source: resolved.source),
+                formatHint: ext.isEmpty ? nil : ext
+            )
+        } else if let web = lastWebDAVInfo {
+            let byteSource = try await Task.detached(priority: .userInitiated) {
+                try WebDAVClient.shared.makeByteRangeSource(
+                    url: web.url,
+                    headers: web.headers,
+                    allowSelfSigned: web.allowSelfSigned
+                )
+            }.value
+            let ext = web.url.pathExtension.lowercased()
+            return .custom(
+                BufferedSMBReader(source: byteSource),
+                formatHint: ext.isEmpty ? nil : ext
+            )
+        }
+        return lastSource  // local file: always re-openable
     }
 
     // MARK: - Fit / zoom mode
