@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/video_item.dart';
 import '../services/jellyfin_client.dart';
 import '../services/library_folders.dart';
+import '../services/tmdb_client.dart';
 import 'tmd_details_screen.dart';
 
 /// Jellyfin / Emby browser: saved + discovered servers -> libraries -> folders
@@ -42,7 +43,18 @@ class _JellyfinScreenState extends State<JellyfinScreen> {
   @override
   void initState() {
     super.initState();
+    TmdService.instance.addListener(_onMetadataChanged);
     _loadServers();
+  }
+
+  @override
+  void dispose() {
+    TmdService.instance.removeListener(_onMetadataChanged);
+    super.dispose();
+  }
+
+  void _onMetadataChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _loadServers() async {
@@ -109,6 +121,7 @@ class _JellyfinScreenState extends State<JellyfinScreen> {
         _items = [...folders, ...playables];
         _loading = false;
       });
+      _prefetchTmdbMeta(playables);
     } on JellyfinException catch (e) {
       if (!mounted) return;
       if (e.message.contains('Session expired')) {
@@ -126,6 +139,31 @@ class _JellyfinScreenState extends State<JellyfinScreen> {
         _loading = false;
       });
     }
+  }
+
+  /// Best-effort TMDB prefetch for the current level's playables. Each item
+  /// resolves under the SAME stable key its tap uses ([_client.resumeKey]), so
+  /// the row's poster appears (when a match exists) and opening the file is a
+  /// cache hit. Never blocks the list.
+  void _prefetchTmdbMeta(List<JellyfinItem> playables) {
+    final server = _browsing;
+    if (server == null) return;
+    final service = TmdService.instance;
+    for (final item in playables) {
+      service.resolve(_client.videoItem(server, item)).catchError((_) {
+        // Best-effort; a TMDB failure just leaves the row without a poster.
+        return null;
+      });
+    }
+  }
+
+  /// Cached TMDB meta for a playable row, looked up under the same identity key
+  /// its tap uses so the poster and the opened details screen agree.
+  TmdMeta? _tmdbFor(JellyfinItem item) {
+    final server = _browsing;
+    if (server == null || item.isFolder) return null;
+    return TmdService.instance
+        .metaFor(_client.resumeKey(server, item));
   }
 
   Future<void> _handleSessionExpired() async {
@@ -428,6 +466,7 @@ class _JellyfinScreenState extends State<JellyfinScreen> {
         final item = _items[index];
         return _JellyfinTile(
           item: item,
+          tmdbMeta: _tmdbFor(item),
           onTap: () => _openItem(item),
           onAddToLibrary:
               item.isFolder ? () => _addToLibrary(item) : null,
@@ -535,11 +574,13 @@ class _SectionHeader extends StatelessWidget {
 class _JellyfinTile extends StatelessWidget {
   const _JellyfinTile({
     required this.item,
+    required this.tmdbMeta,
     required this.onTap,
     this.onAddToLibrary,
   });
 
   final JellyfinItem item;
+  final TmdMeta? tmdbMeta;
   final VoidCallback onTap;
 
   /// Shown on folders as a "add to library" shortcut (replaces the plain
@@ -552,8 +593,11 @@ class _JellyfinTile extends StatelessWidget {
     final icon = item.isFolder ? Icons.folder : Icons.play_circle_outline;
     final color = item.isFolder ? colorScheme.primary : colorScheme.secondary;
     final subtitle = item.isFolder ? null : item.durationLabel;
+    final posterUrl = posterUrlOf(tmdbMeta);
     return ListTile(
-      leading: Icon(icon, color: color),
+      leading: posterUrl != null
+          ? _Poster(posterUrl: posterUrl)
+          : Icon(icon, color: color),
       title: Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: subtitle == null ? null : Text(subtitle),
       trailing: item.isFolder
@@ -571,6 +615,30 @@ class _JellyfinTile extends StatelessWidget {
             )
           : null,
       onTap: onTap,
+    );
+  }
+}
+
+/// A small 48×72 rounded poster thumbnail for a file row.
+class _Poster extends StatelessWidget {
+  const _Poster({required this.posterUrl});
+
+  final String posterUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(4),
+      child: Image.network(
+        posterUrl,
+        width: 48,
+        height: 72,
+        fit: BoxFit.cover,
+        errorBuilder: (_, _, _) => Icon(
+          Icons.play_circle_outline,
+          color: Theme.of(context).colorScheme.secondary,
+        ),
+      ),
     );
   }
 }
