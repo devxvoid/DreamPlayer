@@ -388,15 +388,22 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         let httpHeaders = (args?["headers"] as? [String: String]) ?? [:]
         let allowSelfSigned = (args?["allowSelfSigned"] as? Bool) ?? false
 
-        // WebDAV source pending construction: `makeByteRangeSource` does a
-        // blocking size probe, so it must run off the main thread — the async
-        // load task below builds it.
+        // Source pending construction: some sources need background I/O
+        // (WebDAV size probe, SMB connection) before the engine can load.
         var source: MediaSource?
         var localURL: URL?
         var webDAVSource: (url: URL, headers: [String: String], allowSelfSigned: Bool)?
+        var smbSource: String? // smb:// URI to resolve via SMBChannel
         if let path, !path.isEmpty {
             localURL = URL(fileURLWithPath: path)
             source = .url(localURL!)
+        } else if let uri, let u = URL(string: uri),
+                  u.scheme?.lowercased() == "smb" {
+            // SMB playback: the channel's `openShare` returned an smb:// URI
+            // with the server ID embedded; resolve it to a ByteRangeSource
+            // via SMBChannel (connection was pre-established during browse).
+            localURL = u
+            smbSource = uri
         } else if let uri, let u = URL(string: uri),
                   (u.scheme?.lowercased() == "http" || u.scheme?.lowercased() == "https"),
                   !httpHeaders.isEmpty || allowSelfSigned {
@@ -477,6 +484,17 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                     let ext = webURL.pathExtension.lowercased()
                     source = .custom(
                         BufferedSMBReader(source: byteSource),
+                        formatHint: ext.isEmpty ? nil : ext
+                    )
+                } else if let smbURL = smbSource {
+                    // SMB playback: resolve the smb:// URI to a ByteRangeSource
+                    // via SMBChannel (connection was pre-established by openShare).
+                    let resolved = try await Task.detached(priority: .userInitiated) {
+                        try SMBChannel.shared.resolveStreamURL(smbURL)
+                    }.value
+                    let ext = URL(string: smbURL)?.pathExtension.lowercased() ?? ""
+                    source = .custom(
+                        BufferedSMBReader(source: resolved.source),
                         formatHint: ext.isEmpty ? nil : ext
                     )
                 }
