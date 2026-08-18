@@ -312,7 +312,7 @@ final class SMBChannel: NSObject {
         do {
             let client = try makeClient(host: h, port: port)
             if anonymous {
-                try await client.login(username: nil, password: nil)
+                try await client.login(username: "", password: "")
             } else {
                 try await client.login(username: username, password: password)
             }
@@ -344,7 +344,7 @@ final class SMBChannel: NSObject {
         guard let server = serverById(serverId) else { throw SMBChannelError.serverNotFound }
         let client = try makeClient(host: server.host, port: server.port)
         if server.anonymous {
-            try await client.login()
+            try await client.login(username: "", password: "")
         } else {
             try await client.login(username: server.username, password: server.password)
         }
@@ -376,7 +376,7 @@ final class SMBChannel: NSObject {
         guard let server = serverById(serverId) else { throw SMBChannelError.serverNotFound }
         let client = try makeClient(host: server.host, port: server.port)
         if server.anonymous {
-            try await client.login()
+            try await client.login(username: "", password: "")
         } else {
             try await client.login(username: server.username, password: server.password)
         }
@@ -427,7 +427,7 @@ final class SMBChannel: NSObject {
         guard let server = serverById(serverId) else { throw SMBChannelError.serverNotFound }
         let client = try makeClient(host: server.host, port: server.port)
         if server.anonymous {
-            try await client.login()
+            try await client.login(username: "", password: "")
         } else {
             try await client.login(username: server.username, password: server.password)
         }
@@ -490,7 +490,7 @@ final class SMBChannel: NSObject {
         guard let server = serverById(serverId) else { throw SMBChannelError.serverNotFound }
         let client = try makeClient(host: server.host, port: server.port)
         if server.anonymous {
-            try await client.login(username: nil, password: nil)
+            try await client.login(username: "", password: "")
         } else {
             try await client.login(username: server.username, password: server.password)
         }
@@ -568,7 +568,7 @@ final class SMBChannel: NSObject {
         addr.sin_family = sa_family_t(AF_INET)
         addr.sin_port = UInt16(port).bigEndian
         inet_pton(AF_INET, host, &addr.sin_addr)
-        var tv = timeval(tv_sec: timeoutMs / 1000, tv_usec: (timeoutMs % 1000) * 1000)
+        var tv = timeval(tv_sec: timeoutMs / 1000, tv_usec: Int32((timeoutMs % 1000) * 1000))
         setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout.size(ofValue: tv)))
         let result = withUnsafePointer(to: &addr) { ptr in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(sock, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }

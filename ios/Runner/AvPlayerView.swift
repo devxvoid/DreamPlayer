@@ -490,7 +490,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                     // SMB playback: resolve the smb:// URI to a ByteRangeSource
                     // via SMBChannel (connection was pre-established by openShare).
                     let resolved = try await Task.detached(priority: .userInitiated) {
-                        try SMBChannel.shared.resolveStreamURL(smbURL)
+                        try await SMBChannel.shared.resolveStreamURL(smbURL)
                     }.value
                     let ext = URL(string: smbURL)?.pathExtension.lowercased() ?? ""
                     source = .custom(
