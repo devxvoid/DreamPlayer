@@ -527,11 +527,6 @@ class _FolderTile extends StatelessWidget {
   }
 }
 
-/// The TMDB poster URL for a cached meta, or null when there's no poster.
-String? posterUrlOf(TmdMeta? meta) => meta?.movie.posterPath == null
-    ? null
-    : 'https://image.tmdb.org/t/p/w185${meta!.movie.posterPath}';
-
 /// A small 48×72 rounded poster thumbnail for a file row.
 class _Poster extends StatelessWidget {
   const _Poster({required this.posterUrl});

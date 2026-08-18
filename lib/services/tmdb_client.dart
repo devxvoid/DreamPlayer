@@ -8,6 +8,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../config/tmdb_api_key.dart';
 import '../models/video_item.dart';
 
+/// The TMDB poster URL (w185) for a cached meta, or null when there's no
+/// poster. Shared by the folder/WebDAV/SMB row tiles that show per-file art.
+String? posterUrlOf(TmdMeta? meta) => meta?.movie.posterPath == null
+    ? null
+    : 'https://image.tmdb.org/t/p/w185${meta!.movie.posterPath}';
+
 /// What kind of title a matched file represents.
 enum TmdKind { movie, tv }
 

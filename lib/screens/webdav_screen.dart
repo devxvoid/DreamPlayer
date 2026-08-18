@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/video_item.dart';
+import '../services/tmdb_client.dart';
 import '../services/webdav_client.dart';
 import 'tmd_details_screen.dart';
 
@@ -37,7 +38,18 @@ class _WebDavScreenState extends State<WebDavScreen> {
   @override
   void initState() {
     super.initState();
+    TmdService.instance.addListener(_onMetadataChanged);
     _loadServers();
+  }
+
+  @override
+  void dispose() {
+    TmdService.instance.removeListener(_onMetadataChanged);
+    super.dispose();
+  }
+
+  void _onMetadataChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _loadServers() async {
@@ -87,6 +99,7 @@ class _WebDavScreenState extends State<WebDavScreen> {
         _entries = entries;
         _loading = false;
       });
+      _prefetchTmdbMeta(entries);
     } on PlatformException catch (e) {
       if (mounted) {
         setState(() {
@@ -94,6 +107,31 @@ class _WebDavScreenState extends State<WebDavScreen> {
           _loading = false;
         });
       }
+    }
+  }
+
+  /// Best-effort TMDB prefetch for the current folder's video files. Each file
+  /// resolves under the SAME stable key `_openEntry` uses, so the row's poster
+  /// appears (when a match exists) and tapping the file is a cache hit.
+  void _prefetchTmdbMeta(List<WebDavEntry> entries) {
+    final server = _browsing;
+    if (server == null) return;
+    final service = TmdService.instance;
+    for (final entry in entries) {
+      if (entry.isDirectory) continue;
+      service
+          .resolve(VideoItem(
+            id: 'webdav_${server.id}${entry.path}',
+            title: entry.name,
+            uri: '',
+            resumeKey: 'webdav_${server.id}${entry.path}',
+            duration: Duration.zero,
+            sizeBytes: entry.size,
+          ))
+          .catchError((_) {
+            // Best-effort; a TMDB failure just leaves the row without a poster.
+            return null;
+          });
     }
   }
 
@@ -281,7 +319,12 @@ class _WebDavScreenState extends State<WebDavScreen> {
       itemCount: _entries.length,
       itemBuilder: (context, index) {
         final entry = _entries[index];
-        return _WebDavTile(entry: entry, onTap: () => _openEntry(entry));
+        final server = _browsing;
+        final meta = entry.isDirectory || server == null
+            ? null
+            : TmdService.instance
+                .metaFor('webdav_${server.id}${entry.path}');
+        return _WebDavTile(entry: entry, tmdbMeta: meta, onTap: () => _openEntry(entry));
       },
     );
   }
@@ -363,9 +406,14 @@ class _SectionHeader extends StatelessWidget {
 }
 
 class _WebDavTile extends StatelessWidget {
-  const _WebDavTile({required this.entry, required this.onTap});
+  const _WebDavTile({
+    required this.entry,
+    required this.tmdbMeta,
+    required this.onTap,
+  });
 
   final WebDavEntry entry;
+  final TmdMeta? tmdbMeta;
   final VoidCallback onTap;
 
   static String _sizeLabel(int bytes) {
@@ -388,12 +436,39 @@ class _WebDavTile extends StatelessWidget {
         ? colorScheme.primary
         : colorScheme.secondary;
     final subtitle = entry.isDirectory ? null : _sizeLabel(entry.size);
+    final posterUrl = posterUrlOf(tmdbMeta);
     return ListTile(
-      leading: Icon(icon, color: color),
+      leading: posterUrl != null
+          ? _Poster(posterUrl: posterUrl)
+          : Icon(icon, color: color),
       title: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: subtitle == null ? null : Text(subtitle),
       trailing: entry.isDirectory ? const Icon(Icons.chevron_right) : null,
       onTap: onTap,
+    );
+  }
+}
+
+/// A small 48×72 rounded poster thumbnail for a file row.
+class _Poster extends StatelessWidget {
+  const _Poster({required this.posterUrl});
+
+  final String posterUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(4),
+      child: Image.network(
+        posterUrl,
+        width: 48,
+        height: 72,
+        fit: BoxFit.cover,
+        errorBuilder: (_, _, _) => Icon(
+          Icons.play_circle_outline,
+          color: Theme.of(context).colorScheme.secondary,
+        ),
+      ),
     );
   }
 }
