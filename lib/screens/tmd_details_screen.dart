@@ -362,8 +362,9 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
   }
 
   /// Folder mode: open an entry. Subfolders go into [FolderScreen] (deep
-  /// navigation); files open their own details screen, pre-pinned to the
-  /// folder's match so the show's metadata shows instantly.
+  /// navigation); files open their own details screen. Episodes of the
+  /// folder's TV show carry the folder's meta (season data shows instantly);
+  /// standalone movies must resolve their own title.
   Future<void> _openFolderEntry(FileEntry entry) async {
     if (entry.isDirectory) {
       await Navigator.of(context).push(
@@ -378,14 +379,26 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
     }
     final video = _toVideoItem(entry);
     final meta = _service.metaFor(_identityKey);
-    if (meta != null) {
+    final videoKey = TmdStore.identityKeyFor(video);
+    final isEpisode = ParsedFileName.parse(entry.name).isEpisode;
+    if (meta != null && isEpisode && meta.movie.kind == TmdKind.tv) {
       try {
         // Carry the folder's full meta (movie + details + seasons) onto the
         // episode's key so its details screen shows the episode's own
         // name/overview/rating instantly — a bare `setManual` would drop the
         // already-loaded season data and force a re-fetch on every tap.
-        await _service.carryMeta(_identityKey, TmdStore.identityKeyFor(video));
+        await _service.carryMeta(_identityKey, videoKey);
       } catch (_) {}
+    } else if (meta != null) {
+      // A standalone movie must resolve its own title. Drop any folder meta
+      // previously carried onto this key (from an older build) so the video's
+      // details screen re-searches instead of showing the folder's match.
+      final existing = _service.metaFor(videoKey);
+      if (existing != null && existing.movie.id == meta.movie.id) {
+        try {
+          await _service.clear(videoKey);
+        } catch (_) {}
+      }
     }
     if (!mounted) return;
     await Navigator.of(context).push(
@@ -410,9 +423,9 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
   }
 
   /// Jellyfin folder mode: open an entry. Subfolders go into [FolderScreen]
-  /// (deep navigation); playables open their own details screen, carrying the
-  /// folder's TMDB metadata (the show's season data) so the episode screen
-  /// shows instantly.
+  /// (deep navigation); playables open their own details screen. Episodes of
+  /// the folder's show carry the folder's TMDB metadata (season data shows
+  /// instantly); standalone movies resolve their own title.
   Future<void> _openJellyfinItem(JellyfinItem item) async {
     final server = _jellyfinServer;
     if (server == null) return;
@@ -438,10 +451,22 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
     if (!item.isPlayable) return;
     final video = _jellyfin.videoItem(server, item);
     final meta = _service.metaFor(_identityKey);
-    if (meta != null) {
+    final videoKey = TmdStore.identityKeyFor(video);
+    final isEpisode = item.type == 'Episode' ||
+        (item.parentIndexNumber != null && item.indexNumber != null);
+    if (meta != null && isEpisode && meta.movie.kind == TmdKind.tv) {
       try {
-        await _service.carryMeta(_identityKey, TmdStore.identityKeyFor(video));
+        await _service.carryMeta(_identityKey, videoKey);
       } catch (_) {}
+    } else if (meta != null) {
+      // Standalone movie: drop any folder meta carried onto this key so the
+      // video's details screen resolves its own title.
+      final existing = _service.metaFor(videoKey);
+      if (existing != null && existing.movie.id == meta.movie.id) {
+        try {
+          await _service.clear(videoKey);
+        } catch (_) {}
+      }
     }
     if (!mounted) return;
     await Navigator.of(context).push(
