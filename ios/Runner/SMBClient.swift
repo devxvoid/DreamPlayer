@@ -1,3 +1,4 @@
+import Darwin
 import Flutter
 import Foundation
 import Security
@@ -525,7 +526,7 @@ final class SMBChannel: NSObject {
         let queue = DispatchQueue(label: "smb.discover", attributes: .concurrent)
         let group = DispatchGroup()
         let found = NSLock()
-        var results: [(ip: UInt32)] = []
+        var results: [UInt32] = []
 
         var ip = subnet.0 + 1
         while ip < subnet.1 {
@@ -601,11 +602,10 @@ final class SMBChannel: NSObject {
         guard errno == EINPROGRESS else { return false }
 
         // Wait for the socket to become writable (connect completed).
-        var writeSet = fd_set()
-        var tv = timeval(tv_sec: timeoutMs / 1000, tv_usec: Int32((timeoutMs % 1000) * 1000))
-        FD_ZERO(&writeSet)
-        FD_SET(sock, &writeSet)
-        let sel = select(sock + 1, nil, &writeSet, nil, &tv)
+        var pollfd = pollfd(fd: sock, events: Int16(POLLOUT), revents: 0)
+        let sel = withUnsafeMutablePointer(to: &pollfd) { ptr in
+            poll(ptr, 1, Int32(timeoutMs))
+        }
         guard sel > 0 else { return false }
 
         // Check if the connect actually succeeded.
