@@ -1,13 +1,13 @@
 import Flutter
 import Foundation
 import Security
-import SMBClient as SMBClientLib
+import SMBClient
 
 /// iOS SMB browse client (channel `dreamplayer/smb`), mirroring `SMBClient.kt`.
 ///
 /// Handles server persistence (Keychain passwords), SMB browsing (shares,
 /// directories), connection testing, LAN subnet scan, and stream URL
-/// generation. Each `openShare` establishes a dedicated `SMBClientLib`
+/// generation. Each `openShare` establishes a dedicated `SMBClient`
 /// connection; `closeShare` tears it down.
 final class SMBChannel: NSObject {
 
@@ -37,7 +37,7 @@ final class SMBChannel: NSObject {
 
     /// Live SMB connections keyed by server ID (populated by `openShare`,
     /// torn down by `closeShare` or when the player is disposed).
-    private var liveConnections: [String: SMBClientLib] = [:]
+    private var liveConnections: [String: SMBClient] = [:]
     private var liveLock = NSLock()
 
     // MARK: - Channel
@@ -461,7 +461,7 @@ final class SMBChannel: NSObject {
 
     /// Resolves an `smb://` URI to a `ByteRangeSource` for the engine.
     /// Called by `AvPlayerView` on the player thread.
-    func resolveStreamURL(_ urlString: String) async throws -> (source: SMBByteRangeSource, client: SMBClientLib) {
+    func resolveStreamURL(_ urlString: String) async throws -> (source: SMBByteRangeSource, client: SMBClient) {
         guard let url = URL(string: urlString),
               url.scheme == "smb",
               let serverId = url.host,
@@ -601,10 +601,10 @@ final class SMBChannel: NSObject {
 
     // MARK: - Helpers
 
-    private func makeClient(host: String, port: Int) throws -> SMBClientLib {
+    private func makeClient(host: String, port: Int) throws -> SMBClient {
         // kishikawakatsumi/SMBClient default port is 445; non-standard ports
         // would need the Session-level API — for now assume 445.
-        return try SMBClientLib(host: host)
+        return try SMBClient(host: host)
     }
 
     private func isVideo(_ name: String) -> Bool { hasExtension(name, Self.videoExtensions) }
