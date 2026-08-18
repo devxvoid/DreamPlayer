@@ -10,14 +10,14 @@ import SMBClient as SMBClientLib
 /// handles the underlying SMB2 READ messages over the connection's TCP socket.
 final class SMBByteRangeSource: ByteRangeSource, @unchecked Sendable {
 
-    private let reader: FileHandle
+    private let reader: SMBClientLib.FileReader
     private let lock = NSLock()
 
     let byteSize: Int64
 
     /// Wraps a `FileReader` from the kishikawakatsumi/SMBClient library.
-    /// `fileSize` is the total file size in bytes (obtained from the reader).
-    init(reader: FileHandle, fileSize: Int64) {
+    /// `fileSize` is the total file size in bytes.
+    init(reader: SMBClientLib.FileReader, fileSize: Int64) {
         self.reader = reader
         self.byteSize = fileSize
     }
@@ -25,7 +25,7 @@ final class SMBByteRangeSource: ByteRangeSource, @unchecked Sendable {
     func read(at offset: Int64, length: Int) async throws -> Data {
         lock.lock()
         defer { lock.unlock() }
-        return try await reader.read(offset: offset, length: length)
+        return try await reader.read(offset: UInt64(bitPattern: offset), length: UInt32(truncatingIfNeeded: length))
     }
 
     func close() {

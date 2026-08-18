@@ -312,15 +312,16 @@ final class SMBChannel: NSObject {
         do {
             let client = try makeClient(host: h, port: port)
             if anonymous {
-                try await client.login()
+                try await client.login(username: nil, password: nil)
             } else {
                 try await client.login(username: username, password: password)
             }
-            // Probe well-known shares to verify connectivity.
+            // Probe well-known shares via treeConnect to verify connectivity.
             var reachable = false
             for name in Self.commonShares {
                 do {
-                    let _ = try await client.listDirectory(path: "/\(name)")
+                    let _ = try await client.connectShare(name)
+                    try await client.disconnectShare()
                     try await client.logoff()
                     return ["ok": true, "error": nil as String?]
                 } catch {
@@ -349,10 +350,11 @@ final class SMBChannel: NSObject {
         }
 
         var names = Set(savedShares(serverId))
-        // Probe well-known shares (SMB2 has no NetShareEnum).
+        // Probe well-known shares via treeConnect (SMB2 has no NetShareEnum).
         for name in Self.commonShares {
             do {
-                let _ = try await client.listDirectory(path: "/\(name)")
+                let _ = try await client.connectShare(name)
+                try await client.disconnectShare()
                 names.insert(name)
             } catch {
                 // not a disk share / no access — skip
@@ -389,13 +391,13 @@ final class SMBChannel: NSObject {
         var subtitles: [String: [String]] = [:] // baseName -> [relPath]
 
         for item in items {
-            let name = item.fileName
+            let name = item.name
             if name == "." || name == ".." { continue }
             let relPath = path.isEmpty ? name : "\(path)/\(name)"
             if item.isDirectory {
                 dirs.append(entryMap(name: name, path: relPath, isDir: true, size: 0, modified: 0))
             } else if isVideo(name) {
-                videos.append(entryMap(name: name, path: relPath, isDir: false, size: Int64(item.fileSize), modified: 0))
+                videos.append(entryMap(name: name, path: relPath, isDir: false, size: Int64(item.size), modified: 0))
             } else if isSubtitle(name) {
                 let base = baseName(name).lowercased()
                 subtitles[base, default: []].append(relPath)
@@ -431,9 +433,10 @@ final class SMBChannel: NSObject {
         }
         try await client.connectShare(share)
 
-        // Verify the file is readable.
+        // Verify the file is readable and get its size.
         let filePath = "/\(path)"
-        let _ = try await client.fileReader(path: filePath)
+        let stat = try await client.fileStat(path: filePath)
+        guard !stat.isDirectory else { throw SMBChannelError.invalidURL }
 
         // Tear down any previous connection for this server.
         liveLock.lock()
@@ -477,8 +480,9 @@ final class SMBChannel: NSObject {
         liveLock.unlock()
 
         if let client = existingClient {
-            let reader = try client.fileReader(path: filePath)
-            let source = SMBByteRangeSource(reader: reader, fileSize: Int64(reader.fileSize))
+            let stat = try await client.fileStat(path: filePath)
+            let reader = client.fileReader(path: filePath)
+            let source = SMBByteRangeSource(reader: reader, fileSize: Int64(stat.size))
             return (source, client)
         }
 
@@ -486,13 +490,14 @@ final class SMBChannel: NSObject {
         guard let server = serverById(serverId) else { throw SMBChannelError.serverNotFound }
         let client = try makeClient(host: server.host, port: server.port)
         if server.anonymous {
-            try await client.login()
+            try await client.login(username: nil, password: nil)
         } else {
             try await client.login(username: server.username, password: server.password)
         }
         try await client.connectShare(share)
-        let reader = try client.fileReader(path: filePath)
-        let source = SMBByteRangeSource(reader: reader, fileSize: Int64(reader.fileSize))
+        let stat = try await client.fileStat(path: filePath)
+        let reader = client.fileReader(path: filePath)
+        let source = SMBByteRangeSource(reader: reader, fileSize: Int64(stat.size))
         liveLock.lock()
         liveConnections[serverId] = client
         liveLock.unlock()
