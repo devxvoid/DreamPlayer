@@ -327,6 +327,8 @@ class SMBClient(private val context: Context) {
                         executor.execute {
                             try {
                                 result.success(listShares(id))
+                            } catch (e: jcifs.smb.SmbAuthException) {
+                                result.error("smb_auth", "Login failed — check username/password/domain", null)
                             } catch (e: Exception) {
                                 result.error("smb_error", e.message, null)
                             }
@@ -352,6 +354,8 @@ class SMBClient(private val context: Context) {
                         executor.execute {
                             try {
                                 result.success(listDirectory(id, shareName, path))
+                            } catch (e: jcifs.smb.SmbAuthException) {
+                                result.error("smb_auth", "Login failed — check username/password/domain", null)
                             } catch (e: Exception) {
                                 result.error("smb_error", e.message, null)
                             }
@@ -474,14 +478,22 @@ class SMBClient(private val context: Context) {
         val ctx = creds.context()
         val names = LinkedHashSet<String>()
         names.addAll(SmbStore.shares(context, serverId))
+        var authFailed = false
         for (name in COMMON_SHARES) {
             try {
                 if (SmbFile("smb://${creds.host}:${creds.port}/$name/", ctx).exists()) {
                     names.add(name)
                 }
+            } catch (e: jcifs.smb.SmbAuthException) {
+                // Wrong/empty credentials get SmbAuthException — remember it and
+                // keep probing, but report a bad login if nothing was found.
+                authFailed = true
             } catch (_: Exception) {
                 // not a disk share / no access — skip
             }
+        }
+        if (authFailed && names.isEmpty()) {
+            throw IllegalStateException("Login failed — check username/password/domain")
         }
         return names.sortedBy { it.lowercase(Locale.ROOT) }
             .map { name ->

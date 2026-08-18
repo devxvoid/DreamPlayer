@@ -3,6 +3,10 @@
 All notable changes to DreamPlayer are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## 0.1.10
+
+- **SMB: wrong credentials now surface an error (Android)** — browsing a saved server with a bad username/password used to silently return an empty share list (the share probe swallowed every exception, so an auth failure was mistaken for "no such share"). `SmbStore`/`SMBClient.kt` now catches `SmbAuthException` separately: if auth fails on every probed share, the shares list and any folder listing report **"Login failed — check username/password/domain"** (a `smb_auth` channel error) instead of a blank screen. The connection-test dialog already reported the failure correctly; only the browse path was silent.
+
 ## 0.1.9
 
 - **Per-file TMDB posters in every file list** — the folder screens (library folder contents + subfolders), the WebDAV browser, and the Jellyfin browser now **auto-fetch** TMDB metadata for each movie/episode as the list loads and show the file's **poster thumbnail** instead of the plain play icon. Each row resolves under the *same* stable key its tap uses (`resumeKey`/`folderbookmark:`/`webdav_<server>/<path>`/`jellyfin:<host>/<itemId>`), so opening the file is a direct cache hit — no re-search, the details screen is already resolved. If auto-fetch fails, opening the file and picking the right title via **"Fix match"/"Search TMDB"** persists that poster, and the row updates to show it the moment you return (both screens listen to the TMDB store).
