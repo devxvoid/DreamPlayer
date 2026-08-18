@@ -3,6 +3,12 @@
 All notable changes to DreamPlayer are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## 0.1.9
+
+- **Per-file TMDB posters in every file list** — the folder screens (library folder contents + subfolders), the WebDAV browser, and the Jellyfin browser now **auto-fetch** TMDB metadata for each movie/episode as the list loads and show the file's **poster thumbnail** instead of the plain play icon. Each row resolves under the *same* stable key its tap uses (`resumeKey`/`folderbookmark:`/`webdav_<server>/<path>`/`jellyfin:<host>/<itemId>`), so opening the file is a direct cache hit — no re-search, the details screen is already resolved. If auto-fetch fails, opening the file and picking the right title via **"Fix match"/"Search TMDB"** persists that poster, and the row updates to show it the moment you return (both screens listen to the TMDB store).
+- **Standalone movies no longer inherit a folder's metadata** — in folder mode, a movie file inside a bookmarked folder used to show the *folder's* matched title/poster (e.g. a "Movies" folder's match shown for every file in it). `carryMeta` now runs only for **episodes** of a TV-show folder; movie files resolve their own title, and any folder metadata an older build stamped onto a movie's key is cleared so it re-searches. Jellyfin folder mode applies the same rule (carry only for `Type == Episode`).
+- **Shared poster helper** — `posterUrlOf()` lives in `tmdb_client.dart` so the folder, WebDAV, and Jellyfin row tiles all render the same 48×72 rounded poster thumbnail (with the play icon as the error fallback).
+
 ## 0.1.8
 
 - **In-app SMB removed from iOS** — the iPad AMSMB2 + AetherEngineSMB browser and playback were deleted: it was slow, didn't play every video, and audio-track switching could crash the app. The "Network shares" home entry is gone on iOS. **Android SMB stays** — the `SmbScreen` + `SmbClient` (jcifs-ng browse + `SmbDataSource` streaming) remain; the "Network shares" entry shows on Android only. NAS playback: **Android** → in-app SMB browser, CX Explorer "Open with", WebDAV, Jellyfin; **iPad** → Files app "Open with", in-app WebDAV, in-app Jellyfin. `BufferedSMBReader` stays for WebDAV's read-ahead; `AetherEngineSMB` stays for WebDAV's `ByteRangeSource`. Full iOS SMB implementation notes preserved in AGENTS.md as a revival blueprint.
