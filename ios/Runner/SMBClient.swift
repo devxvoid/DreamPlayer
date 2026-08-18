@@ -553,8 +553,8 @@ final class SMBChannel: NSObject {
                 getsockname(sock, $0, &len)
             }
         }
-        let ipN = localAddr.sin_addr.s_addr
-        let mask: UInt32 = 0x00FFFFFF
+        let ipN = ntohl(localAddr.sin_addr.s_addr)
+        let mask: UInt32 = 0xFFFFFF00
         let network = ipN & mask
         let broadcast = network | ~mask
         return (network, broadcast, ipN)
