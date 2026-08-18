@@ -8,10 +8,12 @@ import SMBClient
 ///
 /// Each `read(at:length:)` call delegates to the SMBClient `FileReader` which
 /// handles the underlying SMB2 READ messages over the connection's TCP socket.
+/// A short-lived lock guards only the one-time lazy file-handle open; the
+/// actual network read runs without holding any lock so cooperative threads
+/// are never blocked during I/O.
 final class SMBByteRangeSource: ByteRangeSource, @unchecked Sendable {
 
     private let reader: FileReader
-    private let lock = NSLock()
 
     let byteSize: Int64
 
@@ -23,9 +25,7 @@ final class SMBByteRangeSource: ByteRangeSource, @unchecked Sendable {
     }
 
     func read(at offset: Int64, length: Int) async throws -> Data {
-        lock.lock()
-        defer { lock.unlock() }
-        return try await reader.read(offset: UInt64(bitPattern: offset), length: UInt32(truncatingIfNeeded: length))
+        try await reader.read(offset: UInt64(bitPattern: offset), length: UInt32(truncatingIfNeeded: length))
     }
 
     func close() {

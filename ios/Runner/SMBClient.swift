@@ -506,6 +506,10 @@ final class SMBChannel: NSObject {
 
     // MARK: - LAN discovery
 
+    /// Maximum concurrent socket probes.  Too many open sockets exhaust the
+    /// per-process FD limit on iOS and freeze the UI.
+    private static let scanConcurrency = 20
+
     private func discoverServersAsync() async -> [[String: Any]] {
         await withCheckedContinuation { cont in
             DispatchQueue.global(qos: .userInitiated).async {
@@ -516,11 +520,12 @@ final class SMBChannel: NSObject {
 
     private func discoverServersSync() -> [[String: Any]] {
         guard let subnet = localSubnet() else { return [] }
+        let ownIP = subnet.2
+        let semaphore = DispatchSemaphore(value: Self.scanConcurrency)
         let queue = DispatchQueue(label: "smb.discover", attributes: .concurrent)
         let group = DispatchGroup()
         let found = NSLock()
-        var results: [(ip: UInt32, hostname: String)] = []
-        let ownIP = subnet.2
+        var results: [(ip: UInt32)] = []
 
         var ip = subnet.0 + 1
         while ip < subnet.1 {
@@ -528,19 +533,22 @@ final class SMBChannel: NSObject {
                 let candidate = ip
                 group.enter()
                 queue.async {
-                    if self.isPortOpen(host: Self.uint32ToIP(candidate), port: 445, timeoutMs: 500) {
-                        let hostname = Self.reverseDNS(Self.uint32ToIP(candidate)) ?? Self.uint32ToIP(candidate)
+                    semaphore.wait()
+                    if self.isPortOpen(host: Self.uint32ToIP(candidate), port: 445, timeoutMs: 200) {
                         found.lock()
-                        results.append((candidate, hostname))
+                        results.append(candidate)
                         found.unlock()
                     }
+                    semaphore.signal()
                     group.leave()
                 }
             }
             ip += 1
         }
         group.wait()
-        return results.sorted { $0.ip < $1.ip }.map { ["host": Self.uint32ToIP($0.ip), "hostname": $0.hostname] }
+        return results.sorted().map {
+            ["host": Self.uint32ToIP($0), "hostname": Self.uint32ToIP($0)]
+        }
     }
 
     private func localSubnet() -> (network: UInt32, broadcast: UInt32, ownIP: UInt32)? {
@@ -572,16 +580,39 @@ final class SMBChannel: NSObject {
         let sock = socket(AF_INET, SOCK_STREAM, 0)
         guard sock >= 0 else { return false }
         defer { close(sock) }
+
+        // Set non-blocking so connect() returns immediately.
+        let flags = fcntl(sock, F_GETFL)
+        guard flags >= 0 else { return false }
+        fcntl(sock, F_SETFL, flags | O_NONBLOCK)
+
         var addr = sockaddr_in()
         addr.sin_family = sa_family_t(AF_INET)
         addr.sin_port = UInt16(port).bigEndian
         inet_pton(AF_INET, host, &addr.sin_addr)
-        var tv = timeval(tv_sec: timeoutMs / 1000, tv_usec: Int32((timeoutMs % 1000) * 1000))
-        setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout.size(ofValue: tv)))
-        let result = withUnsafePointer(to: &addr) { ptr in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(sock, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+
+        let connectResult = withUnsafePointer(to: &addr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(sock, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
         }
-        return result == 0
+        if connectResult == 0 { return true }  // Connected immediately.
+
+        guard errno == EINPROGRESS else { return false }
+
+        // Wait for the socket to become writable (connect completed).
+        var writeSet = fd_set()
+        var tv = timeval(tv_sec: timeoutMs / 1000, tv_usec: Int32((timeoutMs % 1000) * 1000))
+        FD_ZERO(&writeSet)
+        FD_SET(sock, &writeSet)
+        let sel = select(sock + 1, nil, &writeSet, nil, &tv)
+        guard sel > 0 else { return false }
+
+        // Check if the connect actually succeeded.
+        var err: Int32 = 0
+        var len = socklen_t(MemoryLayout<Int32>.size)
+        getsockopt(sock, SOL_SOCKET, SO_ERROR, &err, &len)
+        return err == 0
     }
 
     private static func reverseDNS(_ ip: String) -> String? {

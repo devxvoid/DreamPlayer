@@ -289,20 +289,24 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                     result(self.stateMap())
                 case "setAudioTrack":
                     let index = (args?["index"] as? NSNumber)?.intValue ?? -1
+                    self.engine?.selectAudioTrack(index: index)
+                    // For custom IOReader sources (SMB/WebDAV), the engine may
+                    // need to re-probe the container on track switch and hit
+                    // "open failed" if the reader can't rewind.  If that
+                    // happens the engine transitions to .error — detect it
+                    // and do a full reload as a fallback.
                     if self.lastSmbURL != nil || self.lastWebDAVInfo != nil {
-                        // Custom IOReader sources are consumed; the engine's
-                        // internal reload on track-switch hits "open failed".
-                        // Reload with a fresh source, then select the track.
-                        let position = self.engine?.currentTime ?? 0
-                        let targetIndex = index
+                        // Give the engine a moment to process the switch.
                         Task { @MainActor [weak self] in
-                            guard let self else { return }
-                            await self.reloadSession(at: position)
-                            self.engine?.selectAudioTrack(index: targetIndex)
-                            self.emit()
+                            try? await Task.sleep(nanoseconds: 500_000_000)
+                            guard let self, let engine else { return }
+                            if case .error = engine.state {
+                                let pos = engine.currentTime
+                                await self.reloadSession(at: pos)
+                                self.engine?.selectAudioTrack(index: index)
+                                self.emit()
+                            }
                         }
-                    } else {
-                        self.engine?.selectAudioTrack(index: index)
                     }
                     result(nil)
                 case "setSubtitles":
