@@ -236,9 +236,6 @@
 	<true/>
 	<key>NSBonjourServices</key>
 	<array>
-		<string>_smb._tcp</string>
-		<string>_workstation._tcp</string>
-		<string>_smb._udp</string>
 		<string>_jellyfin._tcp</string>
 		<string>_emby._tcp</string>
 	</array>
@@ -248,7 +245,7 @@
 		<true/>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>DreamPlayer connects to your local network to play videos stored on SMB/NAS servers.</string>
+	<string>DreamPlayer connects to your local network to play videos from WebDAV, Jellyfin, and Files-app bookmarked folders (including SMB shares you connect in the Files app).</string>
 	<key>UIFileSharingEnabled</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>

@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -594,12 +596,20 @@ class _HomeScreenState extends State<HomeScreen>
               subtitle: const Text('Jellyfin / Emby media server'),
               onTap: () => Navigator.of(context).pop('jellyfin'),
             ),
-            ListTile(
-              leading: const Icon(Icons.folder_shared_outlined),
-              title: const Text('Network shares'),
-              subtitle: const Text('SMB / NAS shares'),
-              onTap: () => Navigator.of(context).pop('smb'),
-            ),
+            if (Platform.isAndroid)
+              ListTile(
+                leading: const Icon(Icons.folder_shared_outlined),
+                title: const Text('Network shares'),
+                subtitle: const Text('SMB / NAS shares'),
+                onTap: () => Navigator.of(context).pop('smb'),
+              )
+            else
+              ListTile(
+                leading: const Icon(Icons.folder_shared_outlined),
+                title: const Text('Network shares'),
+                subtitle: const Text('SMB via the Files app'),
+                onTap: () => Navigator.of(context).pop('smb-ios'),
+              ),
             ListTile(
               leading: const Icon(Icons.video_library_outlined),
               title: const Text('Add folder to library'),
@@ -630,6 +640,13 @@ class _HomeScreenState extends State<HomeScreen>
         await Navigator.of(context).push(
           MaterialPageRoute<void>(builder: (_) => const SmbScreen()),
         );
+        break;
+      case 'smb-ios':
+        // iOS: SMB goes through the Files app. Picking a folder from the
+        // system document picker (which lists Files-app "Connect to Server"
+        // shares) bookmarks it as a library folder, so the share shows up on
+        // the home grid with a TMDB poster and is browsable/playable.
+        await _addFolderToLibrary();
         break;
       case 'storage':
         await Navigator.of(context).push(

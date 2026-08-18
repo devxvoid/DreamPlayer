@@ -55,7 +55,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   /// is recreated on unlock) so [didChangeAppLifecycleState] can detect that
   /// the media was lost and reopen it.
   bool _hadMedia = false;
-  /// True when the current source is a network stream (SMB / WebDAV) whose
+  /// True when the current source is a network stream (WebDAV) whose
   /// underlying TCP connection is killed when iOS backgrounds the app.
   /// On resume, the engine still reports paused (not IDLE) but the reader is
   /// dead — we must force-reload instead of just calling play().
@@ -65,7 +65,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   bool _dragging = false;
   double _dragValue = 0;
 
-  /// Auto-retry on transient IO errors (SMB disconnect, network blip).
+  /// Auto-retry on transient IO errors (network blip).
   int _ioRetries = 0;
   static const int _maxIoRetries = 3;
   bool _retrying = false;
@@ -89,7 +89,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   DateTime _lastResumeSave = DateTime.fromMillisecondsSinceEpoch(0);
 
   /// Stable per-video key for the resume store: an explicit [VideoItem.resumeKey]
-  /// wins (sources whose path/URI rotate, e.g. iPad SMB proxy URLs), otherwise
+  /// wins (sources whose path/URI rotate), otherwise
   /// path then URI.
   String get _resumeKey =>
       _current.resumeKey ?? _current.path ?? _current.uri ?? '';
@@ -154,13 +154,13 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       }
       return;
     }
-    // Track network sources (SMB / WebDAV) so resume-after-background
-    // force-reloads instead of just calling play() on a dead reader.
+    // Track network sources (WebDAV / authenticated HTTP) so
+    // resume-after-background force-reloads instead of just calling play()
+    // on a dead reader.
     final uri = video.uri;
     _isNetworkSource = uri != null &&
-        (uri.startsWith('smb://') ||
-         ((uri.startsWith('http://') || uri.startsWith('https://')) &&
-          (video.httpHeaders.isNotEmpty || video.allowSelfSigned)));
+        ((uri.startsWith('http://') || uri.startsWith('https://')) &&
+         (video.httpHeaders.isNotEmpty || video.allowSelfSigned));
     Duration? resume;
     if (!_inTests) {
       resume = await ResumeStore.positionFor(_resumeKey);
@@ -209,7 +209,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
           ? _current.withPlaybackInfo(duration: _duration)
           : _current;
 
-  /// Transient IO errors worth retrying (SMB drops, network blips).
+  /// Transient IO errors worth retrying (network blips).
   static bool _isRetryableIoError(String code) =>
       code == 'error_code_io_unspecified' ||
       code == 'error_code_io_network_connection_failed' ||
@@ -295,7 +295,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     if (_playing && !_retrying) _ioRetries = 0;
     if (e.error != null && e.error!.isNotEmpty) {
       final code = e.error!;
-      // Auto-retry on transient IO errors (SMB disconnect, network blip).
+      // Auto-retry on transient IO errors (network blip).
       if (_isRetryableIoError(code) && _ioRetries < _maxIoRetries && !_retrying) {
         _ioRetries++;
         _retrying = true;
@@ -431,8 +431,8 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       await _openCurrent();
     } else if (_isNetworkSource && _hadMedia && !_completed) {
       // iOS kills TCP connections when the app is backgrounded. The engine
-      // still reports paused (not IDLE) but the underlying reader (SMB
-      // FileReader, WebDAV session) is dead and will buffer forever.
+      // still reports paused (not IDLE) but the underlying reader (WebDAV
+      // session) is dead and will buffer forever.
       // Force-reload with a fresh source to re-establish the connection.
       await _openCurrent();
     } else {

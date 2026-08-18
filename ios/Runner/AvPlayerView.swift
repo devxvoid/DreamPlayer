@@ -212,7 +212,6 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     // ---- Last-opened source (needed to reload when the engine parks in .ended). ----
     private var lastSource: MediaSource?
     private var lastLoadOptions = LoadOptions()
-    private var lastSmbURL: String?  // smb:// URI; needed to re-resolve a fresh source on reload
     private var lastWebDAVInfo: (url: URL, headers: [String: String], allowSelfSigned: Bool)?
 
     
@@ -290,12 +289,12 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                 case "setAudioTrack":
                     let index = (args?["index"] as? NSNumber)?.intValue ?? -1
                     self.engine?.selectAudioTrack(index: index)
-                    // For custom IOReader sources (SMB/WebDAV), the engine may
-                    // need to re-probe the container on track switch and hit
+                    // For custom IOReader sources (WebDAV), the engine may need
+                    // to re-probe the container on track switch and hit
                     // "open failed" if the reader can't rewind.  If that
                     // happens the engine transitions to .error — detect it
                     // and do a full reload as a fallback.
-                    if self.lastSmbURL != nil || self.lastWebDAVInfo != nil {
+                    if self.lastWebDAVInfo != nil {
                         // Give the engine a moment to process the switch.
                         Task { @MainActor [weak self] in
                             try? await Task.sleep(nanoseconds: 500_000_000)
@@ -409,21 +408,13 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         let allowSelfSigned = (args?["allowSelfSigned"] as? Bool) ?? false
 
         // Source pending construction: some sources need background I/O
-        // (WebDAV size probe, SMB connection) before the engine can load.
+        // (WebDAV size probe) before the engine can load.
         var source: MediaSource?
         var localURL: URL?
         var webDAVSource: (url: URL, headers: [String: String], allowSelfSigned: Bool)?
-        var smbSource: String? // smb:// URI to resolve via SMBChannel
         if let path, !path.isEmpty {
             localURL = URL(fileURLWithPath: path)
             source = .url(localURL!)
-        } else if let uri, let u = URL(string: uri),
-                  u.scheme?.lowercased() == "smb" {
-            // SMB playback: the channel's `openShare` returned an smb:// URI
-            // with the server ID embedded; resolve it to a ByteRangeSource
-            // via SMBChannel (connection was pre-established during browse).
-            localURL = u
-            smbSource = uri
         } else if let uri, let u = URL(string: uri),
                   (u.scheme?.lowercased() == "http" || u.scheme?.lowercased() == "https"),
                   !httpHeaders.isEmpty || allowSelfSigned {
@@ -459,7 +450,6 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         videoHeight = 0
         isDolbyVision = false
         dvProfile = nil
-        lastSmbURL = nil
         lastWebDAVInfo = nil
         subtitleOverlay.clear()
         emit()
@@ -508,17 +498,6 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                         BufferedSMBReader(source: byteSource),
                         formatHint: ext.isEmpty ? nil : ext
                     )
-                } else if let smbURL = smbSource {
-                    // SMB playback: resolve the smb:// URI to a ByteRangeSource
-                    // via SMBChannel (connection was pre-established by openShare).
-                    let resolved = try await Task.detached(priority: .userInitiated) {
-                        try await SMBChannel.shared.resolveStreamURL(smbURL)
-                    }.value
-                    let ext = URL(string: smbURL)?.pathExtension.lowercased() ?? ""
-                    source = .custom(
-                        BufferedSMBReader(source: resolved.source),
-                        formatHint: ext.isEmpty ? nil : ext
-                    )
                 }
                 guard let finalSource = source else {
                     self.lastError = "Missing media source"
@@ -526,7 +505,6 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                     return
                 }
                 self.lastSource = finalSource
-                self.lastSmbURL = smbSource
                 self.lastWebDAVInfo = webDAVSource
                 let probe = try await engine.load(source: finalSource, startPosition: startPosition, options: options)
                 if let probe {
@@ -553,7 +531,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     /// Replays the last-opened source at `position` seconds. AetherEngine treats
     /// `.ended` as terminal (seek/play are no-ops there), so a replay / scrubber
     /// pull-back after the end card reloads the session instead.
-    /// For SMB / WebDAV custom sources the underlying IOReader is consumed and
+    /// For WebDAV custom sources the underlying IOReader is consumed and
     /// can't rewind, so we re-resolve a fresh source instead of reusing `lastSource`.
     private func reloadSession(at position: Double) async {
         guard let engine else { return }
@@ -579,20 +557,10 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     }
 
     /// Builds a fresh `MediaSource` from the stored open info.
-    /// SMB: re-resolves the smb:// URI → new FileReader → new BufferedSMBReader.
     /// WebDAV: new HTTP session → new BufferedSMBReader.
     /// Local file: reuses the file URL (always re-openable).
     private func buildFreshSource() async throws -> MediaSource? {
-        if let smbURL = lastSmbURL {
-            let resolved = try await Task.detached(priority: .userInitiated) {
-                try await SMBChannel.shared.resolveStreamURL(smbURL)
-            }.value
-            let ext = URL(string: smbURL)?.pathExtension.lowercased() ?? ""
-            return .custom(
-                BufferedSMBReader(source: resolved.source),
-                formatHint: ext.isEmpty ? nil : ext
-            )
-        } else if let web = lastWebDAVInfo {
+        if let web = lastWebDAVInfo {
             let byteSource = try await Task.detached(priority: .userInitiated) {
                 try WebDAVClient.shared.makeByteRangeSource(
                     url: web.url,
