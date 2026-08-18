@@ -92,6 +92,7 @@ class _FolderScreenState extends State<FolderScreen> {
         _entries = entries;
         _loading = false;
       });
+      _prefetchMeta(entries);
     } on PlatformException catch (e) {
       if (!mounted) return;
       setState(() {
@@ -125,6 +126,7 @@ class _FolderScreenState extends State<FolderScreen> {
         _jellyfinEntries = [...folders, ...playables];
         _loading = false;
       });
+      _prefetchJellyfinMeta(server);
     } on Exception catch (e) {
       if (!mounted) return;
       setState(() {
@@ -132,6 +134,34 @@ class _FolderScreenState extends State<FolderScreen> {
             ? e.message
             : JellyfinClient.friendlyError(e);
         _loading = false;
+      });
+    }
+  }
+
+  /// Best-effort TMDB prefetch for the current folder's video files. Each file
+  /// resolves under the SAME stable key its tile/tap uses, so the row's poster
+  /// appears (when a match exists) and tapping the file is a cache hit — no
+  /// re-search. Never blocks the list.
+  void _prefetchMeta(List<FileEntry> entries) {
+    final service = TmdService.instance;
+    for (final entry in entries) {
+      if (entry.isDirectory) continue;
+      service.resolve(_toVideoItem(entry)).catchError((_) {
+        // Best-effort; a TMDB failure just leaves the row without a poster.
+        return null;
+      });
+    }
+  }
+
+  /// Jellyfin variant: prefetch each playable under the same key its tap uses
+  /// ([_jellyfin.videoItem]), so rows show the server item's TMDB poster when
+  /// one matches.
+  void _prefetchJellyfinMeta(JellyfinServer server) {
+    final service = TmdService.instance;
+    for (final item in _jellyfinEntries) {
+      if (!item.isPlayable) continue;
+      service.resolve(_jellyfin.videoItem(server, item)).catchError((_) {
+        return null;
       });
     }
   }
@@ -266,12 +296,18 @@ class _FolderScreenState extends State<FolderScreen> {
                       final item = entry as JellyfinItem;
                       return _JellyfinFolderTile(
                         item: item,
+                        tmdbMeta: item.isFolder
+                            ? null
+                            : _tmdbForJellyfin(item),
                         onTap: () => _openJellyfinItem(item),
                       );
                     }
                     final fileEntry = entry as FileEntry;
                     return _FolderTile(
                       entry: fileEntry,
+                      tmdbMeta: fileEntry.isDirectory
+                          ? null
+                          : _tmdbFor(fileEntry),
                       onTap: () => _openEntry(fileEntry),
                     );
                   },
@@ -285,6 +321,22 @@ class _FolderScreenState extends State<FolderScreen> {
   /// the body doesn't branch for emptiness checks.
   List<Object> get _currentEntries =>
       _isJellyfin ? _jellyfinEntries : _entries;
+
+  /// Cached TMDB meta for a video file, looked up under the same identity key
+  /// its tile/tap uses so the poster and the opened details screen agree.
+  TmdMeta? _tmdbFor(FileEntry entry) {
+    if (_isJellyfin) return null;
+    return TmdService.instance
+        .metaFor(TmdStore.identityKeyFor(_toVideoItem(entry)));
+  }
+
+  /// Cached TMDB meta for a Jellyfin playable (same key as its tap).
+  TmdMeta? _tmdbForJellyfin(JellyfinItem item) {
+    final server = _jellyfinServer;
+    if (server == null) return null;
+    return TmdService.instance
+        .metaFor(TmdStore.identityKeyFor(_jellyfin.videoItem(server, item)));
+  }
 
   Widget _header(BuildContext context) {
     final theme = Theme.of(context);
@@ -372,9 +424,14 @@ class _FolderScreenState extends State<FolderScreen> {
 
 /// A Jellyfin folder/playable tile for the folder screen's item list.
 class _JellyfinFolderTile extends StatelessWidget {
-  const _JellyfinFolderTile({required this.item, required this.onTap});
+  const _JellyfinFolderTile({
+    required this.item,
+    required this.tmdbMeta,
+    required this.onTap,
+  });
 
   final JellyfinItem item;
+  final TmdMeta? tmdbMeta;
   final VoidCallback onTap;
 
   @override
@@ -394,13 +451,17 @@ class _JellyfinFolderTile extends StatelessWidget {
       if (item.durationLabel.isNotEmpty) item.durationLabel,
     ].where((s) => s.isNotEmpty).join(' · ');
 
+    final posterUrl = posterUrlOf(tmdbMeta);
+
     return ListTile(
-      leading: Icon(
-        item.seasonLabel.isNotEmpty
-            ? Icons.movie_outlined
-            : Icons.play_circle_outline,
-        color: colorScheme.secondary,
-      ),
+      leading: posterUrl != null
+          ? _Poster(posterUrl: posterUrl)
+          : Icon(
+              item.seasonLabel.isNotEmpty
+                  ? Icons.movie_outlined
+                  : Icons.play_circle_outline,
+              color: colorScheme.secondary,
+            ),
       title: Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: subtitle.isEmpty ? null : Text(subtitle),
       onTap: onTap,
@@ -409,9 +470,14 @@ class _JellyfinFolderTile extends StatelessWidget {
 }
 
 class _FolderTile extends StatelessWidget {
-  const _FolderTile({required this.entry, required this.onTap});
+  const _FolderTile({
+    required this.entry,
+    required this.tmdbMeta,
+    required this.onTap,
+  });
 
   final FileEntry entry;
+  final TmdMeta? tmdbMeta;
   final VoidCallback onTap;
 
   static String _sizeLabel(int bytes) {
@@ -445,14 +511,47 @@ class _FolderTile extends StatelessWidget {
       _sizeLabel(entry.size),
     ].where((s) => s.isNotEmpty).join(' · ');
 
+    final posterUrl = posterUrlOf(tmdbMeta);
+
     return ListTile(
-      leading: Icon(
-        parsed.isEpisode ? Icons.movie_outlined : Icons.play_circle_outline,
-        color: colorScheme.secondary,
-      ),
+      leading: posterUrl != null
+          ? _Poster(posterUrl: posterUrl)
+          : Icon(
+              parsed.isEpisode ? Icons.movie_outlined : Icons.play_circle_outline,
+              color: colorScheme.secondary,
+            ),
       title: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: subtitle.isEmpty ? null : Text(subtitle),
       onTap: onTap,
+    );
+  }
+}
+
+/// The TMDB poster URL for a cached meta, or null when there's no poster.
+String? posterUrlOf(TmdMeta? meta) => meta?.movie.posterPath == null
+    ? null
+    : 'https://image.tmdb.org/t/p/w185${meta!.movie.posterPath}';
+
+/// A small 48×72 rounded poster thumbnail for a file row.
+class _Poster extends StatelessWidget {
+  const _Poster({required this.posterUrl});
+
+  final String posterUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(4),
+      child: Image.network(
+        posterUrl,
+        width: 48,
+        height: 72,
+        fit: BoxFit.cover,
+        errorBuilder: (_, _, _) => Icon(
+          Icons.play_circle_outline,
+          color: Theme.of(context).colorScheme.secondary,
+        ),
+      ),
     );
   }
 }
