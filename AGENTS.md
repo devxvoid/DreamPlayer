@@ -138,7 +138,7 @@ A video player app supporting:
   `82b3dd9`). **Verified on-device (2026-08):** local/Documents files play on the iPad Pro M2;
   SMB playback was fully REMOVED (2026-08, see "SMB / network shares") — NAS files reach the app
   via CX/Files "Open with" (iPad) or in-app WebDAV/Jellyfin.
-  **Minimum iOS 18.0** (`IPHONEOS_DEPLOYMENT_TARGET = 18.0`; builds for
+  **Minimum iOS 16.0** (`IPHONEOS_DEPLOYMENT_TARGET = 16.0`; builds for
   iOS 18 through the latest, iPhone and iPad).
   - Channel mapping: state 1/2/3/4 (idle/buffering/ready/ended); DV surfaces as
     `dvhe.<profile>.06` so Dart's `dv`-prefix detection fires; `colorTransfer`
@@ -427,7 +427,7 @@ Run DreamPlayer on Apple TV as a real 10-foot app. **Status: NOT STARTED — pla
 - WebDAV playback on iOS routes http(s) URIs with auth/self-signed through `WebDAVByteRangeSource` — that path is portable (AVPlayer-side).
 
 **Work items (in order)**
-1. **Scaffold**: `flutter create --platforms=tvos .` → `tvos/` Runner (bundle id `com.dreamplayer.app`, `TVOS_DEPLOYMENT_TARGET = 18.0` to match the iOS `IPHONEOS_DEPLOYMENT_TARGET`; layered tvOS App Icon comes with the template).
+1. **Scaffold**: `flutter create --platforms=tvos .` → `tvos/` Runner (bundle id `com.dreamplayer.app`, `TVOS_DEPLOYMENT_TARGET = 17.0` (AetherEngine's tvOS floor); layered tvOS App Icon comes with the template).
 2. **Port the native channel/playback stack into `tvos/Runner`** (copy the Swift files + wire `tvos/Runner/AppDelegate.swift` exactly like `ios/Runner/AppDelegate.swift`):
    - `AvPlayerView.swift` (AetherEngine platform view `dreamplayer/exo_player` — the core; includes `BufferedSMBReader`, subtitle overlay)
    - `WebDAVClient.swift` (channel `dreamplayer/webdav` — same contract as Android)

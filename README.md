@@ -69,7 +69,7 @@ A cross-platform video player built with **Flutter**, designed for high-end play
 | Platform | Minimum version |
 |---|---|
 | Android | **5.0 Lollipop** (API 21) |
-| iOS / iPadOS | **18.0** |
+| iOS / iPadOS | **16.0** |
 
 Dolby Vision playback requires a display panel that advertises DV support (`supportedHdrTypes` includes 3); HDR10/HDR10+/HLG have the same requirement. Audio passthrough (Dolby Atmos, DTS-HD, TrueHD) requires an HDMI e-ARC connection to a compatible soundbar/AVR — on phones, all audio is decoded to PCM for speakers.
 
