@@ -393,27 +393,57 @@ Play files from LAN/NAS SMB shares in-app, mirroring the existing file-browser p
 
 ### Android TV
 
-Run DreamPlayer on an Android TV box/panel as a real 10-foot app. **Status: NOT STARTED — planned (2026-08).** Do NOT implement until asked; this is the design/blueprint.
+Run DreamPlayer on an Android TV box/panel as a real 10-foot app. **Status: IN PROGRESS — Phase 1 (manifest) started (2026-08).**
+
+**Test hardware**: Amazon Fire TV Stick 4K (runs Fire OS, Android-based). TV supports Dolby Vision + Dolby Atmos passthrough. No eARC soundbar/AVR yet — audio bitstream goes to the TV directly over HDMI.
 
 **Core requirement (from the user, 2026-08):** the TV build must pass through, not decode:
 - **Video**: Dolby Vision + HDR10/HDR10+/HLG **to the TV panel** (the panel is the display, so the app's existing SurfaceView/compositing path is already correct — the TV displays PQ/BT.2020 natively).
-- **Audio**: Dolby Atmos (E-AC3-JOC / TrueHD-Atmos), DTS-HD/DTS:X, DTS, AC3, TrueHD **as a compressed bitstream over HDMI** — when the TV is connected to a soundbar/AVR via **eARC**, the audio must be delivered as the original codec bitstream so the sound system decodes it (NOT decoded-PCM in the app).
+- **Audio**: Dolby Atmos (E-AC3-JOC / TrueHD-Atmos), DTS-HD/DTS:X, DTS, AC3, TrueHD **as a compressed bitstream over HDMI** — when the TV is connected to a soundbar/AVR via **eARC**, the audio must be delivered as the original codec bitstream so the sound system decodes it (NOT decoded-PCM in the app). On the Fire TV Stick, the bitstream goes directly to the TV over HDMI (no eARC needed for TV-decoded Atmos).
 
 **Why it's mostly free already**
 - Android TV **is Android** — the whole native stack ships unchanged: ExoPlayer/Media3 + hybrid-composition PlatformView (`ExoPlayerView.kt`), `DreamRenderersFactory`, the DV→HEVC `mediaCodecSelector` fallback, `SmbDataSource` (SMB), WebDAV (`WebDAVClient.kt`), Jellyfin (pure Dart), subtitles, HDR chips. `defaultTargetPlatform == android` already.
 - **Video passthrough**: the hybrid-composition SurfaceView is a real SurfaceFlinger layer on the physical output — on a TV this is the panel, so DV/HDR10+ composite as `BT2020_ITU_PQ` directly (the whole point of the VIRTUAL-DISPLAY fix). The `mediaCodecSelector` DV→HEVC fallback handles DV-less hardware; `supportedHdrTypes` on the TV drives which formats get device-composited.
 - **Jellyfin/WebDAV/SMB browsing** are focus-based Flutter screens — they need a D-pad pass, not a rewrite.
 
-**Work items (in order)**
-1. **Manifest/launcher**: add `LEANBACK_LAUNCHER` category intent-filter + `<uses-feature android:name="android.software.leanback" android:required="false"/>` (so the same APK still installs on phones) + a `android.software.touchscreen` `required="false"` override. Flutter's default MainActivity works.
-2. **10-foot UI pass**: D-pad/focus traversal on home/library/WebDAV/Jellyfin/SMB lists + player controls (Material is focusable but needs larger targets, `Focus`-friendly navigation, D-pad back). TV apps must not require touch.
-3. **AUDIO PASSTHROUGH (the main new work)** — current app always decodes audio to PCM (FFmpeg/MediaCodec → `AudioTrack` PCM). For eARC bitstream delivery the app must hand the TV's HDMI output the *compressed* bitstream:
-   - Media3/ExoPlayer supports this via `DefaultAudioSink` passthrough: when the platform's `AudioCapabilities` report the compressed encoding as supported on the active output (Android TV's HDMI/eARC advertises AC3/E-AC3/DTS/DTS-HD/TrueHD via `AudioManager`/`AudioCapabilities`), `AudioSink.supportsFormat` returns true and the audio renderer feeds the encoded buffers straight to `AudioTrack` passthrough instead of decoding. Verify this is engaged — inspect what `AudioCapabilities` reports on the device and whether E-AC3/TrueHD/DTS-HD formats select passthrough.
-   - Gotchas to verify: (a) the `mediaCodecSelector` skip of `c2.dolby.eac3.decoder` (added for the phone's broken codec2) must NOT break E-AC3 passthrough — passthrough needs no decoder, but confirm `MediaCodecAudioRenderer` selects the format for passthrough anyway; (b) `FfmpegAudioRenderer` (nextlib) always decodes to PCM — it must not be the renderer chosen for passthrough-capable formats (it's appended last, so MediaCodec/passthrough should win — confirm); (c) TrueHD/DTS-HD passthrough over eARC needs the sink + TV to agree — on some TVs only the lossy core (AC3/DTS) or only E-AC3 is eARC-capable; report what the sink can actually deliver.
-   - Consider a **settings toggle** (Nova/Just-Player-style "Audio passthrough": Off / Auto): `Off` keeps today's PCM decode (for phone/headphone use), `Auto` enables sink passthrough for the TV/AVR case. Default the toggle on only on TV-targeted builds, or add an "Output" section in Settings.
-   - **Verify on-device**: a soundbar/AVR connected to the TV via eARC must display "Dolby Atmos", "DTS-HD", "TrueHD" on its own display (the definitive check that the bitstream, not PCM, arrived). Test Atmos (E-AC3-JOC + TrueHD-Atmos), DTS-HD MA, TrueHD, AC3, DTS.
-4. **Video passthrough verify**: confirm the OnePlus-specific `applyHdrHeadroom` window-COLOR_MODE machinery is harmless (or correctly skipped) on a TV — TVs take PQ directly so the EDR/headroom path is phone-only; it should early-return or be gated. DV P7/P8 → HEVC fallback + DV P5 rejection already work.
-5. **CI**: reuse `.github/workflows/release.yml` (Android APKs already build on `ubuntu-latest`); optionally a `flutter build apk` arm64-v8a job — no new platform needed.
+**Implementation plan (phased)**
+
+**Phase 1 — Manifest & Launcher** (status: in progress)
+- Add `LEANBACK_LAUNCHER` category to the existing launcher intent filter (same `MainActivity`, no new activity)
+- Add `<uses-feature android:name="android.software.leanback" android:required="false"/>` — app appears on TV launchers; same APK still installs on phones
+- Add `<uses-feature android:name="android.software.touchscreen" android:required="false"/>` — without this, TV devices filter the app out
+- Same APK, no build variants or product flavors
+
+**Phase 2 — 10-foot UI Pass (Home + Player only)**
+- Home screen: wrap `FolderCard`/`VideoCard` with `Focus` widget + visual highlight (scale/border) when focused; D-pad grid traversal works automatically with `SliverGrid` + Material `InkWell`; replace FAB bottom sheet with focusable inline tiles or D-pad-accessible menu; "Remove from library" via D-pad hold/select context menu
+- Player screen: D-pad center → play/pause; D-pad left/right → seek ±10s; controls stay visible on TV (no 3-second auto-hide or auto-hide only on touch); larger button targets (56dp+); fullscreen button → no-op/hidden on TV (always landscape)
+- Detection: check `android.software.leanback` feature via `PackageManager.hasSystemFeature()` or Flutter `MediaQuery` large-screen detection; pass `isTv` flag to affected screens
+
+**Phase 3 — Audio Passthrough (main new native work)**
+- Detect HDMI output: `AudioManager.getDevices(GET_DEVICES_OUTPUTS)` → check for `TYPE_HDMI_ARC`, `TYPE_HDMI_EARC`, or `TYPE_HDMI`
+- `DefaultAudioSink` passthrough: ExoPlayer supports this natively — when `AudioCapabilities` from `AudioManager` reports the compressed format as supported on the active output, the sink feeds encoded buffers to `AudioTrack` passthrough mode instead of decoding
+- `mediaCodecSelector` TV override: on TV devices, do NOT skip `c2.dolby.eac3.decoder` — the phone-specific OnePlus workaround doesn't apply; the stock Dolby decoder or passthrough path should work
+- Settings toggle: "Audio passthrough: Off / Auto" in Settings. `Off` = current PCM decode (phones). `Auto` = passthrough when HDMI output detected. Default off, user enables
+- Verify on Fire TV Stick: TV should show "Dolby Atmos" / "DTS-HD" on its info overlay when playing Atmos/DTS-HD content
+
+**Phase 4 — Video Passthrough Verify**
+- Hybrid-composition SurfaceView already composites as `BT2020_ITU_PQ` directly — confirm on Fire TV Stick
+- `applyHdrHeadroom` window machinery is harmless on TV (early-returns or correctly sets HDR mode)
+- DV P7/P8 → HEVC fallback + DV P5 rejection still work
+
+**Phase 5 — CI & Release Notes**
+- No new CI jobs — same universal APK
+- Add "Android TV / Fire TV support" to release notes
+
+**Files changed:**
+- `android/app/src/main/AndroidManifest.xml` — Phase 1
+- `lib/screens/home_screen.dart` — Phase 2
+- `lib/screens/player_screen.dart` — Phase 2
+- `lib/widgets/video_card.dart`, `folder_card.dart` — Phase 2 (focus highlight)
+- `lib/screens/settings_screen.dart` — Phase 3 (passthrough toggle)
+- `android/.../ExoPlayerView.kt` — Phase 3 (mediaCodecSelector TV override)
+- `android/.../DreamRenderersFactory.kt` — Phase 3 (passthrough sink config, if needed)
+- `AGENTS.md`, `CHANGELOG.md` — Phase 5
 
 **Out of scope for v1**: AirPlay/DLNA casting, CEC control, live-TV tuner, Play Store/TV certification (leanback banner, `android.app.leanbacklauncher`), Android TV-specific recommendations UI.
 
