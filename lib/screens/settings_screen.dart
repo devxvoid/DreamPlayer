@@ -2,9 +2,11 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/cache_cleaner.dart';
 import '../services/support_links.dart';
+import '../utils/tv_helper.dart';
 import 'licenses_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -17,11 +19,18 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   int _diskBytes = 0;
   bool _cleared = false;
+  bool _passthrough = false;
 
   @override
   void initState() {
     super.initState();
     _refreshDiskSize();
+    _loadPassthrough();
+  }
+
+  Future<void> _loadPassthrough() async {
+    final enabled = await isAudioPassthroughEnabled();
+    if (mounted) setState(() => _passthrough = enabled);
   }
 
   Future<void> _refreshDiskSize() async {
@@ -123,6 +132,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             onTap: _clearCache,
           ),
+          if (defaultTargetPlatform == TargetPlatform.android) ...[
+            const Divider(),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Text(
+                'Audio',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  color: theme.colorScheme.primary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            SwitchListTile(
+              secondary: const Icon(Icons.surround_sound),
+              title: const Text('Audio passthrough'),
+              subtitle: Text(
+                _passthrough
+                    ? 'Auto — passthrough when HDMI detected'
+                    : 'Off — decode to PCM (default)',
+              ),
+              value: _passthrough,
+              onChanged: (value) async {
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.setBool(kAudioPassthroughKey, value);
+                if (mounted) setState(() => _passthrough = value);
+              },
+            ),
+          ],
           const Divider(),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
