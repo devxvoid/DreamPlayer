@@ -3,6 +3,10 @@
 All notable changes to DreamPlayer are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## 0.1.11
+
+- **Minimum iOS lowered to 16.0** — the previous floor of iOS 18.0 was conservative; AetherEngine declares `.iOS(.v16)` as its platform minimum and no iOS 18-only APIs are used anywhere. All three Xcode targets updated (`IPHONEOS_DEPLOYMENT_TARGET = 16.0`).
+
 ## 0.1.10
 
 - **SMB: wrong credentials now surface an error (Android)** — browsing a saved server with a bad username/password used to silently return an empty share list (the share probe swallowed every exception, so an auth failure was mistaken for "no such share"). `SmbStore`/`SMBClient.kt` now catches `SmbAuthException` separately: if auth fails on every probed share, the shares list and any folder listing report **"Login failed — check username/password/domain"** (a `smb_auth` channel error) instead of a blank screen. The connection-test dialog already reported the failure correctly; only the browse path was silent.
