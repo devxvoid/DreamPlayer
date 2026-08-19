@@ -27,11 +27,6 @@ void main() {
 
     expect(find.text('Support'), findsOneWidget);
     expect(find.text('About'), findsOneWidget);
-    await tester.scrollUntilVisible(
-      find.text('Version'),
-      200,
-      scrollable: find.byType(Scrollable).last,
-    );
     expect(find.text('Version'), findsOneWidget);
   });
 

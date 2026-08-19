@@ -3,8 +3,6 @@ package com.dreamplayer.app
 import android.app.Activity
 import android.content.Context
 import android.content.pm.ActivityInfo
-import android.media.AudioDeviceInfo
-import android.media.AudioManager
 import android.media.MediaCodecList
 import android.media.MediaExtractor
 import android.media.MediaFormat
@@ -90,47 +88,9 @@ class ExoPlayerView(
     /// soon as it starts, so Media3's audio renderer spins in an endless
     /// re-init loop and no AudioTrack is ever created (silent playback). Skip
     /// the Dolby component for E-AC3/E-AC3-JOC so the AOSP decoder is used.
-    ///
-    /// **Audio passthrough (TV / eARC)**: when the user enables "Audio
-    /// passthrough" in Settings AND an HDMI output is detected, we return an
-    /// empty decoder list for all passthrough-capable formats (AC3, E-AC3,
-    /// DTS, DTS-HD, TrueHD).  This forces ExoPlayer's `DefaultAudioSink` to
-    /// route them through `AudioTrack` in passthrough mode — the encoded
-    /// bitstream goes straight to the HDMI output for the TV / soundbar / AVR
-    /// to decode.  The FfmpegAudioRenderer (appended last in
-    /// DreamRenderersFactory) never fires for these formats because
-    /// `MediaCodecAudioRenderer` claims them first via `audioSink.supportsFormat`.
-    /// FLAC still falls through to FFmpeg (no FLAC passthrough exists).
-    private val passthroughEnabled: Boolean = run {
-        val prefs = activity.getSharedPreferences(
-            "FlutterSharedPreferences", Context.MODE_PRIVATE,
-        )
-        val settingOn = prefs.getBoolean("flutter.dreamplayer.audioPassthrough", false)
-        if (!settingOn) return@run false
-        // Auto mode: only enable passthrough when an HDMI output is present.
-        val audioManager = activity.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-        val hdmi = devices.any { d ->
-            d.type == AudioDeviceInfo.TYPE_HDMI ||
-                (Build.VERSION.SDK_INT >= 31 && d.type == AudioDeviceInfo.TYPE_HDMI_ARC) ||
-                (Build.VERSION.SDK_INT >= 31 && d.type == AudioDeviceInfo.TYPE_HDMI_EARC)
-        }
-        Log.i("ExoPlayerView", "Audio passthrough: setting=ON, hdmi=$hdmi")
-        hdmi
-    }
-
-    private fun isPassthroughFormat(mimeType: String?): Boolean = when (mimeType) {
-        MimeTypes.AUDIO_AC3, MimeTypes.AUDIO_E_AC3, MimeTypes.AUDIO_E_AC3_JOC,
-        MimeTypes.AUDIO_DTS, MimeTypes.AUDIO_DTS_HD, MimeTypes.AUDIO_TRUEHD -> true
-        else -> false
-    }
-
     private val mediaCodecSelector = MediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
         when {
             mimeType == MimeTypes.AUDIO_FLAC -> emptyList()
-            // Passthrough: return empty for compressed surround formats so
-            // DefaultAudioSink routes them to AudioTrack passthrough mode.
-            passthroughEnabled && isPassthroughFormat(mimeType) -> emptyList()
             mimeType == MimeTypes.AUDIO_E_AC3 || mimeType == MimeTypes.AUDIO_E_AC3_JOC ->
                 MediaCodecSelector.DEFAULT.getDecoderInfos(
                     mimeType,
@@ -1167,7 +1127,6 @@ class ExoPlayerView(
         map["error"] = errorCodeName
         map["errorMessage"] = errorMessage
         map["errorCause"] = errorCause
-        map["audioPassthrough"] = passthroughEnabled
         return map
     }
 

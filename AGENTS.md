@@ -419,13 +419,12 @@ Run DreamPlayer on an Android TV box/panel as a real 10-foot app. **Status: IN P
 - Player screen: `Focus` widget with `autofocus: true` + `onKeyEvent` handler for D-pad center → play/pause, left/right → seek ±10s, up/down → show controls; controls stay visible on TV (no 3-second auto-hide when `_isTv`); fullscreen button hidden on TV (always landscape); `_isTv` flag set from `isTvMode(context)` on first build
 - Detection: `isTvMode()` in `lib/utils/tv_helper.dart` — checks `Platform.isAndroid && width >= 960dp` via `MediaQuery`; no platform channel needed
 
-**Phase 3 — Audio Passthrough** (status: done)
-- Detect HDMI output: `AudioManager.getDevices(GET_DEVICES_OUTPUTS)` → check for `TYPE_HDMI`, `TYPE_HDMI_ARC`, `TYPE_HDMI_EARC`
-- `mediaCodecSelector` TV override: when passthrough enabled AND HDMI detected, return empty decoder list for passthrough-capable formats (AC3, E-AC3, DTS, DTS-HD, TrueHD) — forces ExoPlayer's `DefaultAudioSink` to route them through `AudioTrack` passthrough mode to HDMI
-- On phone (passthrough OFF): current behavior unchanged — Dolby E-AC3 filter stays, FFmpeg handles DTS/TrueHD/FLAC as PCM decode
-- Settings toggle: "Audio passthrough: Off / Auto" in Settings (Android only). `Off` = current PCM decode. `Auto` = passthrough when HDMI output detected. Default off, user enables
-- Player overlay shows orange "Passthrough" chip when active
-- On Fire TV Stick: TV should show "Dolby Atmos" / "DTS-HD" on its info overlay when playing Atmos/DTS-HD content
+**Phase 3 — Audio Passthrough (main new native work)**
+- Detect HDMI output: `AudioManager.getDevices(GET_DEVICES_OUTPUTS)` → check for `TYPE_HDMI_ARC`, `TYPE_HDMI_EARC`, or `TYPE_HDMI`
+- `DefaultAudioSink` passthrough: ExoPlayer supports this natively — when `AudioCapabilities` from `AudioManager` reports the compressed format as supported on the active output, the sink feeds encoded buffers to `AudioTrack` passthrough mode instead of decoding
+- `mediaCodecSelector` TV override: on TV devices, do NOT skip `c2.dolby.eac3.decoder` — the phone-specific OnePlus workaround doesn't apply; the stock Dolby decoder or passthrough path should work
+- Settings toggle: "Audio passthrough: Off / Auto" in Settings. `Off` = current PCM decode (phones). `Auto` = passthrough when HDMI output detected. Default off, user enables
+- Verify on Fire TV Stick: TV should show "Dolby Atmos" / "DTS-HD" on its info overlay when playing Atmos/DTS-HD content
 
 **Phase 4 — Video Passthrough Verify**
 - Hybrid-composition SurfaceView already composites as `BT2020_ITU_PQ` directly — confirm on Fire TV Stick

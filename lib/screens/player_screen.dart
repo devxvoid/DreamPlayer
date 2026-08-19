@@ -75,7 +75,6 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   String? _liveVideoCodecRaw;
   String? _liveAudioCodec;
   int? _liveAudioChannelCount;
-  bool _liveAudioPassthrough = false;
   String? _liveResolution;
   HdrFormat _liveHdr = HdrFormat.sdr;
   List<ExoAudioTrack> _audioTracks = const [];
@@ -347,7 +346,6 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       _liveAudioCodec = formatMedia3Audio(e.audioMime, e.audioCodecs);
       if (e.audioChannels > 0) _liveAudioChannelCount = e.audioChannels;
     }
-    _liveAudioPassthrough = e.audioPassthrough;
     _audioTracks = e.audioTracks;
     _selectedAudioTrackIndex = e.selectedAudioTrack;
 
@@ -846,8 +844,6 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
 
   Color get _audioColor => const Color(0xFF81C784);
 
-  Color get _passthroughColor => const Color(0xFFFFB74D);
-
   Color get _infoColor => const Color(0xFF90A4AE);
 
   @override
@@ -885,14 +881,8 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
             metaProfile: video.audioProfile,
           )
         : video.audioCodecLabel;
-    final audioChip =
-        audioChipLabel != null || _liveAudioPassthrough
-        ? FormatChip(
-            label: _liveAudioPassthrough
-                ? '${audioChipLabel ?? "Audio"} · Passthrough'
-                : audioChipLabel!,
-            color: _liveAudioPassthrough ? _passthroughColor : _audioColor,
-          )
+    final audioChip = audioChipLabel != null
+        ? FormatChip(label: audioChipLabel, color: _audioColor)
         : null;
     final resolutionChip = (_liveResolution ?? video.resolution) != null
         ? FormatChip(

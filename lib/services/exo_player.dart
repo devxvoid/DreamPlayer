@@ -185,7 +185,6 @@ class ExoPlayerEvent {
     this.error,
     this.errorMessage,
     this.errorCause,
-    this.audioPassthrough = false,
   });
 
   final int state;
@@ -237,10 +236,6 @@ class ExoPlayerEvent {
   final String? errorMessage;
   final String? errorCause;
 
-  /// True when audio passthrough is active (encoded bitstream routed to
-  /// HDMI output via AudioTrack passthrough mode).
-  final bool audioPassthrough;
-
   Duration get position => Duration(milliseconds: positionMs);
   Duration get duration => Duration(milliseconds: durationMs);
   Duration get buffered => Duration(milliseconds: bufferedMs);
@@ -281,7 +276,6 @@ class ExoPlayerEvent {
       error: m['error'] as String?,
       errorMessage: m['errorMessage'] as String?,
       errorCause: m['errorCause'] as String?,
-      audioPassthrough: m['audioPassthrough'] == true,
     );
   }
 }
