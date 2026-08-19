@@ -13,7 +13,6 @@ import '../services/tmdb_client.dart';
 import '../services/webdav_client.dart';
 import '../widgets/folder_card.dart';
 import '../widgets/video_card.dart';
-import '../utils/tv_helper.dart';
 import 'file_browser_screen.dart';
 import 'jellyfin_screen.dart';
 import 'smb_screen.dart';
@@ -415,52 +414,20 @@ class _HomeScreenState extends State<HomeScreen>
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final tv = isTvMode(context);
     return Scaffold(
       body: CustomScrollView(
         slivers: [
           SliverAppBar(
             title: const Text('DreamPlayer'),
             floating: true,
-            actions: tv
-                ? [
-                    IconButton(
-                      onPressed: () => _showAddMenu(),
-                      icon: const Icon(Icons.cloud_outlined),
-                      tooltip: 'WebDAV',
-                    ),
-                    IconButton(
-                      onPressed: () => _showAddMenu(),
-                      icon: const Icon(Icons.live_tv_outlined),
-                      tooltip: 'Jellyfin',
-                    ),
-                    IconButton(
-                      onPressed: () => _showAddMenu(),
-                      icon: const Icon(Icons.folder_shared_outlined),
-                      tooltip: 'Network shares',
-                    ),
-                    IconButton(
-                      onPressed: () => _showAddMenu(),
-                      icon: const Icon(Icons.video_library_outlined),
-                      tooltip: 'Add folder',
-                    ),
-                    IconButton(
-                      onPressed: () => _showAddMenu(),
-                      icon: const Icon(Icons.storage_outlined),
-                      tooltip: 'Internal storage',
-                    ),
-                  ]
-                : null,
           ),
           // ---- Your library: user-added folders (e.g. TV-show folders) ----
           if (_folders.isEmpty)
             SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-                  child: Text(
-                    tv
-                        ? 'No folders yet. Use the buttons above to add one.'
-                        : 'No folders yet. Tap + to add one.',
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                child: Text(
+                  'No folders yet. Tap + to add one.',
                   style: theme.textTheme.bodyMedium?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
@@ -539,13 +506,11 @@ class _HomeScreenState extends State<HomeScreen>
             ),
         ],
       ),
-      floatingActionButton: tv
-          ? null
-          : FloatingActionButton(
-              onPressed: _showAddMenu,
-              tooltip: 'Add a source',
-              child: const Icon(Icons.add),
-            ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _showAddMenu,
+        tooltip: 'Add a source',
+        child: const Icon(Icons.add),
+      ),
     );
   }
 

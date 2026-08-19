@@ -408,16 +408,16 @@ Run DreamPlayer on an Android TV box/panel as a real 10-foot app. **Status: IN P
 
 **Implementation plan (phased)**
 
-**Phase 1 — Manifest & Launcher** (status: done)
+**Phase 1 — Manifest & Launcher** (status: in progress)
 - Add `LEANBACK_LAUNCHER` category to the existing launcher intent filter (same `MainActivity`, no new activity)
 - Add `<uses-feature android:name="android.software.leanback" android:required="false"/>` — app appears on TV launchers; same APK still installs on phones
 - Add `<uses-feature android:name="android.software.touchscreen" android:required="false"/>` — without this, TV devices filter the app out
 - Same APK, no build variants or product flavors
 
-**Phase 2 — 10-foot UI Pass (Home + Player only)** (status: done)
-- Home screen: `FolderCard`/`VideoCard` wrapped with `Focus` widget + `AnimatedScale` (1.05×) + `AnimatedContainer` (blue border + glow) when focused; D-pad grid traversal works automatically with `SliverGrid` + Material `InkWell`; FAB replaced on TV with 5 focusable `IconButton`s in the `SliverAppBar.actions` (WebDAV, Jellyfin, Network shares, Add folder, Internal storage); "Remove from library" via `onLongPress` (long-press on remote select)
-- Player screen: `Focus` widget with `autofocus: true` + `onKeyEvent` handler for D-pad center → play/pause, left/right → seek ±10s, up/down → show controls; controls stay visible on TV (no 3-second auto-hide when `_isTv`); fullscreen button hidden on TV (always landscape); `_isTv` flag set from `isTvMode(context)` on first build
-- Detection: `isTvMode()` in `lib/utils/tv_helper.dart` — checks `Platform.isAndroid && width >= 960dp` via `MediaQuery`; no platform channel needed
+**Phase 2 — 10-foot UI Pass (Home + Player only)**
+- Home screen: wrap `FolderCard`/`VideoCard` with `Focus` widget + visual highlight (scale/border) when focused; D-pad grid traversal works automatically with `SliverGrid` + Material `InkWell`; replace FAB bottom sheet with focusable inline tiles or D-pad-accessible menu; "Remove from library" via D-pad hold/select context menu
+- Player screen: D-pad center → play/pause; D-pad left/right → seek ±10s; controls stay visible on TV (no 3-second auto-hide or auto-hide only on touch); larger button targets (56dp+); fullscreen button → no-op/hidden on TV (always landscape)
+- Detection: check `android.software.leanback` feature via `PackageManager.hasSystemFeature()` or Flutter `MediaQuery` large-screen detection; pass `isTv` flag to affected screens
 
 **Phase 3 — Audio Passthrough (main new native work)**
 - Detect HDMI output: `AudioManager.getDevices(GET_DEVICES_OUTPUTS)` → check for `TYPE_HDMI_ARC`, `TYPE_HDMI_EARC`, or `TYPE_HDMI`
@@ -437,11 +437,9 @@ Run DreamPlayer on an Android TV box/panel as a real 10-foot app. **Status: IN P
 
 **Files changed:**
 - `android/app/src/main/AndroidManifest.xml` — Phase 1
-- `lib/utils/tv_helper.dart` — Phase 2 (new: `isTvMode()` detection)
-- `lib/screens/home_screen.dart` — Phase 2 (TV action buttons, conditional FAB)
-- `lib/screens/player_screen.dart` — Phase 2 (D-pad controls, auto-hide skip, fullscreen hidden)
-- `lib/widgets/video_card.dart` — Phase 2 (focus highlight)
-- `lib/widgets/folder_card.dart` — Phase 2 (focus highlight)
+- `lib/screens/home_screen.dart` — Phase 2
+- `lib/screens/player_screen.dart` — Phase 2
+- `lib/widgets/video_card.dart`, `folder_card.dart` — Phase 2 (focus highlight)
 - `lib/screens/settings_screen.dart` — Phase 3 (passthrough toggle)
 - `android/.../ExoPlayerView.kt` — Phase 3 (mediaCodecSelector TV override)
 - `android/.../DreamRenderersFactory.kt` — Phase 3 (passthrough sink config, if needed)
