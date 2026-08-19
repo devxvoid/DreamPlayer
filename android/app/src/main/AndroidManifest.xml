@@ -8,11 +8,6 @@
         android:maxSdkVersion="32"/>
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
-    <!-- Android TV: show on leanback launchers; required=false keeps the APK
-         installable on phones/tablets. -->
-    <uses-feature android:name="android.software.leanback" android:required="false"/>
-    <!-- Without this, Android TV devices filter the app out. -->
-    <uses-feature android:name="android.software.touchscreen" android:required="false"/>
     <application
         android:label="DreamPlayer"
         android:name="${applicationName}"
@@ -40,8 +35,6 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
-                <!-- Appear on Android TV / Fire TV launchers too. -->
-                <category android:name="android.intent.category.LEANBACK_LAUNCHER"/>
             </intent-filter>
             <!-- Open video files from file explorers / "Open with" menus.
                  Two broad filters (content + file) with every common video/
