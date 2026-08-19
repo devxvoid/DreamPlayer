@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/hdr_format.dart';
 import '../models/video_item.dart';
 import '../services/tmdb_client.dart';
+import '../utils/tv_helper.dart';
 
 class VideoCard extends StatelessWidget {
   const VideoCard({
@@ -32,141 +33,182 @@ class VideoCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final source = video.playbackSource;
+    final tv = isTvMode(context);
 
-    return Card(
-      margin: EdgeInsets.zero,
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        onLongPress: onLongPress,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            AspectRatio(
-              aspectRatio: 16 / 9,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [
-                          colorScheme.primaryContainer,
-                          colorScheme.tertiaryContainer,
-                        ],
+    return Focus(
+      child: Builder(
+        builder: (context) {
+          final focused = Focus.of(context).hasFocus;
+          return AnimatedScale(
+            scale: tv && focused ? 1.05 : 1.0,
+            duration: const Duration(milliseconds: 150),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              decoration: tv && focused
+                  ? BoxDecoration(
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: Theme.of(context).colorScheme.primary,
+                        width: 3,
                       ),
-                    ),
-                    child: const Center(
-                      child: Icon(
-                        Icons.play_circle_outline,
-                        size: 40,
-                        color: Colors.white54,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .primary
+                              .withValues(alpha: 0.4),
+                          blurRadius: 12,
+                          spreadRadius: 2,
+                        ),
+                      ],
+                    )
+                  : null,
+              child: Card(
+                margin: EdgeInsets.zero,
+                clipBehavior: Clip.antiAlias,
+                child: InkWell(
+                  onTap: onTap,
+                  onLongPress: onLongPress,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      AspectRatio(
+                        aspectRatio: 16 / 9,
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            DecoratedBox(
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                  colors: [
+                                    colorScheme.primaryContainer,
+                                    colorScheme.tertiaryContainer,
+                                  ],
+                                ),
+                              ),
+                              child: const Center(
+                                child: Icon(
+                                  Icons.play_circle_outline,
+                                  size: 40,
+                                  color: Colors.white54,
+                                ),
+                              ),
+                            ),
+                            if (tmdbMeta?.movie.backdropUrl() != null)
+                              Image.network(
+                                tmdbMeta!.movie.backdropUrl()!,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, _, _) =>
+                                    const SizedBox.shrink(),
+                                loadingBuilder: (context, child, progress) =>
+                                    progress == null
+                                        ? child
+                                        : const SizedBox.shrink(),
+                              ),
+                            if (video.hdrFormat != HdrFormat.sdr)
+                              Positioned(
+                                top: 8,
+                                left: 8,
+                                child: _Badge(
+                                  label: _hdrShortLabel(video.hdrFormat),
+                                  background: _hdrColor(video.hdrFormat),
+                                ),
+                              ),
+                            if (video.resolution != null)
+                              Positioned(
+                                top: 8,
+                                right: 8,
+                                child: _Badge(label: video.resolution!),
+                              ),
+                            if (source != null)
+                              Positioned(
+                                bottom: 8,
+                                left: 8,
+                                child: _Badge(
+                                  label: source.label,
+                                  background: _sourceColor(source),
+                                ),
+                              ),
+                            Positioned(
+                              bottom: 8,
+                              right: 8,
+                              child: _Badge(label: video.durationLabel),
+                            ),
+                            if (progress != null)
+                              Positioned(
+                                left: 0,
+                                right: 0,
+                                bottom: 0,
+                                child: LinearProgressIndicator(
+                                  value: progress!.clamp(0.0, 1.0),
+                                  minHeight: 3,
+                                  backgroundColor: Colors.black45,
+                                  color: Colors.white70,
+                                ),
+                              ),
+                          ],
+                        ),
                       ),
-                    ),
-                  ),
-                  if (tmdbMeta?.movie.backdropUrl() != null)
-                    Image.network(
-                      tmdbMeta!.movie.backdropUrl()!,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, _, _) => const SizedBox.shrink(),
-                      loadingBuilder: (context, child, progress) => progress == null
-                          ? child
-                          : const SizedBox.shrink(),
-                    ),
-                  if (video.hdrFormat != HdrFormat.sdr)
-                    Positioned(
-                      top: 8,
-                      left: 8,
-                      child: _Badge(
-                        label: _hdrShortLabel(video.hdrFormat),
-                        background: _hdrColor(video.hdrFormat),
-                      ),
-                    ),
-                  if (video.resolution != null)
-                    Positioned(
-                      top: 8,
-                      right: 8,
-                      child: _Badge(label: video.resolution!),
-                    ),
-                  if (source != null)
-                    Positioned(
-                      bottom: 8,
-                      left: 8,
-                      child: _Badge(
-                        label: source.label,
-                        background: _sourceColor(source),
-                      ),
-                    ),
-                  Positioned(
-                    bottom: 8,
-                    right: 8,
-                    child: _Badge(label: video.durationLabel),
-                  ),
-                  if (progress != null)
-                    Positioned(
-                      left: 0,
-                      right: 0,
-                      bottom: 0,
-                      child: LinearProgressIndicator(
-                        value: progress!.clamp(0.0, 1.0),
-                        minHeight: 3,
-                        backgroundColor: Colors.black45,
-                        color: Colors.white70,
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-                child: Column(
-                  mainAxisSize: MainAxisSize.max,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      (tmdbMeta?.movie.title.isNotEmpty ?? false)
-                          ? tmdbMeta!.movie.title
-                          : video.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.w600,
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.max,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                (tmdbMeta?.movie.title.isNotEmpty ?? false)
+                                    ? tmdbMeta!.movie.title
+                                    : video.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .titleSmall
+                                    ?.copyWith(fontWeight: FontWeight.w600),
+                              ),
+                              const SizedBox(height: 2),
+                              if (subtitle != null)
+                                Flexible(
+                                  child: Text(
+                                    subtitle!,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall
+                                        ?.copyWith(
+                                            color:
+                                                colorScheme.onSurfaceVariant),
+                                  ),
+                                )
+                              else
+                                Flexible(
+                                  child: Text(
+                                    _subtitleLine(),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall
+                                        ?.copyWith(
+                                            color:
+                                                colorScheme.onSurfaceVariant),
+                                  ),
+                                ),
+                            ],
                           ),
-                    ),
-                    const SizedBox(height: 2),
-                    if (subtitle != null)
-                      Flexible(
-                        child: Text(
-                          subtitle!,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context)
-                              .textTheme
-                              .bodySmall
-                              ?.copyWith(color: colorScheme.onSurfaceVariant),
-                        ),
-                      )
-                    else
-                      Flexible(
-                        child: Text(
-                          _subtitleLine(),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context)
-                              .textTheme
-                              .bodySmall
-                              ?.copyWith(color: colorScheme.onSurfaceVariant),
                         ),
                       ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }

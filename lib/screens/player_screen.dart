@@ -11,6 +11,7 @@ import '../services/continue_watching.dart';
 import '../services/exo_player.dart';
 import '../services/resume_store.dart';
 import '../utils/codec_info.dart';
+import '../utils/tv_helper.dart';
 import '../widgets/format_chip.dart';
 
 /// Whether the app is running under `flutter test`.
@@ -84,6 +85,9 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   int _selectedSubtitleTrack = -1;
 
   VideoFitMode _fitMode = VideoFitMode.fit;
+
+  /// Whether the app is running on a TV (set once on first build).
+  bool _isTv = false;
 
   /// Last time the resume position was persisted (throttled while playing).
   DateTime _lastResumeSave = DateTime.fromMillisecondsSinceEpoch(0);
@@ -461,7 +465,8 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
 
   void _restartHideTimer() {
     _hideTimer?.cancel();
-    if (!_playing || _buffering || _dragging) return;
+    // On TV, controls stay visible — no auto-hide with a D-pad remote.
+    if (!_playing || _buffering || _dragging || _isTv) return;
     _hideTimer = Timer(_autoHideAfter, () {
       if (mounted && _controlsVisible && _playing && !_buffering && !_dragging) {
         setState(() => _controlsVisible = false);
@@ -845,6 +850,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final video = _current;
+    _isTv = isTvMode(context);
 
     final total = _duration;
     final maxMs = total.inMilliseconds > 0
@@ -921,9 +927,34 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
 
     return Scaffold(
       backgroundColor: Colors.black,
-      body: Stack(
-        children: [
-          Positioned.fill(child: videoLayer),
+      body: Focus(
+        autofocus: true,
+        onKeyEvent: (node, event) {
+          if (event is KeyDownEvent || event is KeyRepeatEvent) {
+            if (event.logicalKey == LogicalKeyboardKey.select ||
+                event.logicalKey == LogicalKeyboardKey.enter) {
+              _togglePlayPause();
+              _showControls();
+              return KeyEventResult.handled;
+            } else if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+              _seekBy(const Duration(seconds: -10));
+              _showControls();
+              return KeyEventResult.handled;
+            } else if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+              _seekBy(const Duration(seconds: 10));
+              _showControls();
+              return KeyEventResult.handled;
+            } else if (event.logicalKey == LogicalKeyboardKey.arrowUp ||
+                event.logicalKey == LogicalKeyboardKey.arrowDown) {
+              _showControls();
+              return KeyEventResult.handled;
+            }
+          }
+          return KeyEventResult.ignored;
+        },
+        child: Stack(
+          children: [
+            Positioned.fill(child: videoLayer),
           // Full-screen tap catcher on top of the (Android platform) video
           // layer. Hybrid-composition platform views can swallow touches, so a
           // plain GestureDetector wrapping the view is unreliable; catching taps
@@ -1144,15 +1175,16 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                                   icon: const Icon(Icons.tune),
                                   color: Colors.white,
                                 ),
-                                IconButton(
-                                  onPressed: _toggleFullscreen,
-                                  icon: Icon(
-                                    _fullscreen
-                                        ? Icons.fullscreen_exit
-                                        : Icons.fullscreen,
+                                if (!_isTv)
+                                  IconButton(
+                                    onPressed: _toggleFullscreen,
+                                    icon: Icon(
+                                      _fullscreen
+                                          ? Icons.fullscreen_exit
+                                          : Icons.fullscreen,
+                                    ),
+                                    color: Colors.white,
                                   ),
-                                  color: Colors.white,
-                                ),
                               ],
                             ),
                           ],
@@ -1165,6 +1197,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
             ),
           ),
         ],
+        ),
       ),
     );
   }

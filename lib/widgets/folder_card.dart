@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../services/jellyfin_client.dart';
 import '../services/library_folders.dart';
 import '../services/tmdb_client.dart';
+import '../utils/tv_helper.dart';
 
 /// Library card for a user-added folder. Shows the folder's TMDB match (poster
 /// art, real title, year, TV/Movie chip) when one resolves, otherwise the
@@ -71,95 +72,132 @@ class FolderCard extends StatelessWidget {
         ? const Color(0xFF9C27B0)
         : const Color(0xFF1565C0);
 
-    return Card(
-      margin: EdgeInsets.zero,
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        onLongPress: onLongPress,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Expanded(
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [
-                          colorScheme.primaryContainer,
-                          colorScheme.tertiaryContainer,
-                        ],
+    final tv = isTvMode(context);
+
+    return Focus(
+      child: Builder(
+        builder: (context) {
+          final focused = Focus.of(context).hasFocus;
+          return AnimatedScale(
+            scale: tv && focused ? 1.05 : 1.0,
+            duration: const Duration(milliseconds: 150),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              decoration: tv && focused
+                  ? BoxDecoration(
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: Theme.of(context).colorScheme.primary,
+                        width: 3,
                       ),
-                    ),
-                    child: const Center(
-                      child: Icon(
-                        Icons.video_library_outlined,
-                        size: 40,
-                        color: Colors.white54,
-                      ),
-                    ),
-                  ),
-                  if (posterUrl != null)
-                    Image.network(
-                      posterUrl,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, _, _) => const SizedBox.shrink(),
-                      loadingBuilder: (context, child, progress) =>
-                          progress == null ? child : const SizedBox.shrink(),
-                    ),
-                  if (kindBadge != null)
-                    Positioned(
-                      top: 8,
-                      right: 8,
-                      child: _FolderBadge(
-                        label: kindBadge,
-                        background: kindColor,
-                      ),
-                    ),
-                  if (folder.isJellyfin)
-                    const Positioned(
-                      top: 8,
-                      left: 8,
-                      child: _FolderBadge(
-                        label: 'Jellyfin',
-                        background: Color(0xFF00B8A9),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w600,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .primary
+                              .withValues(alpha: 0.4),
+                          blurRadius: 12,
+                          spreadRadius: 2,
                         ),
+                      ],
+                    )
+                  : null,
+              child: Card(
+                margin: EdgeInsets.zero,
+                clipBehavior: Clip.antiAlias,
+                child: InkWell(
+                  onTap: onTap,
+                  onLongPress: onLongPress,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            DecoratedBox(
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                  colors: [
+                                    colorScheme.primaryContainer,
+                                    colorScheme.tertiaryContainer,
+                                  ],
+                                ),
+                              ),
+                              child: const Center(
+                                child: Icon(
+                                  Icons.video_library_outlined,
+                                  size: 40,
+                                  color: Colors.white54,
+                                ),
+                              ),
+                            ),
+                            if (posterUrl != null)
+                              Image.network(
+                                posterUrl,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, _, _) =>
+                                    const SizedBox.shrink(),
+                                loadingBuilder: (context, child, progress) =>
+                                    progress == null
+                                        ? child
+                                        : const SizedBox.shrink(),
+                              ),
+                            if (kindBadge != null)
+                              Positioned(
+                                top: 8,
+                                right: 8,
+                                child: _FolderBadge(
+                                  label: kindBadge,
+                                  background: kindColor,
+                                ),
+                              ),
+                            if (folder.isJellyfin)
+                              const Positioned(
+                                top: 8,
+                                left: 8,
+                                child: _FolderBadge(
+                                  label: 'Jellyfin',
+                                  background: Color(0xFF00B8A9),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .titleSmall
+                                  ?.copyWith(fontWeight: FontWeight.w600),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              subtitle,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                  color: colorScheme.onSurfaceVariant),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context)
-                        .textTheme
-                        .bodySmall
-                        ?.copyWith(color: colorScheme.onSurfaceVariant),
-                  ),
-                ],
+                ),
               ),
             ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }
