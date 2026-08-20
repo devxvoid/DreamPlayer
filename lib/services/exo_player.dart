@@ -185,6 +185,7 @@ class ExoPlayerEvent {
     this.error,
     this.errorMessage,
     this.errorCause,
+    this.audioPassthrough = false,
   });
 
   final int state;
@@ -236,6 +237,10 @@ class ExoPlayerEvent {
   final String? errorMessage;
   final String? errorCause;
 
+  /// True when audio passthrough is active (encoded bitstream routed to
+  /// HDMI output via AudioTrack passthrough mode).
+  final bool audioPassthrough;
+
   Duration get position => Duration(milliseconds: positionMs);
   Duration get duration => Duration(milliseconds: durationMs);
   Duration get buffered => Duration(milliseconds: bufferedMs);
@@ -276,8 +281,51 @@ class ExoPlayerEvent {
       error: m['error'] as String?,
       errorMessage: m['errorMessage'] as String?,
       errorCause: m['errorCause'] as String?,
+      audioPassthrough: m['audioPassthrough'] == true,
     );
   }
+}
+
+/// Common playback-control surface implemented by the in-app
+/// [ExoPlayerController]. The player screen drives it on every platform
+/// (phones, tablets, Android TV / Fire TV).
+abstract class PlaybackController {
+  Stream<ExoPlayerEvent> get events;
+
+  ExoPlayerEvent? get latest;
+
+  Future<void> open(
+    String path, {
+    String? uri,
+    String? subtitleUri,
+    int? startPositionMs,
+    Map<String, String>? httpHeaders,
+    bool allowSelfSigned = false,
+    String? resumeKey,
+    String? title,
+  });
+
+  Future<void> play();
+
+  Future<void> pause();
+
+  Future<void> seekTo(Duration position);
+
+  Future<void> setVolume(double volume);
+
+  Future<void> setMuted(bool muted);
+
+  Future<void> selectAudioTrack(int index);
+
+  Future<void> selectSubtitleTrack(int index);
+
+  Future<void> setSubtitles(bool on);
+
+  Future<void> setFitMode(VideoFitMode mode);
+
+  Future<ExoPlayerEvent?> getState();
+
+  Future<void> dispose();
 }
 
 /// Dart-side handle to the native ExoPlayer platform view.
@@ -287,16 +335,18 @@ class ExoPlayerEvent {
 /// before the platform view attaches (e.g. [open] from a screen's `initState`)
 /// are queued and flushed once the channel exists. Listen on [events] for
 /// playback state, or query [latest] for the most recent snapshot.
-class ExoPlayerController {
+class ExoPlayerController implements PlaybackController {
   final _events = StreamController<ExoPlayerEvent>.broadcast();
 
   MethodChannel? _method;
   ExoPlayerEvent? _latest;
   final List<(String, Map<String, dynamic>?)> _pending = [];
 
+  @override
   ExoPlayerEvent? get latest => _latest;
 
   /// Stream of playback state snapshots (roughly 250 ms while playing).
+  @override
   Stream<ExoPlayerEvent> get events => _events.stream;
 
   void _attach(int viewId) {
@@ -316,6 +366,7 @@ class ExoPlayerController {
     _pending.clear();
   }
 
+  @override
   Future<void> open(
     String path, {
     String? uri,
@@ -323,6 +374,8 @@ class ExoPlayerController {
     int? startPositionMs,
     Map<String, String>? httpHeaders,
     bool allowSelfSigned = false,
+    String? resumeKey,
+    String? title,
   }) =>
       _send('open', {
         if (uri != null && uri.isNotEmpty) 'uri': uri else 'path': path,
@@ -334,15 +387,20 @@ class ExoPlayerController {
         if (httpHeaders != null && httpHeaders.isNotEmpty)
           'headers': httpHeaders,
         if (allowSelfSigned) 'allowSelfSigned': true,
+        if (resumeKey != null && resumeKey.isNotEmpty) 'resumeKey': resumeKey,
+        if (title != null && title.isNotEmpty) 'title': title,
       });
 
+  @override
   Future<void> play() => _send('play');
 
+  @override
   Future<void> pause() => _send('pause');
 
   /// Queries the native player's current state directly, instead of relying on
   /// the last pushed event. Returns null when the platform view isn't attached
   /// (e.g. mid background/foreground surface recreation) — callers can retry.
+  @override
   Future<ExoPlayerEvent?> getState() async {
     final channel = _method;
     if (channel == null) return _latest;
@@ -360,22 +418,29 @@ class ExoPlayerController {
     return _latest;
   }
 
+  @override
   Future<void> seekTo(Duration position) =>
       _send('seekTo', {'positionMs': position.inMilliseconds});
 
+  @override
   Future<void> setVolume(double volume) => _send('setVolume', {'volume': volume});
 
+  @override
   Future<void> setMuted(bool muted) => _send('setMuted', {'muted': muted});
 
+  @override
   Future<void> selectAudioTrack(int index) =>
       _send('setAudioTrack', {'index': index});
 
+  @override
   Future<void> setSubtitles(bool on) => _send('setSubtitles', {'on': on});
 
+  @override
   Future<void> selectSubtitleTrack(int index) =>
       _send('setSubtitleTrack', {'index': index});
 
   /// Sets how the video fills the view (fit/crop/stretch/fixed ratio).
+  @override
   Future<void> setFitMode(VideoFitMode mode) =>
       _send('setResizeMode', {'mode': mode.value});
 
@@ -399,6 +464,7 @@ class ExoPlayerController {
     }
   }
 
+  @override
   Future<void> dispose() async {
     await disposeNative();
     await _events.close();
@@ -442,6 +508,9 @@ class ExoPlayerView extends StatelessWidget {
         creationParamsCodec: const StandardMessageCodec(),
       );
     }
+    // This platform view is the single playback surface on every platform:
+    // phones and Android TV / Fire TV alike use the same hybrid-composition
+    // SurfaceView so true HDR/DV stays device-composited everywhere.
     return PlatformViewLink(
       viewType: exoPlayerViewType,
       surfaceFactory: (BuildContext context, PlatformViewController controller) {

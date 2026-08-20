@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../models/video_item.dart';
 import '../services/smb_client.dart';
 import '../services/tmdb_client.dart';
+import '../widgets/tv_text_field.dart';
 import 'tmd_details_screen.dart';
 
 /// SMB / LAN-share browser: saved servers -> shares -> folders -> videos.
@@ -830,18 +831,20 @@ class _ServerFormDialogState extends State<_ServerFormDialog> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(
+            TvTextField(
               controller: _name,
               decoration: const InputDecoration(labelText: 'Name (optional)'),
             ),
-            TextField(
+            const SizedBox(height: 12),
+            TvTextField(
               controller: _host,
               decoration: const InputDecoration(
                 labelText: 'Host',
                 hintText: '192.168.1.10 or nas.local',
               ),
             ),
-            TextField(
+            const SizedBox(height: 12),
+            TvTextField(
               controller: _port,
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(labelText: 'Port'),
@@ -853,11 +856,12 @@ class _ServerFormDialogState extends State<_ServerFormDialog> {
               onChanged: (v) => setState(() => _guest = v),
             ),
             if (!_guest) ...[
-              TextField(
+              TvTextField(
                 controller: _username,
                 decoration: const InputDecoration(labelText: 'Username'),
               ),
-              TextField(
+              const SizedBox(height: 12),
+              TvTextField(
                 controller: _password,
                 obscureText: true,
                 decoration: InputDecoration(
@@ -867,7 +871,8 @@ class _ServerFormDialogState extends State<_ServerFormDialog> {
                       : null,
                 ),
               ),
-              TextField(
+              const SizedBox(height: 12),
+              TvTextField(
                 controller: _domain,
                 decoration: const InputDecoration(labelText: 'Domain (optional)'),
               ),

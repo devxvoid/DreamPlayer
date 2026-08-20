@@ -3,12 +3,13 @@ import 'package:flutter/material.dart';
 import '../services/jellyfin_client.dart';
 import '../services/library_folders.dart';
 import '../services/tmdb_client.dart';
+import '../utils/tv_helper.dart';
 
 /// Library card for a user-added folder. Shows the folder's TMDB match (poster
 /// art, real title, year, TV/Movie chip) when one resolves, otherwise the
 /// server-provided [JellyfinItemInfo] for Jellyfin folders, otherwise a
 /// gradient + folder icon placeholder.
-class FolderCard extends StatelessWidget {
+class FolderCard extends StatefulWidget {
   const FolderCard({
     super.key,
     required this.folder,
@@ -28,11 +29,32 @@ class FolderCard extends StatelessWidget {
   final VoidCallback? onLongPress;
 
   @override
+  State<FolderCard> createState() => _FolderCardState();
+}
+
+class _FolderCardState extends State<FolderCard> {
+  /// Owned focus node handed to the InkWell. Putting focus directly on the
+  /// InkWell (rather than a wrapping `Focus`) means D-pad traversal reaches the
+  /// card AND `select`/enter activates it through the InkWell's own
+  /// ActivateIntent handler. The highlight follows the node via
+  /// [ListenableBuilder].
+  final FocusNode _focusNode = FocusNode();
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final movie = tmdbMeta?.movie;
+    final folder = widget.folder;
+    final onTap = widget.onTap;
+    final onLongPress = widget.onLongPress;
+    final movie = widget.tmdbMeta?.movie;
     final hasMeta = movie != null && movie.title.isNotEmpty;
-    final info = jellyfinInfo;
+    final info = widget.jellyfinInfo;
     final hasJellyfin = info != null && info.name.isNotEmpty;
     final title = hasMeta
         ? movie.title
@@ -71,96 +93,133 @@ class FolderCard extends StatelessWidget {
         ? const Color(0xFF9C27B0)
         : const Color(0xFF1565C0);
 
-    return Card(
-      margin: EdgeInsets.zero,
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        onLongPress: onLongPress,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Expanded(
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [
-                          colorScheme.primaryContainer,
-                          colorScheme.tertiaryContainer,
+    final tv = isTvMode(context);
+
+    return ListenableBuilder(
+      listenable: _focusNode,
+      builder: (context, _) {
+        final focused = tv && _focusNode.hasFocus;
+        return AnimatedScale(
+          scale: focused ? 1.05 : 1.0,
+          duration: const Duration(milliseconds: 150),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            decoration: focused
+                ? BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: Theme.of(context).colorScheme.primary,
+                      width: 3,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Theme.of(context)
+                            .colorScheme
+                            .primary
+                            .withValues(alpha: 0.4),
+                        blurRadius: 12,
+                        spreadRadius: 2,
+                      ),
+                    ],
+                  )
+                : null,
+            child: Card(
+              margin: EdgeInsets.zero,
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                focusNode: _focusNode,
+                onTap: onTap,
+                onLongPress: onLongPress,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                                colors: [
+                                  colorScheme.primaryContainer,
+                                  colorScheme.tertiaryContainer,
+                                ],
+                              ),
+                            ),
+                            child: const Center(
+                              child: Icon(
+                                Icons.video_library_outlined,
+                                size: 40,
+                                color: Colors.white54,
+                              ),
+                            ),
+                          ),
+                          if (posterUrl != null)
+                            Image.network(
+                              posterUrl,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, _, _) =>
+                                  const SizedBox.shrink(),
+                              loadingBuilder: (context, child, progress) =>
+                                  progress == null
+                                      ? child
+                                      : const SizedBox.shrink(),
+                            ),
+                          if (kindBadge != null)
+                            Positioned(
+                              top: 8,
+                              right: 8,
+                              child: _FolderBadge(
+                                label: kindBadge,
+                                background: kindColor,
+                              ),
+                            ),
+                          if (folder.isJellyfin)
+                            const Positioned(
+                              top: 8,
+                              left: 8,
+                              child: _FolderBadge(
+                                label: 'Jellyfin',
+                                background: Color(0xFF00B8A9),
+                              ),
+                            ),
                         ],
                       ),
                     ),
-                    child: const Center(
-                      child: Icon(
-                        Icons.video_library_outlined,
-                        size: 40,
-                        color: Colors.white54,
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleSmall
+                                ?.copyWith(fontWeight: FontWeight.w600),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            subtitle,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                color: colorScheme.onSurfaceVariant),
+                          ),
+                        ],
                       ),
                     ),
-                  ),
-                  if (posterUrl != null)
-                    Image.network(
-                      posterUrl,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, _, _) => const SizedBox.shrink(),
-                      loadingBuilder: (context, child, progress) =>
-                          progress == null ? child : const SizedBox.shrink(),
-                    ),
-                  if (kindBadge != null)
-                    Positioned(
-                      top: 8,
-                      right: 8,
-                      child: _FolderBadge(
-                        label: kindBadge,
-                        background: kindColor,
-                      ),
-                    ),
-                  if (folder.isJellyfin)
-                    const Positioned(
-                      top: 8,
-                      left: 8,
-                      child: _FolderBadge(
-                        label: 'Jellyfin',
-                        background: Color(0xFF00B8A9),
-                      ),
-                    ),
-                ],
+                  ],
+                ),
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context)
-                        .textTheme
-                        .bodySmall
-                        ?.copyWith(color: colorScheme.onSurfaceVariant),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 }

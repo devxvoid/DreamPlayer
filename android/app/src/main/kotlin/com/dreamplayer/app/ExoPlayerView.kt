@@ -3,6 +3,7 @@ package com.dreamplayer.app
 import android.app.Activity
 import android.content.Context
 import android.content.pm.ActivityInfo
+import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaExtractor
 import android.media.MediaFormat
@@ -10,6 +11,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.SurfaceControl
 import android.view.View
 import androidx.media3.common.C
@@ -71,6 +73,7 @@ class ExoPlayerView(
         useController = false
         resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
         setShutterBackgroundColor(android.graphics.Color.BLACK)
+        setKeepContentOnPlayerReset(true)
     }
 
     /// Last value handed to `Window.setDesiredHdrHeadroom`, to avoid re-setting
@@ -88,42 +91,22 @@ class ExoPlayerView(
     /// soon as it starts, so Media3's audio renderer spins in an endless
     /// re-init loop and no AudioTrack is ever created (silent playback). Skip
     /// the Dolby component for E-AC3/E-AC3-JOC so the AOSP decoder is used.
-    private val mediaCodecSelector = MediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
-        when {
-            mimeType == MimeTypes.AUDIO_FLAC -> emptyList()
-            mimeType == MimeTypes.AUDIO_E_AC3 || mimeType == MimeTypes.AUDIO_E_AC3_JOC ->
-                MediaCodecSelector.DEFAULT.getDecoderInfos(
-                    mimeType,
-                    requiresSecureDecoder,
-                    requiresTunnelingDecoder,
-                ).filterNot { it.name.contains("dolby", ignoreCase = true) }
-            // Dolby Vision on devices WITHOUT a DV decoder: DV P7/P8 streams are
-            // HEVC Main10 underneath (the base layer a DV decoder plays anyway —
-            // the RPU enhancement layer is optional and ignored for display).
-            // Devices like the Redmi Note 10 have no `video/dolby-vision` codec,
-            // so Media3 drops the video track entirely (audio-only playback).
-            // Route those through the HEVC hardware decoder to play the HDR10
-            // base layer. P5 (IPTPQc2, not HEVC) will fail to decode — that's
-            // surfaced as a normal playback error.
-            mimeType == MimeTypes.VIDEO_DOLBY_VISION ->
-                MediaCodecSelector.DEFAULT.getDecoderInfos(
-                    mimeType,
-                    requiresSecureDecoder,
-                    requiresTunnelingDecoder,
-                ).ifEmpty {
-                    MediaCodecSelector.DEFAULT.getDecoderInfos(
-                        MimeTypes.VIDEO_H265,
-                        requiresSecureDecoder,
-                        requiresTunnelingDecoder,
-                    )
-                }
-            else -> MediaCodecSelector.DEFAULT.getDecoderInfos(
-                mimeType,
-                requiresSecureDecoder,
-                requiresTunnelingDecoder,
-            )
-        }
-    }
+    ///
+    /// **Audio passthrough (TV / eARC)**: when the user enables "Audio
+    /// passthrough" in Settings AND an HDMI output is detected, we return an
+    /// empty decoder list for all passthrough-capable formats (AC3, E-AC3,
+    /// DTS, DTS-HD, TrueHD).  This forces ExoPlayer's `DefaultAudioSink` to
+    /// route them through `AudioTrack` in passthrough mode — the encoded
+    /// bitstream goes straight to the HDMI output for the TV / soundbar / AVR
+    /// to decode.  The FfmpegAudioRenderer (appended last in
+    /// DreamRenderersFactory) never fires for these formats because
+    /// `MediaCodecAudioRenderer` claims them first via `audioSink.supportsFormat`.
+    /// FLAC still falls through to FFmpeg (no FLAC passthrough exists).
+    private val passthroughEnabled: Boolean =
+        PlayerCodecs.passthroughEnabled(activity)
+
+    private val mediaCodecSelector: MediaCodecSelector =
+        PlayerCodecs.mediaCodecSelector(activity)
 
     /// Base source for non-file/content schemes. `DefaultDataSource` handles
     /// file/content/asset itself and delegates everything else (http, https,
@@ -224,6 +207,7 @@ class ExoPlayerView(
                 .apply {
                     setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
                     setEnableDecoderFallback(true)
+                    setAllowedVideoJoiningTimeMs(0L)
                     setMediaCodecSelector(mediaCodecSelector)
                 }
         )
@@ -617,6 +601,13 @@ class ExoPlayerView(
         playerView.player = player
         player.addListener(listener)
         playerView.keepScreenOn = true
+
+        // Fire TV fix: lift the video SurfaceView above any dim layers the
+        // framework inserts between dual SurfaceViews in the same window.
+        // Combined with a transparent window background (set in MainActivity),
+        // this lets the video show through — matching Nova Player's approach.
+        (playerView.videoSurfaceView as? android.view.SurfaceView)
+            ?.setZOrderMediaOverlay(true)
 
         methodChannel.setMethodCallHandler { call: MethodCall, result: MethodChannel.Result ->
             when (call.method) {
@@ -1127,6 +1118,7 @@ class ExoPlayerView(
         map["error"] = errorCodeName
         map["errorMessage"] = errorMessage
         map["errorCause"] = errorCause
+        map["audioPassthrough"] = passthroughEnabled
         return map
     }
 
@@ -1195,12 +1187,13 @@ class ExoPlayerView(
         /// for 4K REMUX.
         private val loadControl: LoadControl =
             DefaultLoadControl.Builder()
-                .setBufferDurationsMs(60_000, 120_000, BUFFER_FOR_PLAYBACK_MS, BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS)
+                .setBufferDurationsMs(15_000, 50_000, BUFFER_FOR_PLAYBACK_MS, BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS)
                 .setTargetBufferBytes(TARGET_BUFFER_BYTES)
+                .setPrioritizeTimeOverSizeThresholds(true)
                 .build()
 
-        private const val BUFFER_FOR_PLAYBACK_MS = 2_000
-        private const val BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 5_000
+        private const val BUFFER_FOR_PLAYBACK_MS = 1_500
+        private const val BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 2_000
         private const val TARGET_BUFFER_BYTES = 96 * 1024 * 1024
     }
 }

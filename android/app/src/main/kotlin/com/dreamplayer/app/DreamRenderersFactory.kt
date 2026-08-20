@@ -12,6 +12,9 @@ import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.FfmpegAudioRenderer
 import java.util.ArrayList
 
 class DreamRenderersFactory(context: Context) : DefaultRenderersFactory(context) {
+    init {
+        setAllowedVideoJoiningTimeMs(0L)
+    }
 
     override fun buildAudioRenderers(
         context: Context,

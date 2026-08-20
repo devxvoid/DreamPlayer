@@ -393,27 +393,73 @@ Play files from LAN/NAS SMB shares in-app, mirroring the existing file-browser p
 
 ### Android TV
 
-Run DreamPlayer on an Android TV box/panel as a real 10-foot app. **Status: NOT STARTED — planned (2026-08).** Do NOT implement until asked; this is the design/blueprint.
+Run DreamPlayer on an Android TV box/panel as a real 10-foot app. **Status: Phase 1–3 done; playback rebuilt on the shared in-app platform view; video visible on Fire TV after transparent-window fix (2026-08).**
+
+**Test hardware**: Amazon Fire TV Stick 4K (runs Fire OS, Android-based). TV supports Dolby Vision + Dolby Atmos passthrough. No eARC soundbar/AVR yet — audio bitstream goes to the TV directly over HDMI.
 
 **Core requirement (from the user, 2026-08):** the TV build must pass through, not decode:
 - **Video**: Dolby Vision + HDR10/HDR10+/HLG **to the TV panel** (the panel is the display, so the app's existing SurfaceView/compositing path is already correct — the TV displays PQ/BT.2020 natively).
-- **Audio**: Dolby Atmos (E-AC3-JOC / TrueHD-Atmos), DTS-HD/DTS:X, DTS, AC3, TrueHD **as a compressed bitstream over HDMI** — when the TV is connected to a soundbar/AVR via **eARC**, the audio must be delivered as the original codec bitstream so the sound system decodes it (NOT decoded-PCM in the app).
+- **Audio**: Dolby Atmos (E-AC3-JOC / TrueHD-Atmos), DTS-HD/DTS:X, DTS, AC3, TrueHD **as a compressed bitstream over HDMI** — when the TV is connected to a soundbar/AVR via **eARC**, the audio must be delivered as the original codec bitstream so the sound system decodes it (NOT decoded-PCM in the app). On the Fire TV Stick, the bitstream goes directly to the TV over HDMI (no eARC needed for TV-decoded Atmos).
+
+**Architecture decision (2026-08): ONE player path everywhere — the in-app hybrid-composition platform view.** A dedicated `TVPlayerActivity` (a second FlutterActivity re-parenting the first activity's FlutterView over a bare native PlayerView in a transparent window) was built, then **fully removed**: it caused the blank-flash / greyed-out-controls issues (the dual-activity overlay stack flips surface generations on decoder format change). TV now plays through the exact same `ExoPlayerController` / `ExoPlayerView.kt` hybrid-composition platform view the phone uses (a real SurfaceView composited device-side — true DV/HDR to the panel, verified `BT2020_ITU_PQ` on the OnePlus). Deleted: `TVPlayerActivity.kt`, `lib/services/tv_player.dart` (`TvPlayerController` + `tvInitialVideo`), the `dreamplayer/tvplayer`-family channels, the `TVPlayerTheme`, the `getRenderMode()` override in MainActivity (reverted to the stock surface default), the `isTvBox` handoff in `ExoPlayerView.open`, and the `tvFinished` event. `isTvBox`/`isTv` stays (TV UI detection for `isTvMode()`); the player screen's `_isTv` UI (D-pad focus, controls, fullscreen hidden) is untouched. The Fire-TV DV→HEVC `mediaCodecSelector` forcing was also removed — the stick's native `OMX.MTK.VIDEO.DECODER.DVHE.STH` DV decoder is used directly (like Just Player), with the non-Fire-TV DV-decoder-first + HEVC-fallback rule kept for DV-less hardware.
 
 **Why it's mostly free already**
 - Android TV **is Android** — the whole native stack ships unchanged: ExoPlayer/Media3 + hybrid-composition PlatformView (`ExoPlayerView.kt`), `DreamRenderersFactory`, the DV→HEVC `mediaCodecSelector` fallback, `SmbDataSource` (SMB), WebDAV (`WebDAVClient.kt`), Jellyfin (pure Dart), subtitles, HDR chips. `defaultTargetPlatform == android` already.
 - **Video passthrough**: the hybrid-composition SurfaceView is a real SurfaceFlinger layer on the physical output — on a TV this is the panel, so DV/HDR10+ composite as `BT2020_ITU_PQ` directly (the whole point of the VIRTUAL-DISPLAY fix). The `mediaCodecSelector` DV→HEVC fallback handles DV-less hardware; `supportedHdrTypes` on the TV drives which formats get device-composited.
 - **Jellyfin/WebDAV/SMB browsing** are focus-based Flutter screens — they need a D-pad pass, not a rewrite.
 
-**Work items (in order)**
-1. **Manifest/launcher**: add `LEANBACK_LAUNCHER` category intent-filter + `<uses-feature android:name="android.software.leanback" android:required="false"/>` (so the same APK still installs on phones) + a `android.software.touchscreen` `required="false"` override. Flutter's default MainActivity works.
-2. **10-foot UI pass**: D-pad/focus traversal on home/library/WebDAV/Jellyfin/SMB lists + player controls (Material is focusable but needs larger targets, `Focus`-friendly navigation, D-pad back). TV apps must not require touch.
-3. **AUDIO PASSTHROUGH (the main new work)** — current app always decodes audio to PCM (FFmpeg/MediaCodec → `AudioTrack` PCM). For eARC bitstream delivery the app must hand the TV's HDMI output the *compressed* bitstream:
-   - Media3/ExoPlayer supports this via `DefaultAudioSink` passthrough: when the platform's `AudioCapabilities` report the compressed encoding as supported on the active output (Android TV's HDMI/eARC advertises AC3/E-AC3/DTS/DTS-HD/TrueHD via `AudioManager`/`AudioCapabilities`), `AudioSink.supportsFormat` returns true and the audio renderer feeds the encoded buffers straight to `AudioTrack` passthrough instead of decoding. Verify this is engaged — inspect what `AudioCapabilities` reports on the device and whether E-AC3/TrueHD/DTS-HD formats select passthrough.
-   - Gotchas to verify: (a) the `mediaCodecSelector` skip of `c2.dolby.eac3.decoder` (added for the phone's broken codec2) must NOT break E-AC3 passthrough — passthrough needs no decoder, but confirm `MediaCodecAudioRenderer` selects the format for passthrough anyway; (b) `FfmpegAudioRenderer` (nextlib) always decodes to PCM — it must not be the renderer chosen for passthrough-capable formats (it's appended last, so MediaCodec/passthrough should win — confirm); (c) TrueHD/DTS-HD passthrough over eARC needs the sink + TV to agree — on some TVs only the lossy core (AC3/DTS) or only E-AC3 is eARC-capable; report what the sink can actually deliver.
-   - Consider a **settings toggle** (Nova/Just-Player-style "Audio passthrough": Off / Auto): `Off` keeps today's PCM decode (for phone/headphone use), `Auto` enables sink passthrough for the TV/AVR case. Default the toggle on only on TV-targeted builds, or add an "Output" section in Settings.
-   - **Verify on-device**: a soundbar/AVR connected to the TV via eARC must display "Dolby Atmos", "DTS-HD", "TrueHD" on its own display (the definitive check that the bitstream, not PCM, arrived). Test Atmos (E-AC3-JOC + TrueHD-Atmos), DTS-HD MA, TrueHD, AC3, DTS.
-4. **Video passthrough verify**: confirm the OnePlus-specific `applyHdrHeadroom` window-COLOR_MODE machinery is harmless (or correctly skipped) on a TV — TVs take PQ directly so the EDR/headroom path is phone-only; it should early-return or be gated. DV P7/P8 → HEVC fallback + DV P5 rejection already work.
-5. **CI**: reuse `.github/workflows/release.yml` (Android APKs already build on `ubuntu-latest`); optionally a `flutter build apk` arm64-v8a job — no new platform needed.
+**Implementation plan (phased)**
+
+**Phase 1 — Manifest & Launcher** (status: done)
+- Add `LEANBACK_LAUNCHER` category to the existing launcher intent filter (same `MainActivity`, no new activity)
+- Add `<uses-feature android:name="android.software.leanback" android:required="false"/>` — app appears on TV launchers; same APK still installs on phones
+- Add `<uses-feature android:name="android.software.touchscreen" android:required="false"/>` — without this, TV devices filter the app out
+- Same APK, no build variants or product flavors
+
+**Phase 2 — 10-foot UI Pass (Home + Player only)** (status: done)
+- Home screen: `FolderCard`/`VideoCard` wrapped with `Focus` widget + `AnimatedScale` (1.05×) + `AnimatedContainer` (blue border + glow) when focused; D-pad grid traversal works automatically with `SliverGrid` + Material `InkWell`; the home **+** FAB menu is shown on TV too (WebDAV, Jellyfin, Network shares, Add folder, Internal storage — the top-right `SliverAppBar.actions` were removed); "Remove from library" via `onLongPress` (long-press on remote select)
+- Player screen (Just Player style, reworked 2026-08): when controls are hidden, D-pad left/right seek ±10s, center/select/media-play-pause toggle play/pause, any other key reveals the controls; when controls are visible, arrow keys drive normal Android focus navigation between the focusable transport buttons (replay_10 / play-pause / forward_10 + audio/CC/aspect buttons) and the system handles button activation on center — the handler only intercepts select/play-pause/seek. `_showControls()` auto-focuses the play/pause button on reveal (`_playPauseFocusNode`). Controls **auto-hide after 3.5 s while playing** (`_restartHideTimer`, `_autoHideAfter = 3500 ms`), stay visible while paused/buffering/dragging, and any remote press reveals them again. **Remote play/pause gotcha (2026-08)**: the dedicated remote media-play/pause keys are intercepted *before* the `okKey` (select/enter/DPAD_CENTER) branch — media keys do NOT activate a focused `InkWell`, so deferring to the focused button made a second play/pause press a dead no-op (pauses but won't resume). Fixed with a `mediaPlayKey` branch that always calls `_togglePlayPause()`. Fullscreen button hidden on TV (always landscape); `_isTv` flag set from `isTvMode(context)` on first build.
+- **Custom focus highlight (user-required, 2026-08)**: the system-default focus indicator was rejected as too subtle — all TV-focusable widgets (`_TvControlButton`, `_tvListTile` in bottom sheets, `_BufferedSeekBar`, `VideoCard`, `FolderCard`) share a blue border (3 px) + primary-glow `boxShadow` (40 % alpha, blur 12, spread 2) + `AnimatedScale` (1.25× circular transport buttons, 1.05× cards/list tiles), rendered via a `Focus` + `AnimatedContainer`/`AnimatedScale` wrapper. **Consistency pass**: the same highlight was applied to every sheet row (`_tvListTile`), the seek bar, and the transport buttons so focus is visible everywhere, not just the home grid.
+- **TV text input in server forms (`TvTextField`, 2026-08)**: the SMB and WebDAV "Add server" dialogs use plain `TextField`s so the Fire Stick's own Leanback IME (`FireTVIME`) handles typing. The stock `TextField` was unusable with the remote — it auto-opens the IME the instant D-pad focus lands on it, and the keyboard window then swallows the D-pad keys, so focus got **stuck on an empty field** and you could never tab to the next one. `lib/widgets/tv_text_field.dart` wraps each field with the app's blue glow (same 3px border + shadow as the transport buttons) and uses **two `FocusNode`s**: an *outer* glow node that is the D-pad target, and an *inner* `FocusNode(skipTraversal: true)` owned by the `TextField`. `skipTraversal` keeps the field out of D-pad traversal (so the IME never auto-opens and arrow keys keep moving between fields) while still allowing programmatic `requestFocus()` — which fires only on OK/select/enter via the outer node's `onKeyEvent`. When the IME closes (back/Done) the inner node's focus-change listener hands focus back to the outer node so D-pad navigation resumes from that field. **Gotcha**: `descendantsAreFocusable: false` does NOT work here — it flips the inner node's `canRequestFocus` off through its ancestors, silently killing the programmatic `requestFocus()` (focus never reaches the TextField and typing goes nowhere); `skipTraversal` is the correct mechanism. Fields are evenly spaced (`SizedBox(height: 12)` between every field; the WebDAV host/port 3:1 `Row` was replaced with two full-width stacked fields). Verified on-device on the Fire TV: D-pad moves the glow across all six SMB fields with no IME, OK summons the keyboard, typed text lands, and navigation resumes after the keyboard closes.
+- Detection: `isTvMode()` in `lib/utils/tv_helper.dart` — checks `Platform.isAndroid && width >= 960dp` via `MediaQuery`; no platform channel needed
+
+**Phase 3 — Audio Passthrough** (status: done)
+- Detect HDMI output: `AudioManager.getDevices(GET_DEVICES_OUTPUTS)` → check for `TYPE_HDMI`, `TYPE_HDMI_ARC`, `TYPE_HDMI_EARC`
+- `mediaCodecSelector` TV override: when passthrough enabled AND HDMI detected, return empty decoder list for passthrough-capable formats (AC3, E-AC3, DTS, DTS-HD, TrueHD) — forces ExoPlayer's `DefaultAudioSink` to route them through `AudioTrack` passthrough mode to HDMI
+- On phone (passthrough OFF): current behavior unchanged — Dolby E-AC3 filter stays, FFmpeg handles DTS/TrueHD/FLAC as PCM decode
+- Settings toggle: "Audio passthrough: Off / Auto" in Settings (Android only). `Off` = current PCM decode. `Auto` = passthrough when HDMI output detected. Default off, user enables
+- Player overlay shows orange "Passthrough" chip when active
+- On Fire TV Stick: TV should show "Dolby Atmos" / "DTS-HD" on its info overlay when playing Atmos/DTS-HD content
+
+**Phase 4 — Video Passthrough Verify**
+- Hybrid-composition SurfaceView already composites as `BT2020_ITU_PQ` directly — confirm on Fire TV Stick
+- `applyHdrHeadroom` window machinery is harmless on TV (early-returns or correctly sets HDR mode)
+- DV P7/P8 → HEVC fallback + DV P5 rejection still work
+
+**Fire TV — video visible after Nova-style transparent window fix (2026-08-19, on-device):** after the one-player-path rebuild, playback *opens* and *decodes* correctly on the stick (Jellyfin `Minions & Monsters`, DV, 4K 3840×2160). **Root cause of the blocking layer**: two `SurfaceView`s in the same window (Flutter's `FlutterSurfaceView` + ExoPlayer's video `SurfaceView`). On Fire OS 7.1 (API 25), the Android framework inserts an opaque `LayerDim` (alpha=1.0) between them, blocking the video. Nova avoids this with a **transparent window background** — the SurfaceView renders behind the window; a transparent background lets it show through.
+
+**Fix (two changes)**:
+1. **`MainActivity.kt`** — `onCreate()`: on TV devices (`isTvBox()`), sets `window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))` — exactly what Nova does (`PlayerActivity.onCreate`: `getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT))`). This eliminates the opaque window layer that triggers the blocking `LayerDim`.
+2. **`ExoPlayerView.kt`** — `init`: calls `setZOrderMediaOverlay(true)` on the ExoPlayer `SurfaceView` after creation. This lifts the video surface above any remaining dim layers and above the `FlutterSurfaceView` in the z-order.
+
+**Verified on-device**: `dumpsys SurfaceFlinger` shows the video layer at z=21010 (above `FlutterSurfaceView` at z=21005), window base at z=21015 (`isOpaque=0`, transparent). The `LayerDim` layers that remain have empty buffers (no content). Video picture is visible on the TV panel.
+
+**Phase 5 — CI & Release Notes**
+- No new CI jobs — same universal APK
+- Add "Android TV / Fire TV support" to release notes
+
+**Files changed:**
+- `android/app/src/main/AndroidManifest.xml` — Phase 1
+- `lib/utils/tv_helper.dart` — Phase 2 (new: `isTvMode()` detection)
+- `lib/screens/home_screen.dart` — Phase 2 (TV action buttons, conditional FAB)
+- `lib/screens/player_screen.dart` — Phase 2 (D-pad controls, auto-hide skip, fullscreen hidden)
+- `lib/widgets/video_card.dart` — Phase 2 (focus highlight)
+- `lib/widgets/folder_card.dart` — Phase 2 (focus highlight)
+- `lib/screens/settings_screen.dart` — Phase 3 (passthrough toggle)
+- `android/.../ExoPlayerView.kt` — Phase 3 (mediaCodecSelector TV override) + **transparent window fix** (`setZOrderMediaOverlay(true)`)
+- `android/.../DreamRenderersFactory.kt` — Phase 3 (passthrough sink config, if needed)
+- **`android/.../MainActivity.kt`** — **transparent window background on TV** (`Color.TRANSPARENT` in `onCreate`)
+- `AGENTS.md`, `CHANGELOG.md` — Phase 5
 
 **Out of scope for v1**: AirPlay/DLNA casting, CEC control, live-TV tuner, Play Store/TV certification (leanback banner, `android.app.leanbacklauncher`), Android TV-specific recommendations UI.
 

@@ -80,9 +80,15 @@ class OpenIntentService {
       }
     });
 
-    final initial = await _channel.invokeMethod<Map<dynamic, dynamic>>(
-      'getInitialIntent',
-    );
+    Map<dynamic, dynamic>? initial;
+    try {
+      initial = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+        'getInitialIntent',
+      );
+    } on MissingPluginException {
+      // No intent channel (e.g. the TV engine / tvOS) — nothing to pick up.
+      initial = null;
+    }
     if (initial != null) {
       final intent = OpenIntent(
         title: (initial['title'] as String?) ?? 'Video',

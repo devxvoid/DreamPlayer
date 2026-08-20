@@ -11,6 +11,7 @@ import '../services/continue_watching.dart';
 import '../services/exo_player.dart';
 import '../services/resume_store.dart';
 import '../utils/codec_info.dart';
+import '../utils/tv_helper.dart';
 import '../widgets/format_chip.dart';
 
 /// Whether the app is running under `flutter test`.
@@ -29,8 +30,9 @@ class PlayerScreen extends StatefulWidget {
 }
 
 class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver {
-  /// Native ExoPlayer (Media3) backend hosted in a platform view.
-  ExoPlayerController? _exo;
+  /// Native playback backend: the in-app ExoPlayer platform view (the same
+  /// hybrid-composition SurfaceView on phones and Android TV / Fire TV).
+  PlaybackController? _exo;
   StreamSubscription<ExoPlayerEvent>? _exoSub;
 
   /// The video currently on screen; follows [PlayerScreen.video] on first load.
@@ -39,9 +41,17 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   bool _controlsVisible = true;
   bool _fullscreen = false;
 
+  /// Focus node for the screen-level [Focus] wrapper. On TV the wrapper owns
+  /// focus by default (autofocus); the key handler compares
+  /// `FocusManager.instance.primaryFocus` against this node to tell whether a
+  /// control button is focused (then `select` should activate it) or nothing
+  /// is (then `select` toggles play/pause).
+  final FocusScopeNode _playerFocusScopeNode = FocusScopeNode();
+  final FocusNode _playPauseFocusNode = FocusNode();
+
   Timer? _hideTimer;
   bool? _lastLandscape;
-  static const Duration _autoHideAfter = Duration(seconds: 3);
+  static const Duration _autoHideAfter = Duration(milliseconds: 3500);
 
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
@@ -74,6 +84,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   String? _liveVideoCodecRaw;
   String? _liveAudioCodec;
   int? _liveAudioChannelCount;
+  bool _liveAudioPassthrough = false;
   String? _liveResolution;
   HdrFormat _liveHdr = HdrFormat.sdr;
   List<ExoAudioTrack> _audioTracks = const [];
@@ -84,6 +95,9 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   int _selectedSubtitleTrack = -1;
 
   VideoFitMode _fitMode = VideoFitMode.fit;
+
+  /// Whether the app is running on a TV (set once on first build).
+  bool _isTv = false;
 
   /// Last time the resume position was persisted (throttled while playing).
   DateTime _lastResumeSave = DateTime.fromMillisecondsSinceEpoch(0);
@@ -121,6 +135,8 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       }
       return;
     }
+    // Resolve the backend before any awaits: the in-app ExoPlayer platform
+    // view is used on every platform (phones, tablets, Android TV / Fire TV).
     if (Platform.isAndroid) {
       await Permission.videos.request();
     }
@@ -180,6 +196,8 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
         startPositionMs: resume?.inMilliseconds,
         httpHeaders: video.httpHeaders,
         allowSelfSigned: video.allowSelfSigned,
+        resumeKey: _resumeKey,
+        title: video.title,
       );
       // Re-apply the user's persisted fit mode to the new session.
       _exo?.setFitMode(_fitMode);
@@ -228,6 +246,8 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
         startPositionMs: pos.inMilliseconds,
         httpHeaders: video.httpHeaders,
         allowSelfSigned: video.allowSelfSigned,
+        resumeKey: _resumeKey,
+        title: video.title,
       );
       _exo?.setFitMode(_fitMode);
       _ioRetries = 0;
@@ -342,6 +362,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       _liveAudioCodec = formatMedia3Audio(e.audioMime, e.audioCodecs);
       if (e.audioChannels > 0) _liveAudioChannelCount = e.audioChannels;
     }
+    _liveAudioPassthrough = e.audioPassthrough;
     _audioTracks = e.audioTracks;
     _selectedAudioTrackIndex = e.selectedAudioTrack;
 
@@ -450,17 +471,32 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     _exo?.dispose();
     SystemChrome.setPreferredOrientations(DeviceOrientation.values);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    _playerFocusScopeNode.dispose();
+    _playPauseFocusNode.dispose();
     super.dispose();
   }
 
   /// Reveals the controls (and restarts the auto-hide countdown).
   void _showControls() {
-    if (mounted && !_controlsVisible) setState(() => _controlsVisible = true);
+    if (!mounted) return;
+    final wasVisible = _controlsVisible;
+    if (!_controlsVisible) {
+      setState(() => _controlsVisible = true);
+    }
     _restartHideTimer();
+    if (_isTv && !wasVisible) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _controlsVisible) {
+          _playPauseFocusNode.requestFocus();
+        }
+      });
+    }
   }
 
   void _restartHideTimer() {
     _hideTimer?.cancel();
+    // Auto-hide on every platform (including TV) while playing — any remote
+    // button press reveals the controls again.
     if (!_playing || _buffering || _dragging) return;
     _hideTimer = Timer(_autoHideAfter, () {
       if (mounted && _controlsVisible && _playing && !_buffering && !_dragging) {
@@ -573,7 +609,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                   itemBuilder: (context, i) {
                     final t = tracks[i];
                     final isSelected = t.index == selected;
-                    return ListTile(
+                    return _tvListTile(
                       leading: Icon(
                         isSelected ? Icons.check_circle : Icons.graphic_eq,
                         color: isSelected ? Colors.white : Colors.white54,
@@ -653,7 +689,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                   ),
                 ),
               ),
-              ListTile(
+              _tvListTile(
                 leading: Icon(
                   selected < 0 ? Icons.radio_button_checked : Icons.radio_button_off,
                   color: selected < 0 ? Colors.white : Colors.white54,
@@ -671,7 +707,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                   itemBuilder: (context, i) {
                     final t = tracks[i];
                     final isSelected = t.index == selected;
-                    return ListTile(
+                    return _tvListTile(
                       leading: Icon(
                         isSelected
                             ? Icons.radio_button_checked
@@ -734,7 +770,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                   itemBuilder: (context, i) {
                     final mode = order[i];
                     final isSelected = mode == _fitMode;
-                    return ListTile(
+                    return _tvListTile(
                       leading: Icon(
                         isSelected
                             ? Icons.radio_button_checked
@@ -839,12 +875,15 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
 
   Color get _audioColor => const Color(0xFF81C784);
 
+  Color get _passthroughColor => const Color(0xFFFFB74D);
+
   Color get _infoColor => const Color(0xFF90A4AE);
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final video = _current;
+    _isTv = isTvMode(context);
 
     final total = _duration;
     final maxMs = total.inMilliseconds > 0
@@ -875,8 +914,14 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
             metaProfile: video.audioProfile,
           )
         : video.audioCodecLabel;
-    final audioChip = audioChipLabel != null
-        ? FormatChip(label: audioChipLabel, color: _audioColor)
+    final audioChip =
+        audioChipLabel != null || _liveAudioPassthrough
+        ? FormatChip(
+            label: _liveAudioPassthrough
+                ? '${audioChipLabel ?? "Audio"} · Passthrough'
+                : audioChipLabel!,
+            color: _liveAudioPassthrough ? _passthroughColor : _audioColor,
+          )
         : null;
     final resolutionChip = (_liveResolution ?? video.resolution) != null
         ? FormatChip(
@@ -892,7 +937,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     ];
 
     final videoLayer = _exo != null && _error == null
-        ? ExoPlayerView(controller: _exo!)
+        ? ExoPlayerView(controller: _exo! as ExoPlayerController)
         : Container(
             decoration: BoxDecoration(
               gradient: LinearGradient(
@@ -921,9 +966,119 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
 
     return Scaffold(
       backgroundColor: Colors.black,
-      body: Stack(
-        children: [
-          Positioned.fill(child: videoLayer),
+      body: FocusScope(
+        node: _playerFocusScopeNode,
+        autofocus: true,
+        onKeyEvent: (node, event) {
+          if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+            return KeyEventResult.ignored;
+          }
+          final key = event.logicalKey;
+          final okKey = key == LogicalKeyboardKey.select ||
+              key == LogicalKeyboardKey.enter ||
+              key == LogicalKeyboardKey.numpadEnter ||
+              key == LogicalKeyboardKey.space ||
+              key == LogicalKeyboardKey.gameButtonA;
+          final mediaPlayKey = key == LogicalKeyboardKey.mediaPlay ||
+              key == LogicalKeyboardKey.mediaPause ||
+              key == LogicalKeyboardKey.mediaPlayPause;
+
+          if (_isTv && _controlsVisible) {
+            // Just Player style: when controls are visible on TV, let the
+            // normal Android focus system handle arrow keys for button
+            // navigation. Only intercept select/play-pause/seek keys.
+            if (mediaPlayKey) {
+              // The remote's dedicated play/pause button must always toggle
+              // playback — media keys do NOT activate the focused button
+              // (InkWell only activates on select/enter/DPAD_CENTER), so
+              // deferring here would make a second press a dead no-op.
+              _togglePlayPause();
+              _showControls();
+              return KeyEventResult.handled;
+            } else if (okKey) {
+              if (FocusManager.instance.primaryFocus == _playerFocusScopeNode) {
+                _togglePlayPause();
+                _showControls();
+                return KeyEventResult.handled;
+              }
+              return KeyEventResult.ignored; // activate the focused control
+            } else if (key == LogicalKeyboardKey.mediaRewind) {
+              _seekBy(const Duration(seconds: -10));
+              _showControls();
+              return KeyEventResult.handled;
+            } else if (key == LogicalKeyboardKey.mediaFastForward) {
+              _seekBy(const Duration(seconds: 10));
+              _showControls();
+              return KeyEventResult.handled;
+            } else if (key == LogicalKeyboardKey.arrowLeft ||
+                key == LogicalKeyboardKey.arrowRight ||
+                key == LogicalKeyboardKey.arrowUp ||
+                key == LogicalKeyboardKey.arrowDown) {
+              return KeyEventResult.ignored; // D-pad focus navigation
+            } else if (key == LogicalKeyboardKey.goBack ||
+                key == LogicalKeyboardKey.escape) {
+              setState(() => _controlsVisible = false);
+              _restartHideTimer();
+              return KeyEventResult.handled;
+            }
+            return KeyEventResult.ignored;
+          }
+
+          // TV with hidden controls: Just Player style — direct key handling
+          // for seek/play-pause, any other key shows controls.
+          if (_isTv && !_controlsVisible) {
+            if (okKey || mediaPlayKey) {
+              _togglePlayPause();
+              _showControls();
+              return KeyEventResult.handled;
+            } else if (key == LogicalKeyboardKey.mediaRewind) {
+              _seekBy(const Duration(seconds: -10));
+              _showControls();
+              return KeyEventResult.handled;
+            } else if (key == LogicalKeyboardKey.mediaFastForward) {
+              _seekBy(const Duration(seconds: 10));
+              _showControls();
+              return KeyEventResult.handled;
+            } else if (key == LogicalKeyboardKey.arrowLeft) {
+              _seekBy(const Duration(seconds: -10));
+              _showControls();
+              return KeyEventResult.handled;
+            } else if (key == LogicalKeyboardKey.arrowRight) {
+              _seekBy(const Duration(seconds: 10));
+              _showControls();
+              return KeyEventResult.handled;
+            } else if (key == LogicalKeyboardKey.goBack ||
+                key == LogicalKeyboardKey.escape) {
+              return KeyEventResult.ignored; // exit player
+            } else {
+              _showControls();
+              return KeyEventResult.handled;
+            }
+          } else if (key == LogicalKeyboardKey.arrowUp ||
+              key == LogicalKeyboardKey.arrowDown) {
+            _showControls();
+            return KeyEventResult.handled;
+          } else if (key == LogicalKeyboardKey.goBack ||
+              key == LogicalKeyboardKey.escape) {
+            // BACK on TV: hide the controls first if they're visible and
+            // playing, then exit on a second press.
+            if (_controlsVisible) {
+              setState(() => _controlsVisible = false);
+              _restartHideTimer();
+              return KeyEventResult.handled;
+            }
+            return KeyEventResult.ignored;
+          } else if (!_controlsVisible) {
+            // Any other key while the controls are hidden reveals them
+            // (Just Player behavior).
+            _showControls();
+            return KeyEventResult.handled;
+          }
+          return KeyEventResult.ignored;
+        },
+        child: Stack(
+          children: [
+            Positioned.fill(child: videoLayer),
           // Full-screen tap catcher on top of the (Android platform) video
           // layer. Hybrid-composition platform views can swallow touches, so a
           // plain GestureDetector wrapping the view is unreliable; catching taps
@@ -964,10 +1119,11 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                     children: [
                       Row(
                         children: [
-                          IconButton(
+                          _TvControlButton(
                             onPressed: () => Navigator.of(context).pop(),
                             icon: const Icon(Icons.arrow_back),
                             color: Colors.white,
+                            onFocusChange: (_) => _showControls(),
                           ),
                           const SizedBox(width: 4),
                           Expanded(
@@ -1026,7 +1182,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      IconButton(
+                      _TvControlButton(
                         onPressed: !_backendReady
                             ? null
                             : () =>
@@ -1034,11 +1190,14 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                         iconSize: 40,
                         icon: const Icon(Icons.replay_10),
                         color: Colors.white,
+                        onFocusChange: (_) => _showControls(),
                       ),
                       const SizedBox(width: 8),
-                      IconButton(
+                      _TvControlButton(
+                        focusNode: _playPauseFocusNode,
                         onPressed: !_backendReady ? null : _togglePlayPause,
                         iconSize: 72,
+                        autofocus: true,
                         icon: Icon(
                           _completed
                               ? Icons.replay
@@ -1047,9 +1206,10 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                                   : Icons.play_circle_fill,
                         ),
                         color: Colors.white,
+                        onFocusChange: (_) => _showControls(),
                       ),
                       const SizedBox(width: 8),
-                      IconButton(
+                      _TvControlButton(
                         onPressed: !_backendReady
                             ? null
                             : () =>
@@ -1057,6 +1217,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                         iconSize: 40,
                         icon: const Icon(Icons.forward_10),
                         color: Colors.white,
+                        onFocusChange: (_) => _showControls(),
                       ),
                     ],
                   ),
@@ -1121,16 +1282,18 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                               onChangeStart: _onSeekStart,
                               onChanged: _onSeekUpdate,
                               onChangeEnd: _onSeekEnd,
+                              onFocusChange: (_) => _showControls(),
                             ),
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                IconButton(
+                                _TvControlButton(
                                   onPressed: _openAudioTrackSheet,
                                   icon: const Icon(Icons.graphic_eq),
                                   color: Colors.white,
+                                  onFocusChange: (_) => _showControls(),
                                 ),
-                                IconButton(
+                                _TvControlButton(
                                   onPressed: _openSubtitleSheet,
                                   icon: Icon(
                                     _subtitleOn
@@ -1138,21 +1301,24 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                                         : Icons.closed_caption_off,
                                   ),
                                   color: _subtitleOn ? Colors.white : Colors.white54,
+                                  onFocusChange: (_) => _showControls(),
                                 ),
-                                IconButton(
+                                _TvControlButton(
                                   onPressed: _openFitModeSheet,
                                   icon: const Icon(Icons.tune),
                                   color: Colors.white,
+                                  onFocusChange: (_) => _showControls(),
                                 ),
-                                IconButton(
-                                  onPressed: _toggleFullscreen,
-                                  icon: Icon(
-                                    _fullscreen
-                                        ? Icons.fullscreen_exit
-                                        : Icons.fullscreen,
+                                if (!_isTv)
+                                  _TvControlButton(
+                                    onPressed: _toggleFullscreen,
+                                    icon: Icon(
+                                      _fullscreen
+                                          ? Icons.fullscreen_exit
+                                          : Icons.fullscreen,
+                                    ),
+                                    color: Colors.white,
                                   ),
-                                  color: Colors.white,
-                                ),
                               ],
                             ),
                           ],
@@ -1165,6 +1331,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
             ),
           ),
         ],
+        ),
       ),
     );
   }
@@ -1182,6 +1349,7 @@ class _BufferedSeekBar extends StatefulWidget {
     this.onChangeStart,
     this.onChanged,
     this.onChangeEnd,
+    this.onFocusChange,
   });
 
   final double value;
@@ -1190,6 +1358,7 @@ class _BufferedSeekBar extends StatefulWidget {
   final ValueChanged<double>? onChangeStart;
   final ValueChanged<double>? onChanged;
   final ValueChanged<double>? onChangeEnd;
+  final ValueChanged<bool>? onFocusChange;
 
   @override
   State<_BufferedSeekBar> createState() => _BufferedSeekBarState();
@@ -1201,6 +1370,13 @@ class _BufferedSeekBarState extends State<_BufferedSeekBar> {
   static const double _touchHeight = 36; // total tappable area
   bool _dragging = false;
   double _dragValue = 0;
+  final FocusNode _focusNode = FocusNode();
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
 
   double get _clampedMax => widget.max > 0 ? widget.max : 1;
 
@@ -1209,126 +1385,355 @@ class _BufferedSeekBarState extends State<_BufferedSeekBar> {
     return fraction * _clampedMax;
   }
 
+  void _stepSeek(double deltaMs) {
+    final maxVal = _clampedMax;
+    final current = _dragging ? _dragValue : widget.value;
+    final target = (current + deltaMs).clamp(0.0, maxVal);
+    widget.onChangeStart?.call(target);
+    widget.onChanged?.call(target);
+    widget.onChangeEnd?.call(target);
+  }
+
   @override
   Widget build(BuildContext context) {
     final currentMs = _dragging ? _dragValue : widget.value;
     final positionFraction = (currentMs / _clampedMax).clamp(0.0, 1.0);
     final bufferFraction = (widget.bufferedMs / _clampedMax).clamp(0.0, 1.0);
 
-    return GestureDetector(
-      onHorizontalDragStart: (details) {
-        final box = context.findRenderObject() as RenderBox?;
-        if (box == null) return;
-        final ms = _fractionFromOffset(
-          box.globalToLocal(details.globalPosition).dx,
-          box.size.width,
-        );
-        setState(() {
-          _dragging = true;
-          _dragValue = ms;
-        });
-        widget.onChangeStart?.call(ms);
+    return Focus(
+      focusNode: _focusNode,
+      onFocusChange: (focused) {
+        if (focused) widget.onFocusChange?.call(focused);
+        if (mounted) setState(() {});
       },
-      onHorizontalDragUpdate: (details) {
-        final box = context.findRenderObject() as RenderBox?;
-        if (box == null) return;
-        final ms = _fractionFromOffset(
-          box.globalToLocal(details.globalPosition).dx,
-          box.size.width,
-        );
-        setState(() => _dragValue = ms);
-        widget.onChanged?.call(ms);
+      onKeyEvent: (node, event) {
+        if (event is KeyDownEvent || event is KeyRepeatEvent) {
+          final key = event.logicalKey;
+          if (key == LogicalKeyboardKey.arrowLeft) {
+            _stepSeek(-10000);
+            return KeyEventResult.handled;
+          } else if (key == LogicalKeyboardKey.arrowRight) {
+            _stepSeek(10000);
+            return KeyEventResult.handled;
+          }
+        }
+        return KeyEventResult.ignored;
       },
-      onHorizontalDragEnd: (_) {
-        final ms = _dragValue;
-        setState(() => _dragging = false);
-        widget.onChangeEnd?.call(ms);
-      },
-      onTapUp: (details) {
-        final box = context.findRenderObject() as RenderBox?;
-        if (box == null) return;
-        final ms = _fractionFromOffset(
-          box.globalToLocal(details.globalPosition).dx,
-          box.size.width,
-        );
-        widget.onChangeStart?.call(ms);
-        widget.onChanged?.call(ms);
-        widget.onChangeEnd?.call(ms);
-      },
-      child: SizedBox(
-        height: _touchHeight,
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final width = constraints.maxWidth;
-                final thumbX = positionFraction * width;
-                final bufferX = bufferFraction * width;
-                return Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    // Background track
-                    Positioned(
-                      top: (_touchHeight - _trackHeight) / 2,
-                      left: 0,
-                      right: 0,
-                      child: Container(
-                        height: _trackHeight,
-                        decoration: BoxDecoration(
-                          color: Colors.white24,
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                      ),
+      child: AnimatedScale(
+        scale: _focusNode.hasFocus ? 1.05 : 1.0,
+        duration: const Duration(milliseconds: 150),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            color: _focusNode.hasFocus
+                ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.18)
+                : Colors.transparent,
+            border: Border.all(
+              color: _focusNode.hasFocus
+                  ? Theme.of(context).colorScheme.primary
+                  : Colors.transparent,
+              width: 3,
+            ),
+            boxShadow: _focusNode.hasFocus
+                ? [
+                    BoxShadow(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .primary
+                          .withValues(alpha: 0.4),
+                      blurRadius: 12,
+                      spreadRadius: 2,
                     ),
-                    // Buffer fill
-                    Positioned(
-                      top: (_touchHeight - _trackHeight) / 2,
-                      left: 0,
-                      child: Container(
-                        width: bufferX.clamp(0, width),
-                        height: _trackHeight,
-                        decoration: BoxDecoration(
-                          color: Colors.white54,
-                          borderRadius: BorderRadius.circular(2),
+                  ]
+                : null,
+          ),
+        child: GestureDetector(
+          onHorizontalDragStart: (details) {
+            final box = context.findRenderObject() as RenderBox?;
+            if (box == null) return;
+            final ms = _fractionFromOffset(
+              box.globalToLocal(details.globalPosition).dx,
+              box.size.width,
+            );
+            setState(() {
+              _dragging = true;
+              _dragValue = ms;
+            });
+            widget.onChangeStart?.call(ms);
+          },
+          onHorizontalDragUpdate: (details) {
+            final box = context.findRenderObject() as RenderBox?;
+            if (box == null) return;
+            final ms = _fractionFromOffset(
+              box.globalToLocal(details.globalPosition).dx,
+              box.size.width,
+            );
+            setState(() => _dragValue = ms);
+            widget.onChanged?.call(ms);
+          },
+          onHorizontalDragEnd: (_) {
+            final ms = _dragValue;
+            setState(() => _dragging = false);
+            widget.onChangeEnd?.call(ms);
+          },
+          onTapUp: (details) {
+            final box = context.findRenderObject() as RenderBox?;
+            if (box == null) return;
+            final ms = _fractionFromOffset(
+              box.globalToLocal(details.globalPosition).dx,
+              box.size.width,
+            );
+            widget.onChangeStart?.call(ms);
+            widget.onChanged?.call(ms);
+            widget.onChangeEnd?.call(ms);
+          },
+          child: SizedBox(
+            height: _touchHeight,
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final width = constraints.maxWidth;
+                    final thumbX = positionFraction * width;
+                    final bufferX = bufferFraction * width;
+
+                    return Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        // Background track
+                        Positioned(
+                          top: (_touchHeight - _trackHeight) / 2,
+                          left: 0,
+                          right: 0,
+                          child: Container(
+                            height: _trackHeight,
+                            decoration: BoxDecoration(
+                              color: Colors.white24,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
                         ),
-                      ),
-                    ),
-                    // Progress fill
-                    Positioned(
-                      top: (_touchHeight - _trackHeight) / 2,
-                      left: 0,
-                      child: Container(
-                        width: thumbX.clamp(0, width),
-                        height: _trackHeight,
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(2),
+                        // Buffer fill
+                        Positioned(
+                          top: (_touchHeight - _trackHeight) / 2,
+                          left: 0,
+                          child: Container(
+                            width: bufferX.clamp(0, width),
+                            height: _trackHeight,
+                            decoration: BoxDecoration(
+                              color: Colors.white54,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
                         ),
-                      ),
-                    ),
-                    // Thumb
-                    Positioned(
-                      top: (_touchHeight - _thumbRadius * 2) / 2,
-                      left: (thumbX - _thumbRadius).clamp(
-                        -_thumbRadius,
-                        width - _thumbRadius,
-                      ),
-                      child: Container(
-                        width: _thumbRadius * 2,
-                        height: _thumbRadius * 2,
-                        decoration: const BoxDecoration(
-                          color: Colors.white,
-                          shape: BoxShape.circle,
+                        // Progress fill
+                        Positioned(
+                          top: (_touchHeight - _trackHeight) / 2,
+                          left: 0,
+                          child: Container(
+                            width: thumbX.clamp(0, width),
+                            height: _trackHeight,
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
                         ),
-                      ),
-                    ),
-                  ],
-                );
-              },
+                        // Thumb
+                        Positioned(
+                          top: (_touchHeight - _thumbRadius * 2) / 2,
+                          left: (thumbX - _thumbRadius).clamp(
+                            -_thumbRadius,
+                            width - _thumbRadius,
+                          ),
+                          child: Container(
+                            width: _thumbRadius * 2,
+                            height: _thumbRadius * 2,
+                            decoration: const BoxDecoration(
+                              color: Colors.white,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ),
             ),
           ),
         ),
+      ),
+      ),
+    );
+  }
+}
+
+Widget _tvListTile({
+  required Widget title,
+  Widget? leading,
+  Widget? subtitle,
+  required VoidCallback onTap,
+}) {
+  return Focus(
+    onKeyEvent: (node, event) {
+      if (event is KeyDownEvent || event is KeyRepeatEvent) {
+        final key = event.logicalKey;
+        if (key == LogicalKeyboardKey.select ||
+            key == LogicalKeyboardKey.enter ||
+            key == LogicalKeyboardKey.numpadEnter ||
+            key == LogicalKeyboardKey.space ||
+            key == LogicalKeyboardKey.gameButtonA) {
+          onTap();
+          return KeyEventResult.handled;
+        }
+      }
+      return KeyEventResult.ignored;
+    },
+    child: Builder(
+      builder: (context) {
+        final focused = Focus.of(context).hasFocus;
+        final primary = Theme.of(context).colorScheme.primary;
+        return AnimatedScale(
+          scale: focused ? 1.05 : 1.0,
+          duration: const Duration(milliseconds: 150),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              color: focused ? primary.withValues(alpha: 0.3) : Colors.transparent,
+              border: Border.all(
+                color: focused ? primary : Colors.transparent,
+                width: 3,
+              ),
+              boxShadow: focused
+                  ? [
+                      BoxShadow(
+                        color: primary.withValues(alpha: 0.4),
+                        blurRadius: 12,
+                        spreadRadius: 2,
+                      ),
+                    ]
+                  : null,
+            ),
+            child: ListTile(
+              leading: leading,
+              title: title,
+              subtitle: subtitle,
+              onTap: onTap,
+            ),
+          ),
+        );
+      },
+    ),
+  );
+}
+
+class _TvControlButton extends StatefulWidget {
+  const _TvControlButton({
+    required this.icon,
+    required this.onPressed,
+    this.focusNode,
+    this.iconSize = 28,
+    this.color,
+    this.autofocus = false,
+    this.onFocusChange,
+  });
+
+  final Widget icon;
+  final VoidCallback? onPressed;
+  final FocusNode? focusNode;
+  final double iconSize;
+  final Color? color;
+  final bool autofocus;
+  final ValueChanged<bool>? onFocusChange;
+
+  @override
+  State<_TvControlButton> createState() => _TvControlButtonState();
+}
+
+class _TvControlButtonState extends State<_TvControlButton> {
+  late final FocusNode _node = widget.focusNode ?? FocusNode();
+
+  @override
+  void dispose() {
+    if (widget.focusNode == null) {
+      _node.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = widget.onPressed != null;
+
+    return Focus(
+      focusNode: _node,
+      autofocus: widget.autofocus,
+      canRequestFocus: enabled,
+      onFocusChange: (focused) {
+        if (focused) {
+          widget.onFocusChange?.call(focused);
+        }
+        if (mounted) setState(() {});
+      },
+      onKeyEvent: (node, event) {
+        if (!enabled) return KeyEventResult.ignored;
+        if (event is KeyDownEvent || event is KeyRepeatEvent) {
+          final key = event.logicalKey;
+          if (key == LogicalKeyboardKey.select ||
+              key == LogicalKeyboardKey.enter ||
+              key == LogicalKeyboardKey.numpadEnter ||
+              key == LogicalKeyboardKey.space ||
+              key == LogicalKeyboardKey.gameButtonA) {
+            widget.onPressed?.call();
+            return KeyEventResult.handled;
+          }
+        }
+        return KeyEventResult.ignored;
+      },
+      child: Builder(
+        builder: (context) {
+          final focused = _node.hasFocus && enabled;
+          final primary = Theme.of(context).colorScheme.primary;
+
+          return AnimatedScale(
+            scale: focused ? 1.25 : 1.0,
+            duration: const Duration(milliseconds: 150),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: focused
+                    ? primary.withValues(alpha: 0.4)
+                    : Colors.transparent,
+                border: Border.all(
+                  color: focused ? primary : Colors.transparent,
+                  width: 3,
+                ),
+                boxShadow: focused
+                    ? [
+                        BoxShadow(
+                          color: primary.withValues(alpha: 0.4),
+                          blurRadius: 12,
+                          spreadRadius: 2,
+                        ),
+                      ]
+                    : null,
+              ),
+              child: IconButton(
+                onPressed: widget.onPressed,
+                iconSize: widget.iconSize,
+                icon: widget.icon,
+                color: widget.color ?? Colors.white,
+              ),
+            ),
+          );
+        },
       ),
     );
   }

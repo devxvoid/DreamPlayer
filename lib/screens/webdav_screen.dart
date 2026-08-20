@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../models/video_item.dart';
 import '../services/tmdb_client.dart';
 import '../services/webdav_client.dart';
+import '../widgets/tv_text_field.dart';
 import 'tmd_details_screen.dart';
 
 enum _WebDavProtocol { http, https }
@@ -649,7 +650,7 @@ class _ServerFormDialogState extends State<_ServerFormDialog> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  TextField(
+                  TvTextField(
                     controller: _name,
                     decoration: const InputDecoration(
                       labelText: 'Server name',
@@ -678,49 +679,41 @@ class _ServerFormDialogState extends State<_ServerFormDialog> {
                       ],
                     ),
                   ),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Expanded(
-                        flex: 3,
-                        child: TextField(
-                          controller: _host,
-                          keyboardType: TextInputType.url,
-                          decoration: const InputDecoration(
-                            labelText: 'Host',
-                            hintText: '192.168.1.16',
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        flex: 1,
-                        child: TextField(
-                          controller: _port,
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(
-                            labelText: 'Port',
-                            hintText: '8080',
-                          ),
-                        ),
-                      ),
-                    ],
+                  TvTextField(
+                    controller: _host,
+                    keyboardType: TextInputType.url,
+                    decoration: const InputDecoration(
+                      labelText: 'Host',
+                      hintText: '192.168.1.16',
+                    ),
                   ),
-                  TextField(
+                  const SizedBox(height: 12),
+                  TvTextField(
+                    controller: _port,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'Port',
+                      hintText: '8080',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TvTextField(
                     controller: _path,
                     decoration: const InputDecoration(
                       labelText: 'Path',
                       hintText: '/dav',
                     ),
                   ),
-                  TextField(
+                  const SizedBox(height: 12),
+                  TvTextField(
                     controller: _username,
                     decoration: const InputDecoration(
                       labelText: 'Username (optional)',
                       hintText: 'admin',
                     ),
                   ),
-            TextField(
+                  const SizedBox(height: 12),
+            TvTextField(
               controller: _password,
               obscureText: true,
               decoration: InputDecoration(

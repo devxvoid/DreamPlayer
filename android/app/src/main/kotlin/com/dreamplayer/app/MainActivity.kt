@@ -1,7 +1,13 @@
 package com.dreamplayer.app
 
+import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.app.UiModeManager
+import android.content.res.Configuration
+import android.graphics.drawable.ColorDrawable
 import android.net.Uri
+import android.os.Bundle
 import android.provider.OpenableColumns
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -11,6 +17,44 @@ class MainActivity : FlutterActivity() {
 
     private var intentChannel: MethodChannel? = null
     private var fileBrowser: FileBrowser? = null
+
+    companion object {
+        /// Robust TV-box detection (mirrors Just Player's `Utils.isTvBox()`):
+        /// Android TV ui mode, leanback/Fire TV feature flags, or the Fire TV
+        /// package. More reliable than a screen-width heuristic (a 720p TV
+        /// reports 640dp).
+        fun isTvBox(context: Context): Boolean {
+            val uiModeManager =
+                context.getSystemService(Context.UI_MODE_SERVICE) as? UiModeManager
+            if (uiModeManager?.currentModeType == Configuration.UI_MODE_TYPE_TELEVISION) {
+                return true
+            }
+            val pm = context.packageManager
+            if (pm.hasSystemFeature(PackageManager.FEATURE_LEANBACK) ||
+                pm.hasSystemFeature("com.amazon.hardware.fire_tv") ||
+                pm.hasSystemFeature("amazon.hardware.fire_tv")
+            ) {
+                return true
+            }
+            return try {
+                pm.getPackageInfo("com.amazon.tv.launcher", 0)
+                true
+            } catch (_: PackageManager.NameNotFoundException) {
+                false
+            }
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        // Nova-style transparent window on TV: the SurfaceView renders behind
+        // the window; a transparent background lets it show through (avoids the
+        // opaque LayerDim that Fire OS creates when the window has a solid
+        // background + dual SurfaceViews).
+        if (isTvBox(this)) {
+            window.setBackgroundDrawable(ColorDrawable(android.graphics.Color.TRANSPARENT))
+        }
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -45,6 +89,15 @@ class MainActivity : FlutterActivity() {
                     }
                     else -> result.notImplemented()
                 }
+            }
+        }
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "dreamplayer/device",
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "isTv" -> result.success(isTvBox(this))
+                else -> result.notImplemented()
             }
         }
     }

@@ -14,9 +14,9 @@ class ResumeStore {
   static Future<Duration?> positionFor(String key) async {
     if (key.isEmpty) return null;
     final prefs = await SharedPreferences.getInstance();
-    final ms = prefs.getInt(_prefix + key);
-    if (ms == null || ms <= 0) return null;
-    return Duration(milliseconds: ms);
+    final val = prefs.get(_prefix + key);
+    if (val is! num || val <= 0) return null;
+    return Duration(milliseconds: val.toInt());
   }
 
   static Future<void> save(String key, Duration position) async {
