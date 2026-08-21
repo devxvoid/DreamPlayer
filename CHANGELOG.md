@@ -5,12 +5,15 @@ pulled into the GitHub Release body automatically by `.github/workflows/release.
 
 ## 0.2.0
 
-Major version bump — Apple TV support, Android TV / Fire TV improvements, and gesture controls.
+Major release — **Apple TV support lands**, Android TV / Fire TV playback rebuilt on the in-app player, and phone gesture controls.
 
-### Apple TV (tvOS) — alpha
-- **tvOS build** — DreamPlayer now builds for Apple TV via `flutter-tvos`. The `tvos/` directory is generated on CI (`flutter-tvos create --platforms=tvos`), our adapted Swift files are overlaid, and an unsigned IPA is produced. **This is the alpha release** — plugin porting (shared_preferences, permission_handler, flutter_displaymode) is pending.
-- **Adapted Swift files** — `AvPlayerView.swift` guards `MPVolumeView`/brightness with `#if !os(tvOS)`; `AppDelegate.swift` drops `IntentBridge` (no "Open with" on tvOS); `FileBrowser.swift` is Documents-folder only (no document picker). `WebDAVClient`, `JellyfinDiscovery`, `BufferedSMBReader`, `CacheCleaner` copied unchanged from iOS.
-- **CI workflow** — `.github/workflows/tvos.yml` (manual dispatch) installs `flutter-tvos`, scaffolds, overlays Swift files, and builds the unsigned IPA. Release workflow includes tvOS alongside Android + iOS.
+### Apple TV (tvOS) — alpha, CI-green
+- **tvOS build works end-to-end** — DreamPlayer builds for Apple TV via the community `flutter-tvos` toolchain (Flutter 3.47 base). CI scaffolds `tvos/` fresh each build, overlays our adapted Swift files, injects the AetherEngine packages into the Xcode project, and produces an unsigned `DreamPlayer-tvOS-alpha-<version>.ipa`. **Alpha** — compiles and ships, but not yet verified on Apple TV hardware.
+- **AetherEngine on tvOS** — the same playback engine as iOS resolves as a Swift Package Manager dependency for appletvos: `AvPlayerView.swift` imports AetherEngine + AetherEngineSMB; FFmpeg demux/decode and DV/HDR10 via the native AVPlayer path come along automatically. Deployment target raised to **tvOS 17.0** (the engine's minimum — the scaffold pins `TVOS_DEPLOYMENT_TARGET=15.0` at project level, which beats a target-level override, so both names are set at both levels).
+- **Adapted Swift files** — `AvPlayerView.swift` guards `MPVolumeView`/brightness/EDR-headroom with `#if !os(tvOS)`; `AppDelegate.swift` drops IntentBridge (no "Open with") and registers the player view factory, file browser, WebDAV client, Jellyfin discovery, and cache cleaner behind the implicit-engine delegate; `FileBrowser.swift` is Documents-only (no document picker — picker calls are graceful no-ops). `WebDAVClient`, `JellyfinDiscovery`, `BufferedSMBReader`, `CacheCleaner` copied unchanged from iOS.
+- **tvOS plugins ported** — `shared_preferences_tvos` + `package_info_plus_tvos` (from fluttertv/plugins) give resume/continue-watching, TMDB cache, and saved servers real persistence; `package_info_plus` bumped to ^10.2.1 for compatibility. Plugins without tvOS implementations (`url_launcher`, multicast-lock channel) are wrapped in try/catch so nothing crashes.
+- **CI plumbing solved** (`tvos.yml`) — scaffold step backs up our committed `tvos/Runner/*.swift` before regenerating; Ruby `xcodeproj` adds the AetherEngine SPM package reference + both products to the Runner target, disables code signing (flutter-tvos has no `--no-codesign`; equivalent of `flutter build ios --no-codesign`), and registers every overlaid Swift file in the Sources phase; PlistBuddy adds Bonjour services + local-networking ATS; packaging discovers `Runner.app` dynamically instead of hardcoding the output path.
+- **Siri Remote** — arrow keys reveal controls / seek ±10s, select activates focused buttons, Menu hides controls then exits; the remote's **play/pause media key toggles playback** even off the TV code path (fixed this release).
 
 ### Android TV / Fire TV
 - **Custom focus highlight** — blue 3px border + glow shadow + AnimatedScale (1.25× transport buttons, 1.05× cards/list tiles/fields) across all TV-focusable widgets: transport controls, sheet list tiles, seekbar, home cards.
@@ -32,6 +35,7 @@ Major version bump — Apple TV support, Android TV / Fire TV improvements, and 
 - **SMB badge** — `VideoItem.playbackSource` now accepts both `smb:` and `smb_` prefixes for backward compat with stored data.
 - **Double-back-press exit** — root screen shows a SnackBar and requires two taps within 2s to exit (prevents accidental back-press exits on Android).
 - **Seekbar minimal highlight** — TV focus highlight on seekbar is a thin 2px border only (no glow, no scale).
+- **Flutter 3.47.1** — local toolchain upgraded to match CI and the flutter-tvos base (Dart 3.13); all 129 tests pass, analyzer clean.
 
 ## 0.1.11
 
