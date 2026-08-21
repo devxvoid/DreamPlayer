@@ -99,7 +99,7 @@ jobs:
       - name: Build unsigned tvOS app
         run: |
           export PATH="$HOME/flutter-tvos/bin:$PATH"
-          flutter-tvos build tvos --no-codesign
+          flutter-tvos build tvos
 
       - name: Package unsigned IPA
         run: |
