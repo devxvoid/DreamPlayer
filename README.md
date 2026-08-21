@@ -5,229 +5,108 @@
 </p>
 
 [![License: GPLv3](https://img.shields.io/github/license/mangeshghodke/DreamPlayer?style=flat)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Android%20%7C%20iOS%20%7C%20iPad-blue)](https://github.com/mangeshghodke/DreamPlayer)
+[![Platform](https://img.shields.io/badge/platform-Android%20%7C%20iOS%20%7C%20iPad%20%7C%20Android%20TV-blue)](https://github.com/mangeshghodke/DreamPlayer)
 [![Flutter](https://img.shields.io/badge/Flutter-3.44-46A6F2?logo=flutter&logoColor=white&color=46A6F2)](https://flutter.dev)
 [![iOS build](https://github.com/mangeshghodke/DreamPlayer/actions/workflows/ios.yml/badge.svg)](https://github.com/mangeshghodke/DreamPlayer/actions/workflows/ios.yml)
-[![Stars](https://img.shields.io/github/stars/mangeshghodke/DreamPlayer)](https://github.com/mangeshghodke/DreamPlayer)
 [![Donate](https://img.shields.io/badge/Donate-Razorpay-2D8CF0)](https://rzp.io/rzp/cZ5afqVG)
 [![GitHub Sponsors](https://img.shields.io/badge/GitHub_Sponsors-Support-EA4AAA?logo=github&logoColor=white)](https://github.com/sponsors/mangeshghodke/)
 
-A cross-platform video player built with **Flutter**, designed for high-end playback on Android and iOS/iPad — including **Dolby Vision**, HDR10/HDR10+, and lossless audio formats like DTS-HD and TrueHD.
+A cross-platform video player for **Android, iOS/iPad, and Android TV** — built for true Dolby Vision, HDR10/HDR10+, and lossless audio playback.
 
-> **Android (primary):** playback runs on the native **ExoPlayer / Media3** engine inside a **hybrid-composition** Flutter platform view, so the video `SurfaceView` stays a real SurfaceFlinger layer on the physical display and the panel receives a real HDR / Dolby Vision signal (no tone-mapped preview).
-> **iOS/iPad:** playback runs on **AetherEngine** (FFmpeg demux/decode + native AVPlayer path for DV/HDR) behind the same platform-view contract; verified on the iPad Pro M2.
+## Highlights
 
-## Features
+### Dolby Vision & HDR
+- Plays **Dolby Vision** Profile 8 at 4K 60fps with zero dropped frames
+- Full **HDR10 / HDR10+ / HLG** passthrough to the display panel
+- Live on-screen chips showing the active HDR format, video codec, audio codec, and resolution
+- Graceful fallback on non-DV devices (plays as HDR10 or shows a clean error)
 
-- **Dolby Vision playback** — DV P8 verified on-device: decoded by the Qualcomm hardware `c2.qti.dv.decoder` at 4K 3840×2160@60 fps with zero dropped frames and correct colors. The video renders through **hybrid composition** (`PlatformViewLink` + `initExpensiveAndroidView`), so SurfaceFlinger composites the layer directly as `BT2020_ITU_PQ` with 10-bit PQ buffers and `whitePointNits≈1250` — byte-for-byte the profile of a pure-native player (Just Player). The stock Flutter `AndroidView` path used a **virtual display + texture**, which flattened the PQ signal to SDR at ~500 nits and washed the colors out; the swap to hybrid composition is what makes real HDR reach the panel.
-- **Hardware video decode on any SoC** — video always decodes on the device's hardware codec (`c2.qti.*`/`OMX.qcom.*` on Qualcomm, `c2.mtk.*` on MediaTek, `c2.samsung.*` on Samsung Exynos — the app never names a vendor); FFmpeg is retained as an **audio-only** fallback (DTS, DTS-HD, TrueHD, FLAC, E-AC3). This fixed 4K HDR HEVC stutter + washed-out colors that a mis-ordered FFmpeg video renderer caused on every phone.
-- **Graceful Dolby Vision on non-DV devices** — DV P7/P8 (HEVC-based) play as **HDR10** through the HEVC hardware decoder; DV Profile 5 shows a clean *"This device cannot decode Dolby Vision Profile 5"* message instead of pink/green garbage. HDR10/HDR10+ also render correctly on **HDR-capable but DV-less** phones (e.g. Redmi Note 10) and are auto-tone-mapped on SDR-only panels.
-- **Brighter HDR (Android EDR ramp)** — on OnePlus/OxygenOS the player engages the display's real HDR mode (window `COLOR_MODE_HDR` + 5.0 HDR headroom + consumer-side surface dataspace) for HDR10/HDR10+/HLG, so bright PQ highlights no longer clip flat to white; verified on-device via SurfaceFlinger (`current hdr/sdr ratio > 1.0`). Dolby Vision content skips this window machinery entirely — the decoder's native BT.2020 PQ dataspace is device-composited directly.
-- **HDR on-screen display** — live chips for Dolby Vision, HDR10+, HDR10, HLG, SDR.
-- **Static HDR10 detection for MKV files** — some HEVC MKVs omit the MKV `Colour` element (PQ/BT.2020 mastering lives only in HEVC SEI payloads 137/144). The player now probes the first ~10 MB of video samples for these SEI NALs on a background thread and engages the HDR headroom / window color mode path for true HDR10 passthrough even without container-level signalling.
-- **All major audio codecs** — DTS, DTS-HD, E-AC3, AC3, TrueHD, AAC, and more via Media3 `FFmpegAudioRenderer` (FLAC and E-AC3 work around buggy platform decoders).
-- **Audio track selection** — pick any audio track mid-playback; the sheet shows the full track name and channels (e.g. `DTS-HD MA 5.1`).
-- **Aspect ratio / fit-mode picker** — Fit, Crop to screen, Stretch to screen, 16:9, or 4:3 from the player's aspect button; the choice persists per video and is re-applied on every open.
-- **Subtitles — embedded + sideloaded with a full track picker** — every subtitle file sitting next to the video (SRT, SSA/ASS, WebVTT, TTML, SAMI, MicroDVD, MPL2, SubViewer) auto-attaches and the best match auto-selects; the CC button opens a picker over embedded container tracks plus all sideloaded files, with Off. Non-UTF-8 sidecars are re-encoded automatically. Cues are drawn by the host on both platforms and anchored to the video itself, so text and PGS/DVB bitmap subtitles hug the picture (not the screen edge) in portrait, landscape, and through rotation.
-- **NAS / LAN playback** — stream files from network shares via **in-app SMB browser (Android)**, **in-app WebDAV**, and **in-app Jellyfin** on both platforms, plus **CX Explorer → "Open with"** on Android (CX serves SMB over a local HTTP proxy at full speed) and the **Files app → "Open with"** on iPad (Files has its own SMB/network connection support). Wrong SMB credentials now report **"Login failed — check username/password/domain"** instead of silently showing an empty share list. The in-app SMB browser existed on iPad (AMSMB2) but was removed (2026-08): it was slow and didn't play every video, while the WebDAV/Jellyfin/CX/Files paths are faster. See the **[SMB / NAS playback tutorial](docs/tutorials/play-smb-nas-videos.md)** ([video walkthrough](https://youtube.com/shorts/a7oR1yxGz2o)).
-- **In-app file browser** — browse the whole device and play any video, no import needed: Android internal + SD storage, and on iPad a **Files** root that opens the system Files-app home (iCloud Drive, On My iPad, Downloads, other providers), plus the app's Documents folder and bookmarked folders.
-- **"Open with" integration** — tap any video on the device and open it in DreamPlayer; works with file managers like CX Explorer (including their network-stream handoff via a local HTTP proxy).
-- **WebDAV playback** — browse WebDAV servers and stream videos straight into the player on **both** platforms: add/edit/delete servers with an inline connection test, per-server **self-signed HTTPS** opt-in (default off), and credentials stored encrypted (Android Keystore / iOS Keychain — never plaintext, never sent to Dart).
-- **Jellyfin / Emby browsing + playback** — the home **+** menu adds Jellyfin/Emby servers (with automatic **LAN discovery** via a UDP-7359 probe + mDNS), signs in, and browses libraries → folders → play. Playback direct-plays the Jellyfin URL with your token, reusing the existing HTTP pipeline on both platforms (self-signed HTTPS honors the same opt-in toggle as WebDAV). No password ever reaches the app's Dart code or disk. **Jellyfin folders can be added to the home library** straight from the browse screen, so your server's shows sit alongside local folders — each one auto-fetches the series' poster, title, year, rating, and overview from the server, and plays its episodes through the Jellyfin API.
-- **Movie metadata (TMDB)** — every video (continue-watching cards, WebDAV/Jellyfin/file-browser/SMB listings) opens a details screen with poster/backdrop art, the real title, year, synopsis, star rating, genres, runtime, and cast. The metadata is **auto-fetched before you tap**: the folder, WebDAV, and Jellyfin file lists prefetch a match for **each movie/episode row** under the same key the tap uses, so every row shows the file's **poster thumbnail** and the details screen opens already resolved — no "Search TMDB" prompt. **TV episodes detect their season/episode** and the details screen + continue-watching cards label them (`Season 2 · Episode 4`, `S02E04`). "Fix match" lets you re-pin a wrong auto-match — the poster then appears on the row's list too. Standalone movies always resolve their own title (they never inherit a folder's metadata). Filename noise (audio languages, codecs, bracketed track lists, release groups, bitrates) never leaks into the search query. The API key is a build-time value only — it is never bundled in the UI or shipped in source.
-- **Live codec / resolution overlay** — video codec, audio codec + channel count, resolution, HDR format as the file plays.
-- **Transport controls** — play/pause, seek bar, ±10s, fullscreen, buffering spinner, auto-hiding UI.
-- **Continue watching** — the home library lists every partially-watched video, most recent first, with a progress bar and "Continue from m:ss"; each card carries a **source badge** showing where it plays from (WebDAV, CX SMB, Files/SMB, Files, Network).
-- **Resume playback** — a video stopped mid-way continues from where you left off on the next open (bookmarked while playing / on pause / on background; cleared when it plays to the end). Resume keys stay stable across sessions even for rotating network URLs (`cx:` for CX SMB handoffs, `folderbookmark:` for iOS bookmarked folders). Locking/unlocking the phone mid-playback is handled too — the player pauses on background and reopens at the saved position if the platform view was destroyed on unlock.
-- **Replay after end (iOS)** — the replay button and scrubber pull-back work even after playback reaches the end, by reloading the last-opened source.
-- **Native refresh rate** — selects the display's highest refresh rate (e.g. 120 Hz) at startup.
+### Lossless Audio
+- All major codecs: **DTS, DTS-HD, TrueHD, E-AC3, AC3, AAC, FLAC** and more
+- Mid-playback **audio track switching** with full track names and channel info
+- Optional **audio passthrough** over HDMI for Dolby Atmos / DTS:X on compatible soundbars
 
-## Tech stack
+### Subtitles
+- **Embedded + sideloaded** — every subtitle file next to the video auto-attaches
+- Supports SRT, SSA/ASS, WebVTT, TTML, SAMI, MicroDVD, MPL2, SubViewer
+- Full track picker with Off option; subtitles are anchored to the video, not the screen
 
-| Concern | Choice |
-|---|---|
-| Framework | Flutter (stable 3.44.x) |
-| Playback engine (Android) | ExoPlayer / Media3 in a native `SurfaceView` PlatformView |
-| Playback engine (iOS/iPad) | AetherEngine in a native `AVPlayerView` PlatformView (FFmpeg demux/decode + native path for DV/HDR) |
-| Video decode | Android MediaCodec (hardware DV/HEVC/AVC — vendor-agnostic: Qualcomm `c2.qti.*`/`OMX.qcom.*`, MediaTek `c2.mtk.*`, Exynos `c2.samsung.*`; FFmpeg is audio-only fallback) |
-| Audio decode | Media3 `FFmpegAudioRenderer` extension (`libmedia3ext.so`) |
-| Subtitles | Media3 subtitle stack + custom SAMI/MicroDVD/MPL2/SubViewer parsers; auto-paired siblings from the video's folder; host-drawn text + PGS/DVB cues anchored to the video |
-| NAS playback (Android) | In-app SMB browser (jcifs-ng), CX Explorer → "Open with", in-app WebDAV, in-app Jellyfin |
-| NAS playback (iPad) | Files app → "Open with" + bookmarked folders, in-app WebDAV, in-app Jellyfin (in-app SMB removed 2026-08 — see Roadmap) |
-| NAS playback (Android) | Via CX Explorer → "Open with" (CX streams over a local HTTP proxy) |
-| WebDAV | In-app server list + folder browsing + streaming (Android `WebDAVClient.kt` / iOS `WebDAVClient.swift`); encrypted credentials; per-server self-signed HTTPS toggle |
-| Jellyfin / Emby | Pure-Dart REST client (server add + LAN auto-discovery + sign-in + browse); direct-play with the user token, self-signed HTTPS opt-in |
-| Movie metadata | TMDB details screen (pure Dart `tmdb_client.dart`); build-time API key via `--dart-define` |
-| Video fit modes | Fit / Crop to screen / Stretch / 16:9 / 4:3 (native aspect-box control on both engines; persists per video) |
-| HDR output | Hybrid-composition PlatformView keeps its own SurfaceFlinger layer → real HDR to the display |
-| Reference architecture | [Nova Video Player](https://github.com/nova-video-player/aos-AVP) |
-| Permissions | `permission_handler` (runtime `READ_MEDIA_VIDEO`); `MANAGE_EXTERNAL_STORAGE` for the file browser |
-| Refresh rate | `flutter_displaymode` |
+### Network Playback
+- **SMB / NAS** — in-app SMB browser on Android; CX Explorer "Open with" handoff
+- **WebDAV** — browse and stream from WebDAV servers on both platforms
+- **Jellyfin / Emby** — browse libraries, direct-play with auto-discovery
+- **Files app "Open with"** on iPad with bookmarked folders
+- Encrypted credentials (Android Keystore / iOS Keychain)
+
+### Smart Library
+- **Continue watching** — resume any partially-watched video with progress bars
+- **User-added folders** — add a TV show or movie folder, get a TMDB poster and episode list
+- **Jellyfin folders in the home library** — server shows sit alongside local folders
+- **File browser** — browse device storage and play any video without importing
+
+### Movie Metadata (TMDB)
+- Every video opens a **details screen** with poster, backdrop, synopsis, rating, genres, runtime, and cast
+- Metadata auto-fetches in the background — rows show poster thumbnails before you tap
+- TV episodes labeled with Season/Episode info
+- "Fix match" to correct a wrong auto-match
+
+### Player Controls
+- Play/pause, seek, ±10s, fullscreen, auto-hiding UI
+- **Swipe gestures** — left side for brightness, right side for volume (phones/tablets)
+- Aspect ratio picker: Fit, Crop, Stretch, 16:9, 4:3 (persists per video)
+- Resumes playback from where you left off, even after app close or screen lock
+
+### Android TV / Fire TV
+- Full 10-foot UI with D-pad navigation and custom focus highlights
+- Leanback launcher banner
+- Dolby Vision + HDR10 passthrough to the TV panel
+- Audio passthrough for Atmos/DTS:X over HDMI
 
 ## Requirements
 
 | Platform | Minimum version |
 |---|---|
-| Android | **5.0 Lollipop** (API 21) |
-| iOS / iPadOS | **16.0** |
+| Android | 5.0 (API 21) |
+| iOS / iPadOS | 16.0 |
 
-Dolby Vision playback requires a display panel that advertises DV support (`supportedHdrTypes` includes 3); HDR10/HDR10+/HLG have the same requirement. Audio passthrough (Dolby Atmos, DTS-HD, TrueHD) requires an HDMI e-ARC connection to a compatible soundbar/AVR — on phones, all audio is decoded to PCM for speakers.
+## Download
 
-## Getting started
+Prebuilt binaries are on the [Releases](https://github.com/mangeshghodke/DreamPlayer/releases) page.
+
+- **Android** — universal APK + per-architecture APKs (arm64, armv7, x86_64)
+- **iOS / iPadOS** — unsigned IPA; sideload with [SideStore](https://sidestore.io) or [AltStore](https://altstore.io)
+
+### Installing on iPhone / iPad
+
+1. Install [SideStore](https://sidestore.io) or [AltStore](https://altstore.io) on your device
+2. Download `DreamPlayer-*.ipa` from the [latest release](https://github.com/mangeshghodke/DreamPlayer/releases)
+3. Open SideStore/AltStore → **+** → select the IPA
+4. The 7-day signature auto-refreshes over Wi-Fi
+
+## Getting Started
 
 ```bash
 flutter pub get
-flutter run                          # run on a connected Android phone
-flutter test                         # run tests
-flutter analyze                      # static analysis
+flutter run                    # run on a connected device
+flutter test                   # run tests
+flutter analyze                # static analysis
 ```
 
-Build a debug APK for your phone:
-
-```bash
-flutter build apk --debug --target-platform android-arm64
-flutter install --debug -d <device-id>
-```
-
-Movie metadata (TMDB) needs a build-time API key — copy `.env.example` to `.env`, fill in your key, and pass it to the build:
+For TMDB metadata, copy `.env.example` to `.env` and add your API key:
 
 ```bash
 flutter run --dart-define-from-file=.env
 ```
 
-The key is compiled in at build time (never shown in the UI, never committed); the app still builds and runs without it — only metadata resolution is skipped.
-
-## Download
-
-Prebuilt binaries are attached to each [GitHub Release](https://github.com/mangeshghodke/DreamPlayer/releases). The current release is **0.1.11**; previous releases follow the **0.1.x** and **0.0.x** lines.
-
-- **Android** — per-architecture release APKs (`arm64-v8a`, `armeabi-v7a`, `x86_64`) plus a **universal** APK that installs on any device. (An Android App Bundle is not published yet — Play Store distribution isn't set up.)
-- **iOS / iPadOS** — the versioned `DreamPlayer-<version>.ipa` (e.g. `DreamPlayer-0.1.1.ipa`) is **unsigned** (Apple only allows App Store / TestFlight installs), so sideload it with a free Apple ID via **SideStore** or **AltStore** (guide below).
-
-### Installing on iPhone / iPad (SideStore or AltStore)
-
-Apple doesn't allow installing unsigned apps, so the IPA is signed on-device with your own Apple ID. SideStore and AltStore both do this and then **auto-refresh the 7-day signature** in the background over Wi-Fi.
-
-1. Install **SideStore** or **AltStore** on your iPhone/iPad:
-   - SideStore — [sidestore.io](https://sidestore.io)
-   - AltStore — [altstore.io](https://altstore.io)
-2. Download `DreamPlayer-<version>.ipa` from the [latest release](https://github.com/mangeshghodke/DreamPlayer/releases).
-3. Open SideStore/AltStore → **+** → select `DreamPlayer-<version>.ipa`. It signs it with your Apple ID and installs.
-4. The signature lasts **7 days**; SideStore/AltStore refresh it automatically over Wi-Fi — a weekly open is all that's needed.
-
-Notes:
-- A free Apple ID can keep ~3 sideloaded apps active per device.
-- First-time setup of SideStore/AltStore needs a computer (or a second Apple device).
-- No automatic updates — re-download the newest IPA from the Releases page when a new version is published.
-- Playback of DRM-free local media is fully supported; Dolby Vision/HDR needs a panel that supports it (e.g. iPad Pro M2).
-
-## Project layout
-
-```
-lib/
-  main.dart                     # entry point (native refresh rate)
-  app.dart                      # root MaterialApp, dark theme, nav shell
-  theme/app_theme.dart          # dark theme
-  models/
-    video_item.dart             # library item model + codec labels
-    hdr_format.dart             # HDR format enum
-  utils/codec_info.dart         # HDR detection + codec → label mapping
-  config/tmdb_api_key.dart      # build-time TMDB API key (--dart-define, never committed)
-  services/
-    display_refresh_rate.dart   # high refresh rate selection
-    exo_player.dart             # ExoPlayerController + ExoPlayerView platform view
-    resume_store.dart           # per-video resume position store (shared_preferences)
-    continue_watching.dart      # continue-watching list (shared_preferences JSON)
-    file_browser.dart           # file-browser channel wrapper
-    webdav_client.dart          # WebDAV channel wrapper + WebDavServer model
-    jellyfin_client.dart        # Jellyfin/Emby REST client + server model + mDNS/UDP discovery + videoItem/serverForUrl helpers
-    tmdb_client.dart            # TMDB metadata: filename parser, API, cache + facade
-    open_intent.dart            # "Open with" intent bridge
-    support_links.dart          # donation links (Razorpay, GitHub Sponsors)
-  screens/
-    home_screen.dart            # Continue watching grid + **+** source menu (Jellyfin / WebDAV / storage / add folder)
-    player_screen.dart          # ExoPlayer/AetherEngine playback + live chips + controls + subtitle/audio/aspect pickers
-    tmd_details_screen.dart     # TMDB details: poster/backdrop, rating, genres, cast + Resume/Play + Fix match
-    jellyfin_screen.dart        # Jellyfin/Emby server list + discovery + sign-in → libraries → folders → play
-    file_browser_screen.dart    # in-app device file browser
-    webdav_screen.dart          # WebDAV server list → folders → play (self-signed toggle)
-    settings_screen.dart        # settings + About + open-source licenses
-  widgets/
-    video_card.dart             # library card with HDR/audio/source badges
-    format_chip.dart            # colored codec/HDR chip
-android/app/src/main/kotlin/com/dreamplayer/app/
-  ExoPlayerView.kt              # native PlayerView platform view + channels
-  DreamRenderersFactory.kt      # hardware video decode + FFmpeg audio fallback
-  SubtitleFormats.kt            # subtitle MIME map + sibling auto-pairing + charset handling
-  DreamSubtitleParserFactory.kt # SAMI/MicroDVD/MPL2/SubViewer parsers
-  FileBrowser.kt                # device storage browsing channel
-  WebDAVClient.kt               # WebDAV browse/test channel (encrypted credentials)
-  MulticastLockManager.kt       # Wi-Fi MulticastLock + Jellyfin UDP-7359 discovery probe
-  MainActivity.kt               # registers platform views + intent handling
-ios/Runner/
-  AvPlayerView.swift            # AetherEngine platform view + channels; host SubtitleOverlayView; WebDAV http(s) streams via WebDAVByteRangeSource
-  BufferedSMBReader.swift       # read-ahead sliding-window IOReader (32 MiB) for WebDAV playback
-  WebDAVClient.swift            # WebDAV browse/test channel (Keychain credentials)
-  JellyfinDiscovery.swift       # Jellyfin UDP-7359 broadcast probe (channel dreamplayer/multicast)
-  FileBrowser.swift             # Files-app home + Documents + bookmarked-folder browsing channel
-  IntentBridge.swift            # "Open with" intent channel
-test/
-  widget_test.dart              # shell/navigation/overflow tests
-  codec_info_test.dart          # HDR + codec formatting tests
-  resume_key_test.dart          # stable resume keys (CX SMB, bookmarked folders)
-  resume_store_test.dart        # resume-position persistence
-  continue_watching_test.dart   # continue-watching list + source badges
-  playback_source_test.dart     # continue-watching source badges
-  jellyfin_test.dart            # Jellyfin model / URL unit tests
-  tmdb_test.dart                # TMDB filename parser + metadata store round-trip
-```
-
-## Roadmap
-
-- [x] Android playback via ExoPlayer/Media3 PlatformView
-- [x] Dolby Vision + lossless audio on-device (DV P8, E-AC3)
-- [x] Remove mpv/media_kit (cannot output Dolby Vision)
-- [x] Subtitles: embedded + sideloaded with a full track picker (SRT, ASS, VTT, TTML, SAMI, MicroDVD, MPL2, SubViewer)
-- [x] iOS/iPad playback (AetherEngine; FFmpeg demux/decode + native DV/HDR path)
-- [x] WebDAV browsing + playback (Android + iPad; self-signed HTTPS opt-in; encrypted credentials)
-- [x] Jellyfin / Emby browsing + playback (server add + LAN auto-discovery + sign-in + browse + direct-play)
-- [x] TMDB movie metadata details screen (poster/art, rating, genres, cast; Resume/Play; Fix match)
-- [x] Per-file TMDB posters in file lists (folder/WebDAV/Jellyfin rows auto-fetch and show each movie/episode's poster)
-- [x] Aspect ratio / fit-mode picker (Fit / Crop / Stretch / 16:9 / 4:3, persists per video)
-- [x] Continue watching with source badges (WebDAV / CX SMB / Files/SMB / Files / Network / Jellyfin)
-- [~] In-app SMB/LAN playback on iPad (AMSMB2 browse + stream) — **removed 2026-08**: it was slow and didn't play every video; NAS files reach the app faster via WebDAV, Jellyfin, or CX/Files "Open with". Blueprint preserved in AGENTS.md.
-- [x] User-added folder library (add a TV-show/movie folder → TMDB poster + episode list; nothing is auto-scanned)
-- [x] Jellyfin folders in the home library (add from the Jellyfin browser → TMDB poster + server episode list)
-- [x] Static HDR10 detection for MKV files without Colour element (probes HEVC SEI 137/144)
-- [x] GitHub Releases (Android APKs for all ABIs + universal; unsigned iOS IPA)
-- [ ] Play Store / TestFlight distribution (paid Apple Developer account)
-
 ## License
 
-Copyright (C) 2026 Mangesh Ghodke. This project is free software released under the **GNU General Public License v3.0** (or any later version) — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
-
-DreamPlayer is GPLv3 because the Android build links [nextlib-media3ext](https://github.com/anilbeesetti/nextlib) (GPLv3), an FFmpeg extension for Media3 that provides the lossless audio decoders (DTS, TrueHD, E-AC3). Under GPLv3 you are free to use, modify, and redistribute this software (including commercially); modified versions must also be released under GPLv3.
+Copyright (C) 2026 Mangesh Ghodke. Released under the [GNU General Public License v3.0](LICENSE).
 
 ## Support
 
 If DreamPlayer is useful to you, consider supporting the project:
 
-- [Razorpay](https://rzp.io/rzp/cZ5afqVG) — pay via UPI, cards, or netbanking (India)
+- [Razorpay](https://rzp.io/rzp/cZ5afqVG) — UPI, cards, or netbanking (India)
 - [GitHub Sponsors](https://github.com/sponsors/mangeshghodke/) — recurring support
 
-Both options are also in the app under **Settings → Support**.
-
-Third-party components are used under their own licenses:
-
-| Component | License |
-|---|---|
-| AndroidX Media3 / ExoPlayer | Apache 2.0 |
-| nextlib-media3ext (Android FFmpeg) | GPLv3 |
-| AetherEngine (iOS engine) | LGPL-3.0 + Apple Store/DRM exception |
-| FFmpeg frameworks (iOS, via FFmpegBuild) | LGPL-2.1+ |
-| SMBClient (iOS, via AetherEngineSMB for WebDAV) | MIT |
-| Flutter / Dart | BSD-3-Clause |
-| permission_handler, flutter_displaymode, cupertino_icons | MIT |
-| shared_preferences | BSD-3-Clause |
-
-Dolby Vision, DTS, HDR10, and other trademarks belong to their respective owners.
+Both are also in the app under **Settings → Support**.
