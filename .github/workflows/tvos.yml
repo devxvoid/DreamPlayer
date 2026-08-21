@@ -63,7 +63,7 @@ jobs:
           %w[AetherEngine AetherEngineSMB].each do |name|
             dep = project.new(Xcodeproj::Project::Object::XCSwiftPackageProductDependency)
             dep.package = pkg
-            dep.productName = name
+            dep.product_name = name
             target.package_product_dependencies << dep
             build_file = project.new(Xcodeproj::Project::Object::PBXBuildFile)
             build_file.product_ref = dep
