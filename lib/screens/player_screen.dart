@@ -100,15 +100,22 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// Whether the app is running on a TV (set once on first build).
   bool _isTv = false;
 
-  /// Last time the resume position was persisted (throttled while playing).
-  DateTime _lastResumeSave = DateTime.fromMillisecondsSinceEpoch(0);
-
   /// Swipe gesture state (brightness / volume).
   bool _swipeEnabled = true;
+  /// Swipe-gesture type (null = no gesture in progress).
   _SwipeType? _swipeType;
   double _swipeCurrentValue = 0;
+  /// The LIVE platform value fetched when the gesture started. Deltas apply
+  /// on top of this, so a swipe always begins where the system actually is.
+  double _swipeBase = 0;
+  /// Accumulated finger movement for the current gesture. Buffered until the
+  /// base value arrives so an early drag never applies a wrong absolute value.
+  double _swipeDragDelta = 0;
   double _iosOriginalBrightness = -1;
   Timer? _swipeOverlayTimer;
+
+  /// Last time the resume position was persisted (throttled while playing).
+  DateTime _lastResumeSave = DateTime.fromMillisecondsSinceEpoch(0);
 
   /// Stable per-video key for the resume store: an explicit [VideoItem.resumeKey]
   /// wins (sources whose path/URI rotate), otherwise
@@ -160,11 +167,6 @@ class _PlayerScreenState extends State<PlayerScreen>
       }
       if (mounted) setState(() {});
       await _openCurrent();
-      // Seed the volume slider from the real system volume so the first
-      // swipe starts at the correct position.
-      try {
-        _swipeCurrentValue = await exo.getSystemVolume();
-      } catch (_) {}
       // Save the original screen brightness so we can restore it on dispose.
       // On Android this is automatic (Window brightness reverts when the
       // activity closes); on iOS UIScreen.main.brightness persists within
@@ -562,21 +564,53 @@ class _PlayerScreenState extends State<PlayerScreen>
     final w = MediaQuery.of(context).size.width;
     final x = details.globalPosition.dx;
     _swipeType = x < w / 2 ? _SwipeType.brightness : _SwipeType.volume;
+    _swipeBase = 0;
+    _swipeDragDelta = 0;
+    _swipeCurrentValue = 0;
     _hideTimer?.cancel();
     setState(() => _controlsVisible = false);
+    // Seed from the LIVE platform value so the swipe starts exactly where
+    // the system is — never from a stale init-time snapshot.
+    _syncSwipeBase();
+  }
+
+  /// Fetches the current brightness/volume from the platform and makes it the
+  /// gesture's base value. Buffered deltas are applied as soon as it arrives.
+  Future<void> _syncSwipeBase() async {
+    final exo = _exo;
+    if (exo == null || _swipeType == null) return;
+    try {
+      final current = _swipeType == _SwipeType.brightness
+          ? await exo.getBrightness()
+          : await exo.getSystemVolume();
+      if (!mounted || _swipeType == null) return;
+      setState(() {
+        _swipeBase = current.clamp(0.0, 1.0);
+        _applySwipeValue();
+      });
+    } catch (_) {
+      // Platform read failed; fall back to applying buffered deltas from 0.
+      if (mounted) setState(_applySwipeValue);
+    }
+  }
+
+  /// Computes base + accumulated delta, updates the overlay, and pushes the
+  /// result to the platform.
+  void _applySwipeValue() {
+    final next = (_swipeBase + _swipeDragDelta).clamp(0.0, 1.0);
+    _swipeCurrentValue = next;
+    if (_swipeType == _SwipeType.brightness) {
+      _exo?.setBrightness(next);
+    } else if (_swipeType == _SwipeType.volume) {
+      _exo?.setSystemVolume(next);
+    }
   }
 
   void _onSwipeDragUpdate(DragUpdateDetails details) {
     if (_swipeType == null) return;
-    final delta =
+    _swipeDragDelta +=
         -details.primaryDelta! / (MediaQuery.of(context).size.height * 0.7);
-    final next = (_swipeCurrentValue + delta).clamp(0.0, 1.0);
-    setState(() => _swipeCurrentValue = next);
-    if (_swipeType == _SwipeType.brightness) {
-      _exo?.setBrightness(next);
-    } else {
-      _exo?.setSystemVolume(next);
-    }
+    setState(_applySwipeValue);
   }
 
   void _onSwipeDragEnd(DragEndDetails details) {
