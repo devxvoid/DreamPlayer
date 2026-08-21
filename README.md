@@ -61,6 +61,7 @@ A cross-platform video player for **Android, iOS/iPad, and Android TV** — buil
 - Leanback launcher banner
 - Dolby Vision + HDR10 passthrough to the TV panel
 - Audio passthrough for Atmos/DTS:X over HDMI
+- Tested on Amazon Fire TV Stick 4K (Fire OS 7.1)
 
 ## Requirements
 
