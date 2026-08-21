@@ -11,7 +11,7 @@
 [![Donate](https://img.shields.io/badge/Donate-Razorpay-2D8CF0)](https://rzp.io/rzp/cZ5afqVG)
 [![GitHub Sponsors](https://img.shields.io/badge/GitHub_Sponsors-Support-EA4AAA?logo=github&logoColor=white)](https://github.com/sponsors/mangeshghodke/)
 
-A cross-platform video player for **Android, iOS/iPad, and Android TV** — built for true Dolby Vision, HDR10/HDR10+, and lossless audio playback.
+A cross-platform video player for **Android, iOS/iPad, Android TV, and Apple TV (tvOS)** — built for true Dolby Vision, HDR10/HDR10+, and lossless audio playback.
 
 ## Highlights
 
@@ -69,7 +69,7 @@ A cross-platform video player for **Android, iOS/iPad, and Android TV** — buil
 - DTS/DTS-HD/TrueHD/E-AC3 audio via AetherEngine FFmpeg
 - Jellyfin + WebDAV network playback (pure Dart, no native changes)
 - CI builds unsigned IPA — sideload via Xcode
-- **Alpha** — first tvOS release; plugin porting in progress
+- **Alpha** — CI-built and sideloadable; on-device verification on Apple TV hardware pending
 
 ## Requirements
 
