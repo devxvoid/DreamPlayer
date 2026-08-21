@@ -42,7 +42,7 @@ Known alpha limitations: no overscan padding (edges may clip on some TVs); "Netw
 
 ## Versioning
 
-App version follows **semver**, bumped per release (current release: **0.2.0**).
+App version follows **semver**, bumped per release (current release: **0.2.1**).
 
 ## Playing videos from your NAS / SMB share
 

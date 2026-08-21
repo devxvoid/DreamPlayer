@@ -3,6 +3,14 @@
 All notable changes to DreamPlayer are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## 0.2.1
+
+### Bug fixes — player swipe gestures
+
+- **iOS volume gesture actually changes system volume** — `MPVolumeView` builds its internal `UISlider` asynchronously after joining a window, so the old synchronous `subviews.first(where:)` lookup always returned nil and the value was never set (and removing the view immediately made it worse). The view is now retained for the player's lifetime, the slider is found via a bounded async retry (50 ms × max 20), and it's cleaned up on dispose.
+- **Swipes start from the live system value** — brightness/volume drags used to build on a value seeded once at player open (system volume only), so a brightness swipe started from the stale volume value and vice versa. Every gesture start now fetches the *current* platform value (`getBrightness` / `getSystemVolume`) as its base; finger deltas accumulate on top of it. Deltas are buffered until the base arrives so an early drag can't flash a wrong absolute value.
+- **Swipe pill keeps its icon during fade-out** — drag-end nulled the gesture type immediately while the pill stayed visible for the 800 ms fade, so a brightness pill flipped to the volume icon mid-fade. The type is now retained until the fade completes; a separate active flag gates updates and platform pushes.
+
 ## 0.2.0
 
 Major release — **Apple TV support lands**, Android TV / Fire TV playback rebuilt on the in-app player, and phone gesture controls.
