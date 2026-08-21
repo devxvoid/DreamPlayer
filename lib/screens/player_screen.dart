@@ -1121,6 +1121,14 @@ class _PlayerScreenState extends State<PlayerScreen>
               _showControls();
               return KeyEventResult.handled;
             }
+          } else if (mediaPlayKey) {
+            // Media keys toggle playback even off the TV path — tvOS runs the
+            // phone UI branches (_isTv false), and the Siri Remote's
+            // play/pause button arrives here. A Bluetooth-keyboard media key
+            // on phones benefits too.
+            _togglePlayPause();
+            _showControls();
+            return KeyEventResult.handled;
           } else if (key == LogicalKeyboardKey.arrowUp ||
               key == LogicalKeyboardKey.arrowDown) {
             _showControls();
