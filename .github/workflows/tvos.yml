@@ -56,14 +56,14 @@ jobs:
           abort('Runner target not found') unless target
 
           pkg = project.new(Xcodeproj::Project::Object::XCRemoteSwiftPackageReference)
-          pkg.repository_url = 'https://github.com/superuser404notfound/AetherEngine'
+          pkg.repositoryURL = 'https://github.com/superuser404notfound/AetherEngine'
           pkg.requirement = { 'kind' => 'upToNextMajorVersion', 'minimumVersion' => '6.21.0' }
           project.root_object.package_references << pkg
 
           %w[AetherEngine AetherEngineSMB].each do |name|
             dep = project.new(Xcodeproj::Project::Object::XCSwiftPackageProductDependency)
             dep.package = pkg
-            dep.product_name = name
+            dep.productName = name
             target.package_product_dependencies << dep
             build_file = project.new(Xcodeproj::Project::Object::PBXBuildFile)
             build_file.product_ref = dep
