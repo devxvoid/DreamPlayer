@@ -104,6 +104,10 @@ class _PlayerScreenState extends State<PlayerScreen>
   bool _swipeEnabled = true;
   /// Swipe-gesture type (null = no gesture in progress).
   _SwipeType? _swipeType;
+  /// True between drag-start and drag-end. [_swipeType] deliberately stays
+  /// set during the 800ms pill fade-out (so the icon doesn't flip to the
+  /// other type mid-fade); this flag gates actual gesture work instead.
+  bool _swipeGestureActive = false;
   double _swipeCurrentValue = 0;
   /// The LIVE platform value fetched when the gesture started. Deltas apply
   /// on top of this, so a swipe always begins where the system actually is.
@@ -564,6 +568,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     final w = MediaQuery.of(context).size.width;
     final x = details.globalPosition.dx;
     _swipeType = x < w / 2 ? _SwipeType.brightness : _SwipeType.volume;
+    _swipeGestureActive = true;
     _swipeBase = 0;
     _swipeDragDelta = 0;
     _swipeCurrentValue = 0;
@@ -578,12 +583,12 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// gesture's base value. Buffered deltas are applied as soon as it arrives.
   Future<void> _syncSwipeBase() async {
     final exo = _exo;
-    if (exo == null || _swipeType == null) return;
+    if (exo == null || _swipeType == null || !_swipeGestureActive) return;
     try {
       final current = _swipeType == _SwipeType.brightness
           ? await exo.getBrightness()
           : await exo.getSystemVolume();
-      if (!mounted || _swipeType == null) return;
+      if (!mounted || !_swipeGestureActive) return;
       setState(() {
         _swipeBase = current.clamp(0.0, 1.0);
         _applySwipeValue();
@@ -607,7 +612,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   void _onSwipeDragUpdate(DragUpdateDetails details) {
-    if (_swipeType == null) return;
+    if (_swipeType == null || !_swipeGestureActive) return;
     _swipeDragDelta +=
         -details.primaryDelta! / (MediaQuery.of(context).size.height * 0.7);
     setState(_applySwipeValue);
@@ -615,10 +620,14 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   void _onSwipeDragEnd(DragEndDetails details) {
     if (_swipeType == null) return;
-    _swipeType = null;
+    // Keep [_swipeType] so the fading pill keeps its icon; only the
+    // active flag stops further updates/platform pushes.
+    _swipeGestureActive = false;
     _swipeOverlayTimer?.cancel();
     _swipeOverlayTimer = Timer(const Duration(milliseconds: 800), () {
-      if (mounted && _swipeType == null) setState(() {});
+      if (mounted && !_swipeGestureActive) {
+        setState(() => _swipeType = null);
+      }
     });
     _restartHideTimer();
   }
