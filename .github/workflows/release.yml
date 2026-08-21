@@ -123,17 +123,85 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           TMPDIR=$(mktemp -d)
           flutter-tvos create --platforms=tvos "$TMPDIR/scaffold"
+          # Back up our adapted Swift files BEFORE replacing the scaffold —
+          # they are committed in tvos/Runner/ and must survive the reset.
+          BACKUP=$(mktemp -d)
+          cp tvos/Runner/*.swift "$BACKUP/"
           rm -rf tvos
           cp -r "$TMPDIR/scaffold/tvos" tvos
           rm -rf "$TMPDIR"
-          cp ios/Runner/BufferedSMBReader.swift tvos/Runner/
-          cp ios/Runner/CacheCleaner.swift tvos/Runner/
-          cp ios/Runner/JellyfinDiscovery.swift tvos/Runner/
-          cp ios/Runner/WebDAVClient.swift tvos/Runner/
-          cp -f tvos/Runner/AvPlayerView.swift tvos/Runner/AvPlayerView.swift
-          cp -f tvos/Runner/AppDelegate.swift tvos/Runner/AppDelegate.swift
-          cp -f tvos/Runner/SceneDelegate.swift tvos/Runner/SceneDelegate.swift
-          cp -f tvos/Runner/FileBrowser.swift tvos/Runner/FileBrowser.swift
+          # Restore our adapted Swift files over the scaffold defaults.
+          cp -f "$BACKUP"/*.swift tvos/Runner/
+          rm -rf "$BACKUP"
+
+      - name: Add AetherEngine SPM packages to the Xcode project
+        run: |
+          ruby -e 'require "xcodeproj"' 2>/dev/null || gem install xcodeproj --no-document
+          ruby - <<'RUBY'
+          require 'xcodeproj'
+          path = 'tvos/Runner.xcodeproj'
+          project = Xcodeproj::Project.open(path)
+          target = project.targets.find { |t| t.name == 'Runner' }
+          abort('Runner target not found') unless target
+
+          pkg = project.new(Xcodeproj::Project::Object::XCRemoteSwiftPackageReference)
+          pkg.repositoryURL = 'https://github.com/superuser404notfound/AetherEngine'
+          pkg.requirement = { 'kind' => 'upToNextMajorVersion', 'minimumVersion' => '6.21.0' }
+          project.root_object.package_references << pkg
+
+          %w[AetherEngine AetherEngineSMB].each do |name|
+            dep = project.new(Xcodeproj::Project::Object::XCSwiftPackageProductDependency)
+            dep.package = pkg
+            dep.product_name = name
+            target.package_product_dependencies << dep
+            build_file = project.new(Xcodeproj::Project::Object::PBXBuildFile)
+            build_file.product_ref = dep
+            target.frameworks_build_phase.files << build_file
+          end
+
+          # flutter-tvos has no --no-codesign flag; disable signing in the
+          # project instead (equivalent of `flutter build ios --no-codesign`).
+          # Also raise the deployment target: AetherEngine requires tvOS 17.
+          # The template pins TVOS_DEPLOYMENT_TARGET=15.0 at PROJECT level,
+          # which beats a target-level IPHONEOS_DEPLOYMENT_TARGET — so set
+          # both names at both levels.
+          ([project.build_configurations, target.build_configurations]).each do |configs|
+            configs.each do |config|
+              config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'
+              config.build_settings['CODE_SIGN_IDENTITY'] = ''
+              config.build_settings['TVOS_DEPLOYMENT_TARGET'] = '17.0'
+              config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '17.0'
+            end
+          end
+
+          # The scaffold only compiles its own AppDelegate.swift — add every
+          # Swift file we overlay into tvos/Runner/ to the Sources phase.
+          runner_group = project.main_group.children.find do |c|
+            c.is_a?(Xcodeproj::Project::Object::PBXGroup) && c.path == 'Runner'
+          end
+          runner_group ||= project.main_group.new_group('Runner', 'Runner')
+          existing = target.source_build_phase.files_references.map(&:display_name)
+          Dir.glob('tvos/Runner/*.swift').map { |p| File.basename(p) }.each do |name|
+            next if existing.include?(name)
+            ref = runner_group.files.find { |f| f.display_name == name } ||
+                  runner_group.new_reference(name)
+            target.source_build_phase.add_file_reference(ref)
+            puts "Added #{name} to Runner sources"
+          end
+
+          project.save
+          puts 'AetherEngine + AetherEngineSMB added to Runner target'
+          RUBY
+
+      - name: Add Info.plist network entries
+        run: |
+          PLIST=tvos/Runner/Info.plist
+          /usr/libexec/PlistBuddy -c "Add :NSLocalNetworkUsageDescription string 'DreamPlayer finds Jellyfin servers on your local network.'" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSBonjourServices array" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSBonjourServices:0 string _jellyfin._tcp" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSBonjourServices:1 string _emby._tcp" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" "$PLIST" 2>/dev/null || true
 
       - name: Fetch dependencies
         run: |
@@ -143,13 +211,20 @@ jobs:
       - name: Build unsigned tvOS app
         run: |
           export PATH="$HOME/flutter-tvos/bin:$PATH"
-          flutter-tvos build tvos --no-codesign --dart-define=TMDB_API_KEY=${{ secrets.TMDB_API_KEY }}
+          flutter-tvos build tvos --dart-define=TMDB_API_KEY=${{ secrets.TMDB_API_KEY }}
 
       - name: Package unsigned IPA
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
+          APP_PATH="$(find build -type d -name 'Runner.app' | head -1)"
+          if [ -z "$APP_PATH" ]; then
+            echo "Runner.app not found under build/"
+            find build -maxdepth 3 -type d | head -40
+            exit 1
+          fi
+          echo "Found app at: $APP_PATH"
           mkdir -p Payload
-          cp -r build/tvos/Release-appletvos/Runner.app Payload/
+          cp -r "$APP_PATH" Payload/
           zip -ryq "DreamPlayer-tvOS-alpha-${VERSION}.ipa" Payload
 
       - name: Upload tvOS artifact
