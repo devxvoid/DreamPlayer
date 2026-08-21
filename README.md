@@ -5,7 +5,7 @@
 </p>
 
 [![License: GPLv3](https://img.shields.io/github/license/mangeshghodke/DreamPlayer?style=flat)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Android%20%7C%20iOS%20%7C%20iPad%20%7C%20Android%20TV-blue)](https://github.com/mangeshghodke/DreamPlayer)
+[![Platform](https://img.shields.io/badge/platform-Android%20%7C%20iOS%20%7C%20iPad%20%7C%20Android%20TV%20%7C%20Apple%20TV-blue)](https://github.com/mangeshghodke/DreamPlayer)
 [![Flutter](https://img.shields.io/badge/Flutter-3.44-46A6F2?logo=flutter&logoColor=white&color=46A6F2)](https://flutter.dev)
 [![iOS build](https://github.com/mangeshghodke/DreamPlayer/actions/workflows/ios.yml/badge.svg)](https://github.com/mangeshghodke/DreamPlayer/actions/workflows/ios.yml)
 [![Donate](https://img.shields.io/badge/Donate-Razorpay-2D8CF0)](https://rzp.io/rzp/cZ5afqVG)
@@ -69,6 +69,7 @@ A cross-platform video player for **Android, iOS/iPad, and Android TV** — buil
 - DTS/DTS-HD/TrueHD/E-AC3 audio via AetherEngine FFmpeg
 - Jellyfin + WebDAV network playback (pure Dart, no native changes)
 - CI builds unsigned IPA — sideload via Xcode
+- **Alpha** — first tvOS release; plugin porting in progress
 
 ## Requirements
 
@@ -84,7 +85,7 @@ Prebuilt binaries are on the [Releases](https://github.com/mangeshghodke/DreamPl
 
 - **Android** — universal APK + per-architecture APKs (arm64, armv7, x86_64)
 - **iOS / iPadOS** — unsigned IPA; sideload with [SideStore](https://sidestore.io) or [AltStore](https://altstore.io)
-- **Apple TV** — unsigned IPA; sideload via Xcode
+- **Apple TV** — unsigned IPA (alpha); sideload via Xcode
 
 ### Installing on iPhone / iPad
 

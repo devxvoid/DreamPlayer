@@ -65,10 +65,10 @@ jobs:
           VERSION="$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d'+' -f1)"
           mkdir -p Payload
           cp -r build/tvos/iphoneos/Runner.app Payload/
-          zip -ryq "DreamPlayer-tvOS-${VERSION}.ipa" Payload
+          zip -ryq "DreamPlayer-tvOS-alpha-${VERSION}.ipa" Payload
 
       - name: Upload unsigned tvOS IPA
         uses: actions/upload-artifact@v4
         with:
-          name: DreamPlayer-tvOS.ipa
-          path: DreamPlayer-tvOS-*.ipa
+          name: DreamPlayer-tvOS-alpha.ipa
+          path: DreamPlayer-tvOS-alpha-*.ipa

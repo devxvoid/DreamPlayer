@@ -3,6 +3,36 @@
 All notable changes to DreamPlayer are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## 0.2.0
+
+Major version bump — Apple TV support, Android TV / Fire TV improvements, and gesture controls.
+
+### Apple TV (tvOS) — alpha
+- **tvOS build** — DreamPlayer now builds for Apple TV via `flutter-tvos`. The `tvos/` directory is generated on CI (`flutter-tvos create --platforms=tvos`), our adapted Swift files are overlaid, and an unsigned IPA is produced. **This is the alpha release** — plugin porting (shared_preferences, permission_handler, flutter_displaymode) is pending.
+- **Adapted Swift files** — `AvPlayerView.swift` guards `MPVolumeView`/brightness with `#if !os(tvOS)`; `AppDelegate.swift` drops `IntentBridge` (no "Open with" on tvOS); `FileBrowser.swift` is Documents-folder only (no document picker). `WebDAVClient`, `JellyfinDiscovery`, `BufferedSMBReader`, `CacheCleaner` copied unchanged from iOS.
+- **CI workflow** — `.github/workflows/tvos.yml` (manual dispatch) installs `flutter-tvos`, scaffolds, overlays Swift files, and builds the unsigned IPA. Release workflow includes tvOS alongside Android + iOS.
+
+### Android TV / Fire TV
+- **Custom focus highlight** — blue 3px border + glow shadow + AnimatedScale (1.25× transport buttons, 1.05× cards/list tiles/fields) across all TV-focusable widgets: transport controls, sheet list tiles, seekbar, home cards.
+- **TvTile shared widget** — single source of truth for TV focus-glow wrapper (`lib/widgets/tv_tile.dart`).
+- **TvOverscan safe-area** — wraps each TV screen with 36px side / 20px top-bottom padding (`lib/widgets/tv_overscan.dart`).
+- **TvTextField** — two-FocusNode design: outer glow node for D-pad targeting, inner `skipTraversal` node for the TextField. OK/select opens the system Leanback IME; back/Done hands focus back to the glow node. No custom keyboard.
+- **Leanback banner** — 640×360 `banner.png` in `AndroidManifest.xml` for TV launchers.
+- **TV long-press** — Enter/select key held 500ms fires `onLongPress`; `KeyRepeatEvent` swallowed.
+- **Home scroll-on-return** — `SliverAppBar` pinned, `jumpTo(0)` on load with stable keys.
+- **Buffer sizing** — adaptive by heap class: Fire TV 24MB ring buffer (heap 192MB), phones 96MB (heap ≥ 256MB).
+- **Transparent window fix** — `MainActivity.kt` sets `Color.TRANSPARENT` on TV devices; `ExoPlayerView.kt` calls `setZOrderMediaOverlay(true)` — video visible on Fire TV Stick.
+
+### Player
+- **Gesture controls** — vertical swipe on left half adjusts brightness (`Window.screenBrightness` on Android, `UIScreen.main.brightness` on iOS); right half adjusts system volume (`AudioManager STREAM_MUSIC` on Android, `MPVolumeView` hidden slider on iOS). Dark centered feedback pill with icon + percentage, auto-fades 0.8s. Controls hide during gesture.
+- **Swipe gestures toggle** — "Swipe gestures" switch in Settings → Player section (default on); hidden on TV via `isTvMode()`.
+- **Play-pause ring highlight** — `_TvControlButton` `alwaysShowRing` parameter; center play-pause uses `alwaysShowRing: !_isTv` so the ring glow shows on phones/tablets without a D-pad.
+
+### Bug fixes
+- **SMB badge** — `VideoItem.playbackSource` now accepts both `smb:` and `smb_` prefixes for backward compat with stored data.
+- **Double-back-press exit** — root screen shows a SnackBar and requires two taps within 2s to exit (prevents accidental back-press exits on Android).
+- **Seekbar minimal highlight** — TV focus highlight on seekbar is a thin 2px border only (no glow, no scale).
+
 ## 0.1.11
 
 - **Minimum iOS lowered to 16.0** — the previous floor of iOS 18.0 was conservative; AetherEngine declares `.iOS(.v16)` as its platform minimum and no iOS 18-only APIs are used anywhere. All three Xcode targets updated (`IPHONEOS_DEPLOYMENT_TARGET = 16.0`).
