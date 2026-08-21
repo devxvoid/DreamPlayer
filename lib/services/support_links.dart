@@ -40,8 +40,12 @@ const List<SupportOption> supportOptions = [
 /// Opens [url] in the browser (or the UPI app for `upi://` links).
 Future<void> openSupportUrl(String url) async {
   final uri = Uri.parse(url);
-  final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
-  if (!ok) {
-    throw PlatformException(code: 'cannot_open_url', message: url);
+  try {
+    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!ok) {
+      throw PlatformException(code: 'cannot_open_url', message: url);
+    }
+  } catch (_) {
+    // url_launcher not available on tvOS — silently ignore.
   }
 }

@@ -112,19 +112,19 @@ jobs:
 
       - name: Install flutter-tvos
         run: |
-          git clone https://github.com/fluttertv/flutter-tvos.git "$HOME/flutter-tvos"
+          git clone --depth 1 https://github.com/fluttertv/flutter-tvos.git "$HOME/flutter-tvos"
           export PATH="$HOME/flutter-tvos/bin:$PATH"
-          flutter-tvos precache --appletvos
+          flutter-tvos precache
           flutter-tvos doctor -v
 
-      - name: Scaffold tvOS target
+      - name: Scaffold tvOS project
         run: |
           export PATH="$HOME/flutter-tvos/bin:$PATH"
           cd "$GITHUB_WORKSPACE"
           TMPDIR=$(mktemp -d)
-          flutter-tvos create --platforms=tvos "$TMPDIR/tvos_scaffold"
+          flutter-tvos create --platforms=tvos "$TMPDIR/scaffold"
           rm -rf tvos
-          cp -r "$TMPDIR/tvos_scaffold/tvos" tvos
+          cp -r "$TMPDIR/scaffold/tvos" tvos
           rm -rf "$TMPDIR"
           cp ios/Runner/BufferedSMBReader.swift tvos/Runner/
           cp ios/Runner/CacheCleaner.swift tvos/Runner/
@@ -143,13 +143,13 @@ jobs:
       - name: Build unsigned tvOS app
         run: |
           export PATH="$HOME/flutter-tvos/bin:$PATH"
-          flutter-tvos build tvos --release --no-codesign --dart-define=TMDB_API_KEY=${{ secrets.TMDB_API_KEY }}
+          flutter-tvos build tvos --no-codesign --dart-define=TMDB_API_KEY=${{ secrets.TMDB_API_KEY }}
 
       - name: Package unsigned IPA
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           mkdir -p Payload
-          cp -r build/tvos/iphoneos/Runner.app Payload/
+          cp -r build/tvos/Release-appletvos/Runner.app Payload/
           zip -ryq "DreamPlayer-tvOS-alpha-${VERSION}.ipa" Payload
 
       - name: Upload tvOS artifact
