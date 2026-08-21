@@ -52,7 +52,7 @@ A cross-platform video player for **Android, iOS/iPad, and Android TV** — buil
 
 ### Player Controls
 - Play/pause, seek, ±10s, fullscreen, auto-hiding UI
-- **Swipe gestures** — left side for brightness, right side for volume (phones/tablets)
+- **Swipe gestures** — swipe left side for brightness, right side for system volume (phones/tablets, togglable in Settings)
 - Aspect ratio picker: Fit, Crop, Stretch, 16:9, 4:3 (persists per video)
 - Resumes playback from where you left off, even after app close or screen lock
 

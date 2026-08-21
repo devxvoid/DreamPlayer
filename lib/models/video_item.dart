@@ -96,7 +96,7 @@ class VideoItem {
       if (key.startsWith('webdav_')) return PlaybackSource.webdav;
       if (key.startsWith('cx:')) return PlaybackSource.cxSmb;
       if (key.startsWith('folderbookmark:')) return PlaybackSource.filesSmb;
-      if (key.startsWith('smb:')) return PlaybackSource.smb;
+      if (key.startsWith('smb:') || key.startsWith('smb_')) return PlaybackSource.smb;
       if (key.startsWith('jellyfin:')) return PlaybackSource.jellyfin;
     }
     final u = uri;

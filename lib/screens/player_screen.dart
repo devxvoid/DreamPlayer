@@ -1320,6 +1320,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                           onPressed: !_backendReady ? null : _togglePlayPause,
                           iconSize: 72,
                           autofocus: true,
+                          alwaysShowRing: !_isTv,
                           icon: Icon(
                             _completed
                                 ? Icons.replay
@@ -1755,6 +1756,7 @@ class _TvControlButton extends StatefulWidget {
     this.color,
     this.autofocus = false,
     this.onFocusChange,
+    this.alwaysShowRing = false,
   });
 
   final Widget icon;
@@ -1764,6 +1766,11 @@ class _TvControlButton extends StatefulWidget {
   final Color? color;
   final bool autofocus;
   final ValueChanged<bool>? onFocusChange;
+
+  /// When true the button always renders its ring highlight (border + glow),
+  /// even without keyboard/remote focus. Used for the center play/pause button
+  /// on touch devices so the ring is visible without a D-pad.
+  final bool alwaysShowRing;
 
   @override
   State<_TvControlButton> createState() => _TvControlButtonState();
@@ -1811,7 +1818,7 @@ class _TvControlButtonState extends State<_TvControlButton> {
       },
       child: Builder(
         builder: (context) {
-          final focused = _node.hasFocus && enabled;
+          final focused = (_node.hasFocus || widget.alwaysShowRing) && enabled;
           final primary = Theme.of(context).colorScheme.primary;
 
           return AnimatedScale(

@@ -177,9 +177,9 @@ class _SmbScreenState extends State<SmbScreen> {
       _tmdbMeta[entry.path] = null; // placeholder to avoid duplicate requests
       // Resolve under the SAME stable key `_openEntry` uses, so the prefetched
       // match is a direct cache hit when the video is tapped (no re-search).
-      final key = 'smb_${server.id}/$_share${entry.path}';
+      final key = 'smb:${server.id}/$_share${entry.path}';
       service.resolve(VideoItem(
-        id: 'smb_$key',
+        id: 'smb:$key',
         title: entry.name,
         uri: '',
         resumeKey: key,
@@ -252,12 +252,12 @@ class _SmbScreenState extends State<SmbScreen> {
     }
 
     final item = VideoItem(
-      id: 'smb_${video.path}_${DateTime.now().microsecondsSinceEpoch}',
+      id: 'smb:${video.path}_${DateTime.now().microsecondsSinceEpoch}',
       title: video.name,
       uri: videoUrl,
       // Loopback proxy URLs rotate per session; key resume on the stable
       // remote location instead.
-      resumeKey: 'smb_${server.id}/$_share${video.path}',
+      resumeKey: 'smb:${server.id}/$_share${video.path}',
       subtitleUri: subtitleUrl,
       duration: Duration.zero,
       sizeBytes: video.size,
