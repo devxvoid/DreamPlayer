@@ -501,7 +501,13 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
 
         let options = LoadOptions(
             httpHeaders: [:],
-            panelIsInHDRMode: UIScreen.main.currentEDRHeadroom > 1.0,
+            panelIsInHDRMode: {
+                #if !os(tvOS)
+                return UIScreen.main.currentEDRHeadroom > 1.0
+                #else
+                return false
+                #endif
+            }(),
             preferredAudioLanguages: [],
             preferredSubtitleLanguages: [],
             externalSubtitles: externals,

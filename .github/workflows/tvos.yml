@@ -32,22 +32,57 @@ jobs:
         run: |
           export PATH="$HOME/flutter-tvos/bin:$PATH"
           cd "$GITHUB_WORKSPACE"
-          # Create a temp scaffold, then copy the tvos/ directory into our repo
           TMPDIR=$(mktemp -d)
           flutter-tvos create --platforms=tvos "$TMPDIR/scaffold"
+          # Back up our adapted Swift files BEFORE replacing the scaffold —
+          # they are committed in tvos/Runner/ and must survive the reset.
+          BACKUP=$(mktemp -d)
+          cp tvos/Runner/*.swift "$BACKUP/"
           rm -rf tvos
           cp -r "$TMPDIR/scaffold/tvos" tvos
           rm -rf "$TMPDIR"
-          # Overlay our adapted Swift source files
-          cp ios/Runner/BufferedSMBReader.swift tvos/Runner/
-          cp ios/Runner/CacheCleaner.swift tvos/Runner/
-          cp ios/Runner/JellyfinDiscovery.swift tvos/Runner/
-          cp ios/Runner/WebDAVClient.swift tvos/Runner/
-          # Our tvOS-specific files override the scaffold defaults
-          cp -f tvos/Runner/AvPlayerView.swift tvos/Runner/AvPlayerView.swift
-          cp -f tvos/Runner/AppDelegate.swift tvos/Runner/AppDelegate.swift
-          cp -f tvos/Runner/SceneDelegate.swift tvos/Runner/SceneDelegate.swift
-          cp -f tvos/Runner/FileBrowser.swift tvos/Runner/FileBrowser.swift
+          # Restore our adapted Swift files over the scaffold defaults.
+          cp -f "$BACKUP"/*.swift tvos/Runner/
+          rm -rf "$BACKUP"
+
+      - name: Add AetherEngine SPM packages to the Xcode project
+        run: |
+          ruby -e 'require "xcodeproj"' 2>/dev/null || gem install xcodeproj --no-document
+          ruby - <<'RUBY'
+          require 'xcodeproj'
+          path = 'tvos/Runner.xcodeproj'
+          project = Xcodeproj::Project.open(path)
+          target = project.targets.find { |t| t.name == 'Runner' }
+          abort('Runner target not found') unless target
+
+          pkg = project.new(Xcodeproj::Project::Object::XCRemoteSwiftPackageReference)
+          pkg.repository_url = 'https://github.com/superuser404notfound/AetherEngine'
+          pkg.requirement = { 'kind' => 'upToNextMajorVersion', 'minimumVersion' => '6.21.0' }
+          project.root_object.package_references << pkg
+
+          %w[AetherEngine AetherEngineSMB].each do |name|
+            dep = project.new(Xcodeproj::Project::Object::XCSwiftPackageProductDependency)
+            dep.package = pkg
+            dep.product_name = name
+            target.package_product_dependencies << dep
+            build_file = project.new(Xcodeproj::Project::Object::PBXBuildFile)
+            build_file.product_ref = dep
+            target.frameworks_build_phase.files << build_file
+          end
+
+          project.save
+          puts 'AetherEngine + AetherEngineSMB added to Runner target'
+          RUBY
+
+      - name: Add Info.plist network entries
+        run: |
+          PLIST=tvos/Runner/Info.plist
+          /usr/libexec/PlistBuddy -c "Add :NSLocalNetworkUsageDescription string 'DreamPlayer finds Jellyfin servers on your local network.'" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSBonjourServices array" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSBonjourServices:0 string _jellyfin._tcp" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSBonjourServices:1 string _emby._tcp" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" "$PLIST" 2>/dev/null || true
 
       - name: Fetch dependencies
         run: |
@@ -62,8 +97,15 @@ jobs:
       - name: Package unsigned IPA
         run: |
           VERSION="$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d'+' -f1)"
+          APP_PATH="$(find build -type d -name 'Runner.app' | head -1)"
+          if [ -z "$APP_PATH" ]; then
+            echo "Runner.app not found under build/"
+            find build -maxdepth 3 -type d | head -40
+            exit 1
+          fi
+          echo "Found app at: $APP_PATH"
           mkdir -p Payload
-          cp -r build/tvos/Release-appletvos/Runner.app Payload/
+          cp -r "$APP_PATH" Payload/
           zip -ryq "DreamPlayer-tvOS-alpha-${VERSION}.ipa" Payload
 
       - name: Upload unsigned tvOS IPA
