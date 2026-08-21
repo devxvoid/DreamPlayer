@@ -63,12 +63,20 @@ A cross-platform video player for **Android, iOS/iPad, and Android TV** — buil
 - Audio passthrough for Atmos/DTS:X over HDMI
 - Tested on Amazon Fire TV Stick 4K (Fire OS 7.1)
 
+### Apple TV (tvOS)
+- Siri Remote focus navigation (10-foot UI)
+- Dolby Vision + HDR10 via native AVPlayer
+- DTS/DTS-HD/TrueHD/E-AC3 audio via AetherEngine FFmpeg
+- Jellyfin + WebDAV network playback (pure Dart, no native changes)
+- CI builds unsigned IPA — sideload via Xcode
+
 ## Requirements
 
 | Platform | Minimum version |
 |---|---|
 | Android | 5.0 (API 21) |
 | iOS / iPadOS | 16.0 |
+| tvOS | 17.0 |
 
 ## Download
 
@@ -76,6 +84,7 @@ Prebuilt binaries are on the [Releases](https://github.com/mangeshghodke/DreamPl
 
 - **Android** — universal APK + per-architecture APKs (arm64, armv7, x86_64)
 - **iOS / iPadOS** — unsigned IPA; sideload with [SideStore](https://sidestore.io) or [AltStore](https://altstore.io)
+- **Apple TV** — unsigned IPA; sideload via Xcode
 
 ### Installing on iPhone / iPad
 

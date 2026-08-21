@@ -1,0 +1,74 @@
+name: tvOS Build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-tvos:
+    name: Build tvOS app
+    runs-on: macos-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Accept Xcode license
+        run: sudo xcodebuild -license accept || true
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install flutter-tvos
+        run: |
+          git clone https://github.com/fluttertv/flutter-tvos.git "$HOME/flutter-tvos"
+          export PATH="$HOME/flutter-tvos/bin:$PATH"
+          flutter-tvos precache --appletvos
+          flutter-tvos doctor -v
+
+      - name: Scaffold tvOS target
+        run: |
+          export PATH="$HOME/flutter-tvos/bin:$PATH"
+          cd "$GITHUB_WORKSPACE"
+          # Create a temporary scaffold to get the tvOS project structure
+          TMPDIR=$(mktemp -d)
+          flutter-tvos create --platforms=tvos "$TMPDIR/tvos_scaffold"
+          # Copy the generated tvOS project into our repo
+          rm -rf tvos
+          cp -r "$TMPDIR/tvos_scaffold/tvos" tvos
+          rm -rf "$TMPDIR"
+          # Overlay our adapted Swift source files
+          cp ios/Runner/BufferedSMBReader.swift tvos/Runner/
+          cp ios/Runner/CacheCleaner.swift tvos/Runner/
+          cp ios/Runner/JellyfinDiscovery.swift tvos/Runner/
+          cp ios/Runner/WebDAVClient.swift tvos/Runner/
+          # Our tvOS-specific files override the scaffold defaults
+          cp -f tvos/Runner/AvPlayerView.swift tvos/Runner/AvPlayerView.swift
+          cp -f tvos/Runner/AppDelegate.swift tvos/Runner/AppDelegate.swift
+          cp -f tvos/Runner/SceneDelegate.swift tvos/Runner/SceneDelegate.swift
+          cp -f tvos/Runner/FileBrowser.swift tvos/Runner/FileBrowser.swift
+
+      - name: Fetch dependencies
+        run: |
+          export PATH="$HOME/flutter-tvos/bin:$PATH"
+          flutter-tvos pub get
+
+      - name: Build unsigned tvOS app
+        run: |
+          export PATH="$HOME/flutter-tvos/bin:$PATH"
+          flutter-tvos build tvos --release --no-codesign --dart-define=TMDB_API_KEY=${{ secrets.TMDB_API_KEY }}
+
+      - name: Package unsigned IPA
+        run: |
+          VERSION="$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d'+' -f1)"
+          mkdir -p Payload
+          cp -r build/tvos/iphoneos/Runner.app Payload/
+          zip -ryq "DreamPlayer-tvOS-${VERSION}.ipa" Payload
+
+      - name: Upload unsigned tvOS IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: DreamPlayer-tvOS.ipa
+          path: DreamPlayer-tvOS-*.ipa

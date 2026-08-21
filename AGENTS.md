@@ -483,26 +483,39 @@ Run DreamPlayer on an Android TV box/panel as a real 10-foot app. **Status: Phas
 
 ### Apple TV (tvOS)
 
-Run DreamPlayer on Apple TV as a real 10-foot app. **Status: NOT STARTED — planned (2026-08).** Do NOT implement until asked; this is the design/blueprint.
+Run DreamPlayer on Apple TV as a real 10-foot app. **Status: tvOS Swift files created; CI workflow ready; awaiting first CI build verification (2026-08).** The `tvos/` directory is **not** checked into the repo — CI generates it via `flutter-tvos create` on each build, then overlays our adapted Swift files.
 
 **Why it's mostly free already**
 - Dart's `Platform.isIOS` returns **true on tvOS**, so the existing platform gates already pick the right path: `ExoPlayerView` (`lib/services/exo_player.dart:407`) builds the **`UiKitView` AetherEngine view**, `player_screen.dart:105` does not block it, and `settings_screen.dart`'s Engine label shows "AetherEngine (AVPlayer + FFmpeg)". Flutter 3.29+ has stable tvOS support (current: 3.44.x).
 - **Jellyfin is pure Dart** — server list, 7359/mDNS discovery (mDNS via `multicast_dns` works on tvOS; the native 7359-probe/multicast-lock paths are Android/`defaultTargetPlatform==android|iOS` gated and just won't run — fall back to Add-server, acceptable), browse, direct-play (plain HTTP) all work with **zero tvOS native code**.
 - WebDAV playback on iOS routes http(s) URIs with auth/self-signed through `WebDAVByteRangeSource` — that path is portable (AVPlayer-side).
 
-**Work items (in order)**
-1. **Scaffold**: `flutter create --platforms=tvos .` → `tvos/` Runner (bundle id `com.dreamplayer.app`, `TVOS_DEPLOYMENT_TARGET = 17.0` (AetherEngine's tvOS floor); layered tvOS App Icon comes with the template).
-2. **Port the native channel/playback stack into `tvos/Runner`** (copy the Swift files + wire `tvos/Runner/AppDelegate.swift` exactly like `ios/Runner/AppDelegate.swift`):
-   - `AvPlayerView.swift` (AetherEngine platform view `dreamplayer/exo_player` — the core; includes `BufferedSMBReader`, subtitle overlay)
-   - `WebDAVClient.swift` (channel `dreamplayer/webdav` — same contract as Android)
-   - `JellyfinDiscovery.swift` (channel `dreamplayer/multicast` — 7359 probe)
-   - `FileBrowser.swift` — **Documents-folder only** on tvOS: there is **no Files app / document picker / "Open with"** on tvOS, so `isFilesHome` + folder bookmarks are N/A; keep `resolveImportedPath` for the Documents dir.
-   - **Skip `IntentBridge.swift` for v1** (no Files "Open with" on tvOS). In-app SMB was removed on both platforms (2026-08), so there's no `SMBClient.swift` to port; keep `BufferedSMBReader.swift` (WebDAV playback depends on it).
-   - Note: `ExoPlayerView` calls `UiKitView` on `Platform.isIOS` — tvOS UiKitView platform views are supported in current Flutter; **verify** the AetherEngine player view mounts in a tvOS-hosted Flutter view (the hybrid view hierarchy differs from iPad).
-3. **AetherEngine SPM in the tvOS project** — same wiring as iOS (`ios/Runner.xcodeproj`, SPM URL `https://github.com/superuser404notfound/AetherEngine`, pinned `upToNextMajorVersion` from 6.21.0): add the package + `AetherEngine` product to `packageProductDependencies` + Frameworks phase. **Gotcha to repeat**: AetherEngineSMB/AMSMB2 are iOS-only products — do NOT add them to the tvOS target (AMSMB2 is gone from iOS anyway; WebDAV's `ByteRangeSource` lives in `AetherEngineSMB`, which is a product of the AetherEngine package). **Unknown blocker to verify first**: does AetherEngine's `Package.swift` even declare tvOS? If its platform list is iOS-only, the package needs a tvOS target (upstream change or a local fork) — check before writing any code. FFmpegBuild's xcframeworks must also have tvOS slices (verify the engine's FFmpeg supports `appletvos`).
-4. **10-foot UI**: the existing Material UI runs but is touch-centric. Flutter tvOS maps the Siri Remote to focus traversal (Material buttons/ListTiles are focusable), but the app needs a pass: `Focus`-friendly navigation, D-pad/click-driven back, larger touch targets, skip the screen gestures / pinch stuff. Consider the `flutter_tv` / `focus_utils` approach on the home + player controls.
-5. **CI**: add a **tvOS build job to `.github/workflows/ios.yml`** (user has no Mac): `xcodebuild -sdk appletvos` on `macos-latest`, unsigned `Runner.app` (+ `ditto` a `DreamPlayer-tvOS.ipa`) artifact, matching the iOS job's manual `workflow_dispatch` trigger. Keep the App Icon + `CFBundleDisplayName`.
-6. **Distribution**: no Mac/Apple TV in the user's setup yet — sideload via Xcode (ad-hoc) or a free/personal-team profile once they have a Mac. Same caveats as the iOS IPA (unsigned artifact).
+**Implementation (2026-08)**
+- **AetherEngine tvOS confirmed**: `Package.swift` declares `platforms: [.tvOS(.v17)]` — the blocker from the original blueprint is resolved.
+- **flutter-tvos**: Flutter stable 3.44.9 does NOT have `--platforms=tvos` in `flutter create`. Community solution: `fluttertv/flutter-tvos` CLI (needs macOS). CI clones it, runs `flutter-tvos create --platforms=tvos` to scaffold the Xcode project, then overlays our adapted Swift files. `ios/` and `tvos/` are independent directories per flutter-tvos docs.
+- **Adapted Swift files** (in `tvos/Runner/`, checked into repo):
+  - `AvPlayerView.swift` — same as iOS with `#if !os(tvOS)` guards on `MPVolumeView` (not available on tvOS) and `UIScreen.main.brightness` (no-op on tvOS). `UIApplication.shared.isIdleTimerDisabled` compiles but is a no-op.
+  - `AppDelegate.swift` — no `IntentBridge` (no "Open with" on tvOS). Registers `AvPlayerViewFactory`, `FileBrowser`, `WebDAVClient`, `JellyfinDiscovery`, `CacheCleaner`.
+  - `SceneDelegate.swift` — simplified, no `IntentBridge` URL forwarding.
+  - `FileBrowser.swift` — Documents folder only (tvOS has no Files app, no `UIDocumentPickerViewController`). No security-scoped bookmarks needed (everything is in the sandbox).
+  - `WebDAVClient.swift`, `JellyfinDiscovery.swift`, `BufferedSMBReader.swift`, `CacheCleaner.swift` — copied from iOS unchanged (Foundation/Flutter/Security APIs only).
+  - **IntentBridge.swift is skipped** — no "Open with" on tvOS.
+- **CI workflow** (`.github/workflows/tvos.yml`, manual `workflow_dispatch`):
+  1. Install `flutter-tvos` from `fluttertv/flutter-tvos` GitHub repo
+  2. Scaffold `tvos/` via `flutter-tvos create --platforms=tvos`
+  3. Copy shared Swift files from `ios/Runner/` + overlay tvOS-adapted files
+  4. Build unsigned `Runner.app` → package as `DreamPlayer-tvOS-<version>.ipa`
+  5. Upload artifact
+- **Release workflow** (`.github/workflows/release.yml`): tvOS job added alongside Android + iOS. Release needs `[android, ios, tvos]`.
+- **Plugin porting pending**: `shared_preferences`, `permission_handler`, `flutter_displaymode` need tvOS implementations. CI build will surface `MissingPluginException` errors — port via `flutter-tvos plugin port <package>` or disable features that need them on tvOS. `isTvMode()` returns `Platform.isAndroid` so TV-specific UI won't trigger on tvOS; `isTvBox()` same gate — tvOS player UI uses the touch/iPhone path (tap to toggle controls, which maps to Siri Remote click).
+
+**What's needed next**
+1. Run the tvOS CI workflow for the first time — fix any build errors (missing plugins, compile issues).
+2. Port `shared_preferences` to tvOS (needed for `ResumeStore`, `TmdStore`, `JellyfinClient` persistence). `flutter-tvos plugin port shared_preferences` should handle this.
+3. Port or disable `permission_handler` (no runtime permissions on tvOS — make it a no-op).
+4. Disable `flutter_displaymode` on tvOS (tvOS manages refresh rate automatically — `kDisplayModeKey` no-op).
+5. Once CI builds, sideload to a real Apple TV for on-device verification.
+6. 10-foot UI pass: the existing Material UI runs but is touch-centric. Flutter tvOS maps the Siri Remote to focus traversal (Material buttons/ListTiles are focusable), but the app needs a pass: `Focus`-friendly navigation, D-pad/click-driven back, larger touch targets, skip the screen gestures / pinch stuff.
 
 **Out of scope for v1**: SMB browser on tvOS, AirPlay-cast-to-TV from the phone app, HDR/DV verification on tvOS panels (AVPlayer on tvOS is HDR-capable; re-verify the chips/probe later).
 
@@ -525,7 +538,7 @@ The home library shows **only folders the user explicitly adds** — nothing is 
   - **Manual-only** (`workflow_dispatch` — no push trigger): run it from the Actions tab when a build is wanted; builds unsigned IPA artifact always.
   - Signed build + TestFlight upload run only when secrets are configured.
   - Secrets needed: `IOS_CERT_BASE64`, `IOS_CERT_PASSWORD`, `IOS_PROFILE_BASE64`, `APPSTORE_API_KEY`, `APPSTORE_API_KEY_ID`, `APPSTORE_ISSUER_ID`.
-- **GitHub Releases** (`.github/workflows/release.yml`): push a `v*` tag (`git tag v0.0.1 && git push origin v0.0.1`) → builds the **universal** release APK + **split-per-abi** APKs (`arm64-v8a`, `armeabi-v7a`, `x86_64`) + AAB on `ubuntu-latest` and the unsigned iOS IPA (`DreamPlayer.ipa` — name deliberately omits "unsigned") on `macos-latest`, then creates the GitHub Release on the tag with `.github/release_notes.md` (Android architecture guide + iOS sideload guide) plus auto-generated change notes, and attaches all artifacts. Android artifacts are renamed `DreamPlayer-<version>-universal.apk`, `DreamPlayer-<version>-<arch>.apk`, `DreamPlayer-<version>.aab`. App version is **0.2.0** (`pubspec.yaml` `version: 0.2.0+1` → Android versionName/versionCode + iOS CFBundleShortVersionString/CFBundleVersion) and must be bumped per release to match the tag. Android APKs are currently **debug-signed** (`build.gradle.kts` uses the debug signing config for release builds) — fine for sideloading, but add a real signing config before Play Store / wide distribution.
+- **GitHub Releases** (`.github/workflows/release.yml`): push a `v*` tag (`git tag v0.0.1 && git push origin v0.0.1`) → builds the **universal** release APK + **split-per-abi** APKs (`arm64-v8a`, `armeabi-v7a`, `x86_64`) + AAB on `ubuntu-latest`, the unsigned iOS IPA (`DreamPlayer.ipa`) on `macos-latest`, and the unsigned tvOS IPA (`DreamPlayer-tvOS.ipa`) on `macos-latest` (flutter-tvos scaffold + overlay + build), then creates the GitHub Release on the tag with `.github/release_notes.md` plus auto-generated change notes, and attaches all artifacts. Android artifacts are renamed `DreamPlayer-<version>-universal.apk`, `DreamPlayer-<version>-<arch>.apk`, `DreamPlayer-<version>.aab`. App version is **0.2.0** (`pubspec.yaml` `version: 0.2.0+1` → Android versionName/versionCode + iOS CFBundleShortVersionString/CFBundleVersion) and must be bumped per release to match the tag. Android APKs are currently **debug-signed** (`build.gradle.kts` uses the debug signing config for release builds) — fine for sideloading, but add a real signing config before Play Store / wide distribution.
 - **Bundle ID (iOS)**: `com.dreamplayer.app`. **App display name**: `DreamPlayer`.
 - **Android**: app label `DreamPlayer`; package `com.dreamplayer.app` (matches iOS bundle ID `com.dreamplayer.app`). Build/test locally on the phone.
 
@@ -609,6 +622,15 @@ ios/Runner/
   IntentBridge.swift            # "Open with" intent channel (same contract as MainActivity.kt)
   AppDelegate.swift             # registers the AvPlayerView factory + files/intent/webdav channels
   SceneDelegate.swift           # forwards scene-opened URLs to IntentBridge
+tvos/Runner/                     # (generated on CI via flutter-tvos create; adapted Swift files committed here)
+  AvPlayerView.swift            # same as iOS with #if !os(tvOS) guards on MPVolumeView / brightness
+  AppDelegate.swift             # no IntentBridge; registers AvPlayerView + files/webdav/multicast/cache channels
+  SceneDelegate.swift           # simplified, no IntentBridge
+  FileBrowser.swift             # Documents folder only (no Files app / document picker on tvOS)
+  WebDAVClient.swift            # copied from iOS unchanged
+  JellyfinDiscovery.swift       # copied from iOS unchanged
+  BufferedSMBReader.swift       # copied from iOS unchanged (WebDAV read-ahead)
+  CacheCleaner.swift            # copied from iOS unchanged
 test/
   widget_test.dart              # shell/navigation/overflow tests
   codec_info_test.dart          # HDR + codec formatting unit tests
