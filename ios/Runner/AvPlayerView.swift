@@ -333,16 +333,8 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                     let vol = AVAudioSession.sharedInstance().outputVolume
                     result(Float(vol))
                 case "setSystemVolume":
-                    let volume = (args?["volume"] as? NSNumber)?.floatValue ?? 1
-                    // MPVolumeView is the only public way to set system volume
-                    // on iOS. We create one off-screen, find its UISlider, and
-                    // adjust the value — then remove it.
-                    let mpVolume = MPVolumeView(frame: CGRect(x: -1000, y: -1000, width: 1, height: 1))
-                    UIApplication.shared.keyWindow?.addSubview(mpVolume)
-                    if let slider = mpVolume.subviews.first(where: { $0 is UISlider }) as? UISlider {
-                        slider.value = min(max(volume, 0), 1)
-                    }
-                    mpVolume.removeFromSuperview()
+                    let volume = min(max(((args?["volume"] as? NSNumber)?.floatValue ?? 1), 0), 1)
+                    self.setSystemVolume(volume)
                     result(nil)
                 case "dispose":
                     self.teardownAll()
@@ -899,6 +891,49 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         return nil
     }
 
+    // MARK: - System volume (MPVolumeView)
+
+    /// MPVolumeView is the only public way to set the SYSTEM volume on iOS.
+    /// Its internal UISlider is built asynchronously after the view lands in a
+    /// window, so we retain the view for this player's lifetime and retry the
+    /// lookup with a bounded backoff — the naive synchronous `subviews.first`
+    /// search always returned nil, which made the volume gesture a no-op.
+    private var mpVolumeView: MPVolumeView?
+    private var mpVolumeRetries = 0
+
+    private func setSystemVolume(_ value: Float) {
+        DispatchQueue.main.async {
+            if self.mpVolumeView == nil {
+                let mpVolume = MPVolumeView(frame: CGRect(x: -1000, y: -1000, width: 1, height: 1))
+                let keyWindow = UIApplication.shared.connectedScenes
+                    .compactMap { $0 as? UIWindowScene }
+                    .flatMap { $0.windows }
+                    .first { $0.isKeyWindow }
+                keyWindow?.addSubview(mpVolume)
+                self.mpVolumeView = mpVolume
+                self.mpVolumeRetries = 0
+            }
+            guard let mpVolume = self.mpVolumeView else { return }
+            if let slider = Self.findVolumeSlider(in: mpVolume) {
+                slider.value = value
+            } else if self.mpVolumeRetries < 20 {
+                // Slider not materialized yet — retry shortly.
+                self.mpVolumeRetries += 1
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    self.setSystemVolume(value)
+                }
+            }
+        }
+    }
+
+    private static func findVolumeSlider(in view: UIView) -> UISlider? {
+        if let slider = view as? UISlider { return slider }
+        for sub in view.subviews {
+            if let slider = findVolumeSlider(in: sub) { return slider }
+        }
+        return nil
+    }
+
     // MARK: - Teardown
 
     private func teardownAll() {
@@ -909,6 +944,8 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         methodChannel.setMethodCallHandler(nil)
         eventChannel.setStreamHandler(nil)
         eventSink = nil
+        mpVolumeView?.removeFromSuperview()
+        mpVolumeView = nil
         UIApplication.shared.isIdleTimerDisabled = false
     }
 }
