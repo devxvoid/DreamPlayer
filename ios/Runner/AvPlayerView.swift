@@ -3,6 +3,7 @@ import AetherEngine
 import AetherEngineSMB
 import Combine
 import Flutter
+import MediaPlayer
 import UIKit
 
 /// Subtitle overlay drawn by the host (AetherEngine decodes cues into
@@ -321,6 +322,27 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                 case "setResizeMode":
                     let mode = (args?["mode"] as? NSNumber)?.intValue ?? 0
                     self.setResizeMode(mode)
+                    result(nil)
+                case "setBrightness":
+                    let brightness = (args?["brightness"] as? NSNumber)?.floatValue ?? 0.5
+                    UIScreen.main.brightness = CGFloat(max(0, min(brightness, 1)))
+                    result(nil)
+                case "getBrightness":
+                    result(Float(UIScreen.main.brightness))
+                case "getSystemVolume":
+                    let vol = AVAudioSession.sharedInstance().outputVolume
+                    result(Float(vol))
+                case "setSystemVolume":
+                    let volume = (args?["volume"] as? NSNumber)?.floatValue ?? 1
+                    // MPVolumeView is the only public way to set system volume
+                    // on iOS. We create one off-screen, find its UISlider, and
+                    // adjust the value — then remove it.
+                    let mpVolume = MPVolumeView(frame: CGRect(x: -1000, y: -1000, width: 1, height: 1))
+                    UIApplication.shared.keyWindow?.addSubview(mpVolume)
+                    if let slider = mpVolume.subviews.first(where: { $0 is UISlider }) as? UISlider {
+                        slider.value = min(max(volume, 0), 1)
+                    }
+                    mpVolume.removeFromSuperview()
                     result(nil)
                 case "dispose":
                     self.teardownAll()

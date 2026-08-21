@@ -7,6 +7,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/cache_cleaner.dart';
 import '../services/support_links.dart';
 import '../utils/tv_helper.dart';
+import '../widgets/tv_overscan.dart';
+import '../widgets/tv_tile.dart';
 import 'licenses_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -20,17 +22,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
   int _diskBytes = 0;
   bool _cleared = false;
   bool _passthrough = false;
+  bool _swipeGestures = true;
 
   @override
   void initState() {
     super.initState();
     _refreshDiskSize();
     _loadPassthrough();
+    _loadSwipeGestures();
   }
 
   Future<void> _loadPassthrough() async {
     final enabled = await isAudioPassthroughEnabled();
     if (mounted) setState(() => _passthrough = enabled);
+  }
+
+  Future<void> _loadSwipeGestures() async {
+    try {
+      final enabled = await areSwipeGesturesEnabled();
+      if (mounted) setState(() => _swipeGestures = enabled);
+    } catch (_) {}
   }
 
   Future<void> _refreshDiskSize() async {
@@ -66,164 +77,192 @@ class _SettingsScreenState extends State<SettingsScreen> {
     CacheCleaner.clearMemoryImages();
     if (!mounted) return;
     setState(() => _cleared = true);
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Cache cleared')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Cache cleared')));
     await _refreshDiskSize();
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isTv = isTvMode(context);
 
     return SafeArea(
-      child: ListView(
-        padding: const EdgeInsets.only(bottom: 24),
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-            child: Text(
-              'Support',
-              style: theme.textTheme.titleSmall?.copyWith(
-                color: theme.colorScheme.primary,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          for (final option in supportOptions)
-            ListTile(
-              leading: Icon(option.icon),
-              title: Text(option.title),
-              subtitle: Text(option.subtitle),
-              trailing: const Icon(Icons.open_in_new, size: 18),
-              onTap: () async {
-                try {
-                  await openSupportUrl(option.url);
-                } on PlatformException {
-                  if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Could not open this link'),
-                      ),
-                    );
-                  }
-                }
-              },
-            ),
-          const Divider(),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: Text(
-              'Storage',
-              style: theme.textTheme.titleSmall?.copyWith(
-                color: theme.colorScheme.primary,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          ListTile(
-            leading: const Icon(Icons.cleaning_services),
-            title: const Text('Clear cache'),
-            subtitle: Text(
-              _cleared
-                  ? 'Cached images and temporary files cleared'
-                  : '${CacheCleaner.formatBytes(_diskBytes)} on disk · '
-                        '${CacheCleaner.formatBytes(CacheCleaner.memoryBytes())} in memory',
-            ),
-            onTap: _clearCache,
-          ),
-          if (defaultTargetPlatform == TargetPlatform.android) ...[
-            const Divider(),
+      child: TvOverscan(
+        child: ListView(
+          padding: const EdgeInsets.only(bottom: 24),
+          children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
               child: Text(
-                'Audio',
+                'Support',
                 style: theme.textTheme.titleSmall?.copyWith(
                   color: theme.colorScheme.primary,
                   fontWeight: FontWeight.w600,
                 ),
               ),
             ),
-            SwitchListTile(
-              secondary: const Icon(Icons.surround_sound),
-              title: const Text('Audio passthrough'),
-              subtitle: Text(
-                _passthrough
-                    ? 'Auto — passthrough when HDMI detected'
-                    : 'Off — decode to PCM (default)',
+            for (final option in supportOptions)
+              TvTile(
+                leading: Icon(option.icon),
+                title: Text(option.title),
+                subtitle: Text(option.subtitle),
+                trailing: const Icon(Icons.open_in_new, size: 18),
+                onTap: () async {
+                  try {
+                    await openSupportUrl(option.url);
+                  } on PlatformException {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Could not open this link'),
+                        ),
+                      );
+                    }
+                  }
+                },
               ),
-              value: _passthrough,
-              onChanged: (value) async {
-                final prefs = await SharedPreferences.getInstance();
-                await prefs.setBool(kAudioPassthroughKey, value);
-                if (mounted) setState(() => _passthrough = value);
+            const Divider(),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Text(
+                'Storage',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  color: theme.colorScheme.primary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            TvTile(
+              leading: const Icon(Icons.cleaning_services),
+              title: const Text('Clear cache'),
+              subtitle: Text(
+                _cleared
+                    ? 'Cached images and temporary files cleared'
+                    : '${CacheCleaner.formatBytes(_diskBytes)} on disk · '
+                          '${CacheCleaner.formatBytes(CacheCleaner.memoryBytes())} in memory',
+              ),
+              onTap: _clearCache,
+            ),
+            if (defaultTargetPlatform == TargetPlatform.android) ...[
+              const Divider(),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Text(
+                  'Audio',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    color: theme.colorScheme.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              SwitchListTile(
+                secondary: const Icon(Icons.surround_sound),
+                title: const Text('Audio passthrough'),
+                subtitle: Text(
+                  _passthrough
+                      ? 'Auto — passthrough when HDMI detected'
+                      : 'Off — decode to PCM (default)',
+                ),
+                value: _passthrough,
+                onChanged: (value) async {
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.setBool(kAudioPassthroughKey, value);
+                  if (mounted) setState(() => _passthrough = value);
+                },
+              ),
+            ],
+            if (!isTv) ...[
+              const Divider(),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Text(
+                  'Player',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    color: theme.colorScheme.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              SwitchListTile(
+                secondary: const Icon(Icons.swipe),
+                title: const Text('Swipe gestures'),
+                subtitle: const Text(
+                  'Swipe left side for brightness, right side for volume',
+                ),
+                value: _swipeGestures,
+                onChanged: (value) async {
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.setBool(kSwipeGesturesKey, value);
+                  if (mounted) setState(() => _swipeGestures = value);
+                },
+              ),
+            ],
+            const Divider(),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Text(
+                'About',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  color: theme.colorScheme.primary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            TvTile(
+              leading: const Icon(Icons.memory),
+              title: const Text('Engine'),
+              subtitle: Text(
+                defaultTargetPlatform == TargetPlatform.iOS
+                    ? 'AetherEngine (AVPlayer + FFmpeg)'
+                    : 'ExoPlayer (Media3) + FFmpeg',
+              ),
+            ),
+            TvTile(
+              leading: const Icon(Icons.info_outline),
+              title: const Text('Version'),
+              subtitle: FutureBuilder<String>(
+                future: _loadVersion(),
+                builder: (context, snapshot) =>
+                    Text(snapshot.hasData ? snapshot.data! : '…'),
+              ),
+            ),
+            TvTile(
+              leading: const Icon(Icons.gavel),
+              title: const Text('Open-source licenses'),
+              subtitle: const Text('GNU GPL v3.0 and third-party notices'),
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const LicensesScreen(),
+                  ),
+                );
               },
             ),
+            const Divider(),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+              child: Column(
+                children: [
+                  Text(
+                    'Made with ❤️ by Mangesh Ghodke',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'DreamPlayer',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.outline,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ],
-          const Divider(),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: Text(
-              'About',
-              style: theme.textTheme.titleSmall?.copyWith(
-                color: theme.colorScheme.primary,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          ListTile(
-            leading: const Icon(Icons.memory),
-            title: const Text('Engine'),
-            subtitle: Text(
-              defaultTargetPlatform == TargetPlatform.iOS
-                  ? 'AetherEngine (AVPlayer + FFmpeg)'
-                  : 'ExoPlayer (Media3) + FFmpeg',
-            ),
-          ),
-          ListTile(
-            leading: const Icon(Icons.info_outline),
-            title: const Text('Version'),
-            subtitle: FutureBuilder<String>(
-              future: _loadVersion(),
-              builder: (context, snapshot) => Text(
-                snapshot.hasData ? snapshot.data! : '…',
-              ),
-            ),
-          ),
-          ListTile(
-            leading: const Icon(Icons.gavel),
-            title: const Text('Open-source licenses'),
-            subtitle: const Text('GNU GPL v3.0 and third-party notices'),
-            onTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => const LicensesScreen(),
-                ),
-              );
-            },
-          ),
-          const Divider(),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-            child: Column(
-              children: [
-                Text(
-                  'Made with ❤️ by Mangesh Ghodke',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'DreamPlayer',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.outline,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }

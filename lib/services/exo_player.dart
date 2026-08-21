@@ -36,15 +36,17 @@ enum VideoFitMode {
   final int value;
 
   String get label => switch (this) {
-        fit => 'Fit',
-        crop => 'Crop to screen',
-        stretch => 'Stretch to screen',
-        ratio16x9 => '16:9',
-        ratio4x3 => '4:3',
-      };
+    fit => 'Fit',
+    crop => 'Crop to screen',
+    stretch => 'Stretch to screen',
+    ratio16x9 => '16:9',
+    ratio4x3 => '4:3',
+  };
 
-  static VideoFitMode fromValue(int? value) => VideoFitMode.values
-      .firstWhere((m) => m.value == value, orElse: () => VideoFitMode.fit);
+  static VideoFitMode fromValue(int? value) => VideoFitMode.values.firstWhere(
+    (m) => m.value == value,
+    orElse: () => VideoFitMode.fit,
+  );
 }
 
 /// Persists the user's chosen [VideoFitMode] across playback sessions.
@@ -323,6 +325,20 @@ abstract class PlaybackController {
 
   Future<void> setFitMode(VideoFitMode mode);
 
+  /// Sets the display brightness (0.0 = dim, 1.0 = max). Per-app; reverts on
+  /// player close on both platforms. Pass -1 to restore system default.
+  Future<void> setBrightness(double brightness);
+
+  /// Returns the current screen brightness (0.0–1.0).
+  Future<double> getBrightness();
+
+  /// Sets the system media volume (0.0–1.0). On Android this is
+  /// AudioManager STREAM_MUSIC; on iOS this uses MPVolumeView.
+  Future<void> setSystemVolume(double volume);
+
+  /// Returns the current system media volume normalised to 0.0–1.0.
+  Future<double> getSystemVolume();
+
   Future<ExoPlayerEvent?> getState();
 
   Future<void> dispose();
@@ -352,9 +368,9 @@ class ExoPlayerController implements PlaybackController {
   void _attach(int viewId) {
     final method = MethodChannel('dreamplayer/exo_$viewId');
     _method = method;
-    EventChannel('dreamplayer/exo_events_$viewId')
-        .receiveBroadcastStream()
-        .listen((raw) {
+    EventChannel(
+      'dreamplayer/exo_events_$viewId',
+    ).receiveBroadcastStream().listen((raw) {
       if (raw is! Map) return;
       final event = ExoPlayerEvent.fromMap(raw);
       _latest = event;
@@ -376,20 +392,18 @@ class ExoPlayerController implements PlaybackController {
     bool allowSelfSigned = false,
     String? resumeKey,
     String? title,
-  }) =>
-      _send('open', {
-        if (uri != null && uri.isNotEmpty) 'uri': uri else 'path': path,
-        if (path.isNotEmpty) 'path': path,
-        if (subtitleUri != null && subtitleUri.isNotEmpty)
-          'subtitleUri': subtitleUri,
-        if (startPositionMs != null && startPositionMs > 0)
-          'startPositionMs': startPositionMs,
-        if (httpHeaders != null && httpHeaders.isNotEmpty)
-          'headers': httpHeaders,
-        if (allowSelfSigned) 'allowSelfSigned': true,
-        if (resumeKey != null && resumeKey.isNotEmpty) 'resumeKey': resumeKey,
-        if (title != null && title.isNotEmpty) 'title': title,
-      });
+  }) => _send('open', {
+    if (uri != null && uri.isNotEmpty) 'uri': uri else 'path': path,
+    if (path.isNotEmpty) 'path': path,
+    if (subtitleUri != null && subtitleUri.isNotEmpty)
+      'subtitleUri': subtitleUri,
+    if (startPositionMs != null && startPositionMs > 0)
+      'startPositionMs': startPositionMs,
+    if (httpHeaders != null && httpHeaders.isNotEmpty) 'headers': httpHeaders,
+    if (allowSelfSigned) 'allowSelfSigned': true,
+    if (resumeKey != null && resumeKey.isNotEmpty) 'resumeKey': resumeKey,
+    if (title != null && title.isNotEmpty) 'title': title,
+  });
 
   @override
   Future<void> play() => _send('play');
@@ -423,7 +437,8 @@ class ExoPlayerController implements PlaybackController {
       _send('seekTo', {'positionMs': position.inMilliseconds});
 
   @override
-  Future<void> setVolume(double volume) => _send('setVolume', {'volume': volume});
+  Future<void> setVolume(double volume) =>
+      _send('setVolume', {'volume': volume});
 
   @override
   Future<void> setMuted(bool muted) => _send('setMuted', {'muted': muted});
@@ -443,6 +458,38 @@ class ExoPlayerController implements PlaybackController {
   @override
   Future<void> setFitMode(VideoFitMode mode) =>
       _send('setResizeMode', {'mode': mode.value});
+
+  @override
+  Future<void> setBrightness(double brightness) =>
+      _send('setBrightness', {'brightness': brightness});
+
+  @override
+  Future<double> getBrightness() async {
+    final channel = _method;
+    if (channel == null) return 0.5;
+    try {
+      final raw = await channel.invokeMethod<double>('getBrightness');
+      return (raw ?? 0.5).clamp(0.0, 1.0);
+    } catch (_) {
+      return 0.5;
+    }
+  }
+
+  @override
+  Future<void> setSystemVolume(double volume) =>
+      _send('setSystemVolume', {'volume': volume});
+
+  @override
+  Future<double> getSystemVolume() async {
+    final channel = _method;
+    if (channel == null) return 1.0;
+    try {
+      final raw = await channel.invokeMethod<double>('getSystemVolume');
+      return (raw ?? 1.0).clamp(0.0, 1.0);
+    } catch (_) {
+      return 1.0;
+    }
+  }
 
   Future<void> disposeNative() => _send('dispose');
 
@@ -513,20 +560,22 @@ class ExoPlayerView extends StatelessWidget {
     // SurfaceView so true HDR/DV stays device-composited everywhere.
     return PlatformViewLink(
       viewType: exoPlayerViewType,
-      surfaceFactory: (BuildContext context, PlatformViewController controller) {
-        return AndroidViewSurface(
-          controller: controller as AndroidViewController,
-          gestureRecognizers: const <Factory<OneSequenceGestureRecognizer>>{},
-          hitTestBehavior: PlatformViewHitTestBehavior.opaque,
-        );
-      },
+      surfaceFactory:
+          (BuildContext context, PlatformViewController controller) {
+            return AndroidViewSurface(
+              controller: controller as AndroidViewController,
+              gestureRecognizers:
+                  const <Factory<OneSequenceGestureRecognizer>>{},
+              hitTestBehavior: PlatformViewHitTestBehavior.opaque,
+            );
+          },
       onCreatePlatformView: (PlatformViewCreationParams params) {
         final AndroidViewController nativeController =
             PlatformViewsService.initExpensiveAndroidView(
-          id: params.id,
-          viewType: params.viewType,
-          layoutDirection: TextDirection.ltr,
-        );
+              id: params.id,
+              viewType: params.viewType,
+              layoutDirection: TextDirection.ltr,
+            );
         nativeController
           ..addOnPlatformViewCreatedListener(controller._attach)
           ..addOnPlatformViewCreatedListener(params.onPlatformViewCreated)

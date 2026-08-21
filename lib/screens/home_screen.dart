@@ -12,6 +12,7 @@ import '../services/library_folders.dart';
 import '../services/tmdb_client.dart';
 import '../services/webdav_client.dart';
 import '../widgets/folder_card.dart';
+import '../widgets/tv_overscan.dart';
 import '../widgets/video_card.dart';
 import '../utils/tv_helper.dart';
 import 'file_browser_screen.dart';
@@ -47,6 +48,10 @@ class _HomeScreenState extends State<HomeScreen>
 
   final JellyfinClient _client = JellyfinClient();
 
+  /// Scrolls the home list back to the top after returning from playback, so
+  /// the app-bar title and "Continue watching" heading are visible again.
+  final ScrollController _scrollController = ScrollController();
+
   @override
   void initState() {
     super.initState();
@@ -81,6 +86,7 @@ class _HomeScreenState extends State<HomeScreen>
     LibraryFoldersStore.changes.removeListener(_loadLibrary);
     TmdService.instance.removeListener(_onMetadataChanged);
     WidgetsBinding.instance.removeObserver(this);
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -328,6 +334,12 @@ class _HomeScreenState extends State<HomeScreen>
     );
     // Resume positions may have changed while playing — refresh on return.
     await _loadLibrary();
+    // Scroll back to the top so the app-bar title and section heading are
+    // visible (the watched card moves to index 0 after the list reorders,
+    // which would otherwise leave the viewport stranded mid-list).
+    if (mounted && _scrollController.hasClients) {
+      _scrollController.jumpTo(0);
+    }
   }
 
   /// WebDAV entries deliberately do NOT persist the Authorization header (no
@@ -417,11 +429,13 @@ class _HomeScreenState extends State<HomeScreen>
     final theme = Theme.of(context);
     final tv = isTvMode(context);
     return Scaffold(
-      body: CustomScrollView(
+      body: TvOverscan(
+        child: CustomScrollView(
+        controller: _scrollController,
         slivers: [
           SliverAppBar(
             title: const Text('DreamPlayer'),
-            floating: true,
+            pinned: true,
           ),
           // ---- Your library: user-added folders (e.g. TV-show folders) ----
           if (_folders.isEmpty)
@@ -455,6 +469,7 @@ class _HomeScreenState extends State<HomeScreen>
               itemBuilder: (context, index) {
                 final folder = _folders[index];
                 return FolderCard(
+                  key: ValueKey(folder.id),
                   folder: folder,
                   tmdbMeta: TmdService.instance.metaFor(folder.metadataKey),
                   jellyfinInfo: _jellyfinMeta[folder.id],
@@ -496,6 +511,7 @@ class _HomeScreenState extends State<HomeScreen>
                 final continueLabel =
                     'Continue from ${_positionLabel(entry.position)}';
                 return VideoCard(
+                  key: ValueKey(video.resumeKey ?? video.uri ?? video.title),
                   video: video,
                   tmdbMeta: TmdService.instance
                       .metaFor(TmdStore.identityKeyFor(video)),
@@ -509,6 +525,7 @@ class _HomeScreenState extends State<HomeScreen>
               },
             ),
         ],
+        ),
       ),
       floatingActionButton: FloatingActionButton(
               onPressed: _showAddMenu,

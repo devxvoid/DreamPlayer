@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 
 import '../models/video_item.dart';
 import '../services/file_browser.dart';
+import '../widgets/tv_overscan.dart';
+import '../widgets/tv_tile.dart';
 import 'tmd_details_screen.dart';
 
 /// In-app file browser (CX-Explorer style): browse the device's storage and
@@ -220,7 +222,7 @@ class _FileBrowserScreenState extends State<FileBrowserScreen>
           onPressed: _goUp,
         ),
       ),
-      body: _body(context),
+      body: TvOverscan(child: _body(context)),
     );
   }
 
@@ -307,7 +309,7 @@ class _FileTile extends StatelessWidget {
         : Icons.play_circle_outline;
     final color = entry.isDirectory ? colorScheme.primary : colorScheme.secondary;
     final subtitle = entry.isDirectory ? null : _sizeLabel(entry.size);
-    return ListTile(
+    return TvTile(
       leading: Icon(icon, color: color),
       title: Text(
         entry.name,

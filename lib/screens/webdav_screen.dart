@@ -4,7 +4,9 @@ import 'package:flutter/services.dart';
 import '../models/video_item.dart';
 import '../services/tmdb_client.dart';
 import '../services/webdav_client.dart';
+import '../widgets/tv_overscan.dart';
 import '../widgets/tv_text_field.dart';
+import '../widgets/tv_tile.dart';
 import 'tmd_details_screen.dart';
 
 enum _WebDavProtocol { http, https }
@@ -267,7 +269,7 @@ class _WebDavScreenState extends State<WebDavScreen> {
               ],
             )
           : null,
-      body: _body(context),
+      body: TvOverscan(child: _body(context)),
     );
   }
 
@@ -353,7 +355,7 @@ class _WebDavScreenState extends State<WebDavScreen> {
         children: [
           const _SectionHeader('Saved servers'),
           for (final server in _servers)
-            ListTile(
+            TvTile(
               leading: const Icon(Icons.cloud),
               title: Text(
                 server.name,
@@ -438,7 +440,7 @@ class _WebDavTile extends StatelessWidget {
         : colorScheme.secondary;
     final subtitle = entry.isDirectory ? null : _sizeLabel(entry.size);
     final posterUrl = posterUrlOf(tmdbMeta);
-    return ListTile(
+    return TvTile(
       leading: posterUrl != null
           ? _Poster(posterUrl: posterUrl)
           : Icon(icon, color: color),

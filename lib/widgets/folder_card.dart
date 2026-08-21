@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../services/jellyfin_client.dart';
 import '../services/library_folders.dart';
@@ -40,11 +43,57 @@ class _FolderCardState extends State<FolderCard> {
   /// [ListenableBuilder].
   final FocusNode _focusNode = FocusNode();
 
+  /// TV long-press: hold select/enter for 500 ms to fire [onLongPress].
+  Timer? _holdTimer;
+  bool _longPressFired = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode.onKeyEvent = _handleKeyEvent;
+  }
+
   @override
   void dispose() {
+    _holdTimer?.cancel();
     _focusNode.dispose();
     super.dispose();
   }
+
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (!isTvMode(context)) return KeyEventResult.ignored;
+
+    if (event is KeyDownEvent && _isSelectKey(event)) {
+      _longPressFired = false;
+      _holdTimer?.cancel();
+      _holdTimer = Timer(const Duration(milliseconds: 500), () {
+        if (!mounted) return;
+        _longPressFired = true;
+        widget.onLongPress?.call();
+      });
+      return KeyEventResult.handled;
+    }
+    // Auto-repeat while holding: swallow, or ActivateIntent fires onTap
+    // mid-hold (folder opens *and* the remove dialog appears).
+    if (event is KeyRepeatEvent && _isSelectKey(event)) {
+      return KeyEventResult.handled;
+    }
+    if (event is KeyUpEvent && _isSelectKey(event)) {
+      _holdTimer?.cancel();
+      if (!_longPressFired) {
+        widget.onTap();
+      }
+      _longPressFired = false;
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  static bool _isSelectKey(KeyEvent e) =>
+      e.physicalKey == PhysicalKeyboardKey.enter ||
+      e.physicalKey == PhysicalKeyboardKey.select ||
+      e.logicalKey == LogicalKeyboardKey.enter ||
+      e.logicalKey == LogicalKeyboardKey.select;
 
   @override
   Widget build(BuildContext context) {

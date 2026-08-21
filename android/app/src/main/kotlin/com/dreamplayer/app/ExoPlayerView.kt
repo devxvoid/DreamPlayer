@@ -200,6 +200,22 @@ class ExoPlayerView(
         subtitleParserFactory,
     )
 
+    /// Start playback almost immediately (2s of media buffered is enough),
+    /// resume quickly after a stall (5s), but keep topping the buffer up to
+    /// a big byte budget so network streams (e.g. the CX HTTP proxy) stay
+    /// smooth. Defaults are 2.5s/5s and an 8MB byte cap, which is too tight
+    /// for 4K REMUX. The byte budget scales down on small-heap devices
+    /// ([BufferTuning]) — a fixed 96MB target OOMs the Fire TV Stick's 192MB
+    /// app heap mid-playback ("io unspecified" source error).
+    private val loadControl: LoadControl = run {
+        BufferTuning.tune(activity)
+        DefaultLoadControl.Builder()
+            .setBufferDurationsMs(15_000, 50_000, BUFFER_FOR_PLAYBACK_MS, BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS)
+            .setTargetBufferBytes(BufferTuning.media3TargetBytes)
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
+    }
+
     private val player: ExoPlayer = ExoPlayer.Builder(activity)
         .setMediaSourceFactory(mediaSourceFactory)
         .setRenderersFactory(
@@ -752,6 +768,39 @@ class ExoPlayerView(
                     applyFitMode(call.argument<Number>("mode")?.toInt() ?: 0)
                     result.success(null)
                 }
+                "setBrightness" -> {
+                    val brightness = call.argument<Number>("brightness")?.toFloat() ?: 0.5f
+                    val params = activity.window.attributes
+                    // -1 = restore system default (BRIGHTNESS_OVERRIDE_NONE).
+                    params.screenBrightness = if (brightness < 0)
+                        android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                    else
+                        brightness.coerceIn(0f, 1f)
+                    activity.window.attributes = params
+                    result.success(null)
+                }
+                "getBrightness" -> {
+                    val b = activity.window.attributes.screenBrightness
+                    result.success(if (b < 0) 0.5f else b)
+                }
+                "getSystemVolume" -> {
+                    val am = activity.getSystemService(Context.AUDIO_SERVICE)
+                            as android.media.AudioManager
+                    val maxVol = am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+                        .toFloat()
+                    val curVol = am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
+                        .toFloat()
+                    result.success(if (maxVol > 0) curVol / maxVol else 1f)
+                }
+                "setSystemVolume" -> {
+                    val volume = call.argument<Number>("volume")?.toFloat() ?: 1f
+                    val am = activity.getSystemService(Context.AUDIO_SERVICE)
+                            as android.media.AudioManager
+                    val maxVol = am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+                    val target = Math.round(volume.coerceIn(0f, 1f) * maxVol).toInt()
+                    am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, target, 0)
+                    result.success(null)
+                }
                 "dispose" -> {
                     stopPositionTicker()
                     result.success(null)
@@ -1180,21 +1229,8 @@ class ExoPlayerView(
     }
 
     companion object {
-        /// Start playback almost immediately (2s of media buffered is enough),
-        /// resume quickly after a stall (5s), but keep topping the buffer up to
-        /// a big byte budget so network streams (e.g. the CX HTTP proxy) stay
-        /// smooth. Defaults are 2.5s/5s and an 8MB byte cap, which is too tight
-        /// for 4K REMUX.
-        private val loadControl: LoadControl =
-            DefaultLoadControl.Builder()
-                .setBufferDurationsMs(15_000, 50_000, BUFFER_FOR_PLAYBACK_MS, BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS)
-                .setTargetBufferBytes(TARGET_BUFFER_BYTES)
-                .setPrioritizeTimeOverSizeThresholds(true)
-                .build()
-
         private const val BUFFER_FOR_PLAYBACK_MS = 1_500
         private const val BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 2_000
-        private const val TARGET_BUFFER_BYTES = 96 * 1024 * 1024
     }
 }
 

@@ -4,7 +4,9 @@ import 'package:flutter/services.dart';
 import '../models/video_item.dart';
 import '../services/smb_client.dart';
 import '../services/tmdb_client.dart';
+import '../widgets/tv_overscan.dart';
 import '../widgets/tv_text_field.dart';
+import '../widgets/tv_tile.dart';
 import 'tmd_details_screen.dart';
 
 /// SMB / LAN-share browser: saved servers -> shares -> folders -> videos.
@@ -459,7 +461,7 @@ class _SmbScreenState extends State<SmbScreen> {
                   child: const Icon(Icons.add),
                 )
               : null,
-      body: _body(context),
+      body: TvOverscan(child: _body(context)),
     );
   }
 
@@ -565,7 +567,7 @@ class _SmbScreenState extends State<SmbScreen> {
           if (!_scanning && _discovered.isNotEmpty) ...[
             const _SectionHeader('Detected on this network'),
             for (final d in _discovered)
-              ListTile(
+              TvTile(
                 leading: const Icon(Icons.lan_outlined),
                 title: Text(
                   d.hostname,
@@ -605,7 +607,7 @@ class _SmbScreenState extends State<SmbScreen> {
         border: Border.all(color: Colors.black, width: 1.5),
       ),
     );
-    return ListTile(
+    return TvTile(
       leading: Stack(
         clipBehavior: Clip.none,
         children: [
@@ -696,7 +698,7 @@ class _SmbTile extends StatelessWidget {
         ? 'https://image.tmdb.org/t/p/w185${tmdbMeta!.movie.posterPath}'
         : null;
 
-    return ListTile(
+    return TvTile(
       leading: posterUrl != null
           ? ClipRRect(
               borderRadius: BorderRadius.circular(4),

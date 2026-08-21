@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'screens/home_screen.dart';
 import 'screens/player_screen.dart';
@@ -77,6 +78,9 @@ class RootShell extends StatefulWidget {
 class _RootShellState extends State<RootShell> {
   int _selectedIndex = 0;
 
+  /// When the root back press happened, for the double-back-to-exit pattern.
+  DateTime? _lastBackPress;
+
   /// Bumped whenever the Library tab is (re)selected so the Home screen can
   /// reload its "Continue watching" list even though IndexedStack keeps it
   /// alive (playing from the file browser/WebDAV never pushes through Home).
@@ -88,6 +92,28 @@ class _RootShellState extends State<RootShell> {
     super.dispose();
   }
 
+  /// Root-route back press: first tap shows a "Press back again to exit"
+  /// snackbar; a second tap within 2 s exits the app. Back presses while any
+  /// route is pushed above (player, browsers, dialogs) pop those normally and
+  /// never reach this handler.
+  void _handleRootBack() {
+    final now = DateTime.now();
+    if (_lastBackPress == null ||
+        now.difference(_lastBackPress!) > const Duration(seconds: 2)) {
+      _lastBackPress = now;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text('Press back again to exit'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+    } else {
+      SystemNavigator.pop();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final mediaQuery = MediaQuery.of(context);
@@ -96,41 +122,46 @@ class _RootShellState extends State<RootShell> {
     // Map the real status-bar inset (`viewPadding`) into `padding` for the
     // library/settings tabs so they never clash with the status bar.
     final padded = mediaQuery.copyWith(
-      padding: mediaQuery.padding.copyWith(
-        top: mediaQuery.viewPadding.top,
-      ),
+      padding: mediaQuery.padding.copyWith(top: mediaQuery.viewPadding.top),
     );
-    return Scaffold(
-      body: MediaQuery(
-        data: padded,
-        child: IndexedStack(
-          index: _selectedIndex,
-          children: [
-            HomeScreen(refreshTick: _homeRefreshTick),
-            const SettingsScreen(),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        _handleRootBack();
+      },
+      child: Scaffold(
+        body: MediaQuery(
+          data: padded,
+          child: IndexedStack(
+            index: _selectedIndex,
+            children: [
+              HomeScreen(refreshTick: _homeRefreshTick),
+              const SettingsScreen(),
+            ],
+          ),
+        ),
+        bottomNavigationBar: NavigationBar(
+          selectedIndex: _selectedIndex,
+          onDestinationSelected: (index) {
+            setState(() {
+              _selectedIndex = index;
+            });
+            if (index == 0) _homeRefreshTick.value++;
+          },
+          destinations: const [
+            NavigationDestination(
+              icon: Icon(Icons.video_library_outlined),
+              selectedIcon: Icon(Icons.video_library),
+              label: 'Library',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.settings_outlined),
+              selectedIcon: Icon(Icons.settings),
+              label: 'Settings',
+            ),
           ],
         ),
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _selectedIndex,
-        onDestinationSelected: (index) {
-          setState(() {
-            _selectedIndex = index;
-          });
-          if (index == 0) _homeRefreshTick.value++;
-        },
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.video_library_outlined),
-            selectedIcon: Icon(Icons.video_library),
-            label: 'Library',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.settings_outlined),
-            selectedIcon: Icon(Icons.settings),
-            label: 'Settings',
-          ),
-        ],
       ),
     );
   }

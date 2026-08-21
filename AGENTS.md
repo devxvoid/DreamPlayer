@@ -391,9 +391,21 @@ Play files from LAN/NAS SMB shares in-app, mirroring the existing file-browser p
   - **Gotcha fixed on-device — dynamic SPM framework not embedded**: AMSMB2's package product is `type: .dynamic`, so linking it into Runner is NOT enough. It must ALSO be added to the Runner target's **Embed Frameworks** copy phase (`PBXCopyFilesBuildPhase`, `dstSubfolderSpec = 10`) as a `PBXBuildFile` with `productRef` + `settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy); }`. Without that, `AMSMB2.framework` is missing from `Runner.app/Frameworks/` (the binary still has an `@rpath/AMSMB2.framework/AMSMB2` load command, so the build passes but dyld crashes at launch with "image not found"). Transitive dynamic products (e.g. FFmpegBuild's xcframeworks pulled in by AetherEngine) are auto-embedded; direct package products added by hand to the Frameworks phase are not. **AetherEngineSMB is the opposite — a STATIC library product (its `Package.swift` `products` entry has no `type:`, so the default static applies; same for its `SMBClient` dependency). It must be in the Frameworks (link) phase + `packageProductDependencies`, and must NOT be added to the Embed Frameworks copy phase — with no `.framework` file to embed, xcodebuild fails with `The file "AetherEngineSMB" couldn't be opened because there is no such file`.**
   - **"Share connects but video won't open" fix (2026-08-12, superseded)**: the v0.0.3 loopback-HTTP fixes — (1) ATS (`NSAllowsLocalNetworking` for the `http://127.0.0.1` stream URL, since the native AVPlayer path honors ATS), (2) extension + `Content-Type` on the token URL, (3) synchronous connect before returning the URL — did NOT fix playback on-device; the loopback server was retired in v0.0.4 in favor of AetherEngineSMB (see above). The ATS entry stays in Info.plist (harmless).
 
+### Player gesture controls (brightness + volume)
+
+Swipe gestures on the player screen to adjust brightness and volume, for **Android phone** and **iOS/iPad**. **Status: NOT STARTED — planned (2026-08-20); user testing the Fire TV build tomorrow.** Do NOT implement until asked.
+
+**Design (to confirm with the user before coding)**
+- **Gesture zones**: vertical swipe up/down on the **left half** of the video surface adjusts **brightness**; vertical swipe up/down on the **right half** adjusts **volume** (the common player convention, cf. VLC/MX Player). Horizontal swipes are reserved for seek (±10s / scrub) if/when wanted.
+- **Brightness**: Android = native `Window`/`WindowManager.LayoutParams.screenBrightness` (0.0–1.0) via a small MethodChannel on the ExoPlayer view; iOS = `UIScreen.main.brightness` (0.0–1.0) via the AetherEngine `AvPlayerView`. Consider a per-app overlay instead of system brightness (system brightness on Android needs `Settings.System` `WRITE_SETTINGS` — avoid). `screenBrightness`/`UIScreen.brightness` both apply per-app while the player is foreground, which is the desired behavior.
+- **Volume**: Android = `AudioManager` STREAM_MUSIC (`setStreamVolume`) or ExoPlayer `setVolume` (per-player); iOS = `AVPlayer.volume` (per-player). Prefer per-player volume to avoid changing the system volume level.
+- **Feedback overlay**: a centered vertical slider / progress pill with an icon (sun / speaker) + percentage while the gesture is active, fading after ~1 s. Reuse the existing bottom-sheet/overlay styling; dark pill consistent with the transport buttons.
+- **Gesture detection**: `GestureDetector`/`onVerticalDragUpdate` over the platform view (careful not to break the existing tap-to-toggle-controls and drag handling). TV stays untouched (D-pad only — no touchscreen).
+- **Settings toggle** (optional): an "Enable swipe gestures" switch in Settings, default on.
+
 ### Android TV
 
-Run DreamPlayer on an Android TV box/panel as a real 10-foot app. **Status: Phase 1–3 done; playback rebuilt on the shared in-app platform view; video visible on Fire TV after transparent-window fix (2026-08).**
+Run DreamPlayer on an Android TV box/panel as a real 10-foot app. **Status: Phase 1–4 done; playback rebuilt on the shared in-app platform view; video visible on Fire TV after transparent-window fix (2026-08); user re-testing on the TV tomorrow (2026-08-20).**
 
 **Test hardware**: Amazon Fire TV Stick 4K (runs Fire OS, Android-based). TV supports Dolby Vision + Dolby Atmos passthrough. No eARC soundbar/AVR yet — audio bitstream goes to the TV directly over HDMI.
 

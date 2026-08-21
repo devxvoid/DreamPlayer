@@ -17,11 +17,10 @@ import '../widgets/format_chip.dart';
 /// Whether the app is running under `flutter test`.
 const bool _inTests = bool.fromEnvironment('FLUTTER_TEST');
 
+enum _SwipeType { brightness, volume }
+
 class PlayerScreen extends StatefulWidget {
-  const PlayerScreen({
-    super.key,
-    required this.video,
-  });
+  const PlayerScreen({super.key, required this.video});
 
   final VideoItem video;
 
@@ -29,7 +28,8 @@ class PlayerScreen extends StatefulWidget {
   State<PlayerScreen> createState() => _PlayerScreenState();
 }
 
-class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver {
+class _PlayerScreenState extends State<PlayerScreen>
+    with WidgetsBindingObserver {
   /// Native playback backend: the in-app ExoPlayer platform view (the same
   /// hybrid-composition SurfaceView on phones and Android TV / Fire TV).
   PlaybackController? _exo;
@@ -65,6 +65,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   /// is recreated on unlock) so [didChangeAppLifecycleState] can detect that
   /// the media was lost and reopen it.
   bool _hadMedia = false;
+
   /// True when the current source is a network stream (WebDAV) whose
   /// underlying TCP connection is killed when iOS backgrounds the app.
   /// On resume, the engine still reports paused (not IDLE) but the reader is
@@ -101,6 +102,13 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
 
   /// Last time the resume position was persisted (throttled while playing).
   DateTime _lastResumeSave = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Swipe gesture state (brightness / volume).
+  bool _swipeEnabled = true;
+  _SwipeType? _swipeType;
+  double _swipeCurrentValue = 0;
+  double _iosOriginalBrightness = -1;
+  Timer? _swipeOverlayTimer;
 
   /// Stable per-video key for the resume store: an explicit [VideoItem.resumeKey]
   /// wins (sources whose path/URI rotate), otherwise
@@ -146,11 +154,26 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       _exoSub = exo.events.listen(_onExoEvent);
       try {
         _fitMode = await FitModeStore.load();
+        _swipeEnabled = await areSwipeGesturesEnabled();
       } catch (_) {
         // Persistence unavailable; keep the default fit.
       }
       if (mounted) setState(() {});
       await _openCurrent();
+      // Seed the volume slider from the real system volume so the first
+      // swipe starts at the correct position.
+      try {
+        _swipeCurrentValue = await exo.getSystemVolume();
+      } catch (_) {}
+      // Save the original screen brightness so we can restore it on dispose.
+      // On Android this is automatic (Window brightness reverts when the
+      // activity closes); on iOS UIScreen.main.brightness persists within
+      // the app so we must reset it.
+      if (Platform.isIOS) {
+        try {
+          _iosOriginalBrightness = await exo.getBrightness();
+        } catch (_) {}
+      }
     } catch (e) {
       if (mounted) {
         setState(() => _error = 'Playback unavailable: $e');
@@ -174,9 +197,10 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     // resume-after-background force-reloads instead of just calling play()
     // on a dead reader.
     final uri = video.uri;
-    _isNetworkSource = uri != null &&
+    _isNetworkSource =
+        uri != null &&
         ((uri.startsWith('http://') || uri.startsWith('https://')) &&
-         (video.httpHeaders.isNotEmpty || video.allowSelfSigned));
+            (video.httpHeaders.isNotEmpty || video.allowSelfSigned));
     Duration? resume;
     if (!_inTests) {
       resume = await ResumeStore.positionFor(_resumeKey);
@@ -224,8 +248,8 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   /// duration to draw its progress bar).
   VideoItem get _withLiveDuration =>
       _duration > Duration.zero && _current.duration <= Duration.zero
-          ? _current.withPlaybackInfo(duration: _duration)
-          : _current;
+      ? _current.withPlaybackInfo(duration: _duration)
+      : _current;
 
   /// Transient IO errors worth retrying (network blips).
   static bool _isRetryableIoError(String code) =>
@@ -292,8 +316,8 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
         return e.errorMessage?.isNotEmpty == true
             ? e.errorMessage!
             : 'This device cannot decode Dolby Vision Profile 5. Play the '
-                'HDR10 or SDR version of the file, or watch it on a Dolby '
-                'Vision-capable device.';
+                  'HDR10 or SDR version of the file, or watch it on a Dolby '
+                  'Vision-capable device.';
       default:
         final detail = e.errorMessage?.isNotEmpty == true
             ? '\n${e.errorMessage}'
@@ -316,13 +340,17 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     if (e.error != null && e.error!.isNotEmpty) {
       final code = e.error!;
       // Auto-retry on transient IO errors (network blip).
-      if (_isRetryableIoError(code) && _ioRetries < _maxIoRetries && !_retrying) {
+      if (_isRetryableIoError(code) &&
+          _ioRetries < _maxIoRetries &&
+          !_retrying) {
         _ioRetries++;
         _retrying = true;
         final pos = _position;
         final dur = _duration;
-        debugPrint('DREAM_RETRY IO error $code, attempt $_ioRetries/$_maxIoRetries, '
-            'pos=${pos.inMilliseconds}ms');
+        debugPrint(
+          'DREAM_RETRY IO error $code, attempt $_ioRetries/$_maxIoRetries, '
+          'pos=${pos.inMilliseconds}ms',
+        );
         // Brief delay then reopen at the saved position.
         Future.delayed(const Duration(seconds: 2), () {
           if (!mounted || _retrying != true) return;
@@ -373,7 +401,9 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       _clearResume();
     } else {
       final now = DateTime.now();
-      if (_playing && !_buffering && !_dragging &&
+      if (_playing &&
+          !_buffering &&
+          !_dragging &&
           now.difference(_lastResumeSave) >= const Duration(seconds: 5)) {
         _lastResumeSave = now;
         _saveResume(_position);
@@ -466,7 +496,14 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _hideTimer?.cancel();
+    _swipeOverlayTimer?.cancel();
     _saveResume(_position);
+    // Restore system brightness so it doesn't stick after the player closes.
+    if (Platform.isIOS && _iosOriginalBrightness >= 0) {
+      _exo?.setBrightness(_iosOriginalBrightness);
+    } else {
+      _exo?.setBrightness(-1);
+    }
     _exoSub?.cancel();
     _exo?.dispose();
     SystemChrome.setPreferredOrientations(DeviceOrientation.values);
@@ -499,7 +536,11 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     // button press reveals the controls again.
     if (!_playing || _buffering || _dragging) return;
     _hideTimer = Timer(_autoHideAfter, () {
-      if (mounted && _controlsVisible && _playing && !_buffering && !_dragging) {
+      if (mounted &&
+          _controlsVisible &&
+          _playing &&
+          !_buffering &&
+          !_dragging) {
         setState(() => _controlsVisible = false);
       }
     });
@@ -512,6 +553,40 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     } else {
       _showControls();
     }
+  }
+
+  // ---- Swipe gesture (brightness / volume) ----
+
+  void _onSwipeDragStart(DragStartDetails details) {
+    if (!_swipeEnabled || _isTv) return;
+    final w = MediaQuery.of(context).size.width;
+    final x = details.globalPosition.dx;
+    _swipeType = x < w / 2 ? _SwipeType.brightness : _SwipeType.volume;
+    _hideTimer?.cancel();
+    setState(() => _controlsVisible = false);
+  }
+
+  void _onSwipeDragUpdate(DragUpdateDetails details) {
+    if (_swipeType == null) return;
+    final delta =
+        -details.primaryDelta! / (MediaQuery.of(context).size.height * 0.7);
+    final next = (_swipeCurrentValue + delta).clamp(0.0, 1.0);
+    setState(() => _swipeCurrentValue = next);
+    if (_swipeType == _SwipeType.brightness) {
+      _exo?.setBrightness(next);
+    } else {
+      _exo?.setSystemVolume(next);
+    }
+  }
+
+  void _onSwipeDragEnd(DragEndDetails details) {
+    if (_swipeType == null) return;
+    _swipeType = null;
+    _swipeOverlayTimer?.cancel();
+    _swipeOverlayTimer = Timer(const Duration(milliseconds: 800), () {
+      if (mounted && _swipeType == null) setState(() {});
+    });
+    _restartHideTimer();
   }
 
   @override
@@ -561,8 +636,8 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     // channel count unless the name already carries it.
     if (label != null && label.isNotEmpty) {
       if (channels == null) return label;
-      final hasChannels = label.contains(channels) ||
-          label.contains(t.channels.toString());
+      final hasChannels =
+          label.contains(channels) || label.contains(t.channels.toString());
       return hasChannels ? label : '$label · $channels';
     }
     final lang = languageName(t.language);
@@ -691,13 +766,12 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
               ),
               _tvListTile(
                 leading: Icon(
-                  selected < 0 ? Icons.radio_button_checked : Icons.radio_button_off,
+                  selected < 0
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_off,
                   color: selected < 0 ? Colors.white : Colors.white54,
                 ),
-                title: const Text(
-                  'Off',
-                  style: TextStyle(color: Colors.white),
-                ),
+                title: const Text('Off', style: TextStyle(color: Colors.white)),
                 onTap: () => Navigator.of(context).pop(-1),
               ),
               Flexible(
@@ -893,10 +967,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
         ? _dragValue
         : _position.inMilliseconds.toDouble().clamp(0, maxMs).toDouble();
 
-    final hdrChip = FormatChip(
-      label: _effectiveHdr.label,
-      color: _hdrColor,
-    );
+    final hdrChip = FormatChip(label: _effectiveHdr.label, color: _hdrColor);
     // For Dolby Vision the HDR chip already says "Dolby Vision" (purple); skip
     // the video codec chip so it isn't shown twice.
     final videoCodecLabel = _liveVideoCodec ?? video.videoCodecLabel;
@@ -914,8 +985,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
             metaProfile: video.audioProfile,
           )
         : video.audioCodecLabel;
-    final audioChip =
-        audioChipLabel != null || _liveAudioPassthrough
+    final audioChip = audioChipLabel != null || _liveAudioPassthrough
         ? FormatChip(
             label: _liveAudioPassthrough
                 ? '${audioChipLabel ?? "Audio"} · Passthrough'
@@ -929,12 +999,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
             color: _infoColor,
           )
         : null;
-    final chips = [
-      hdrChip,
-      ?videoChip,
-      ?audioChip,
-      ?resolutionChip,
-    ];
+    final chips = [hdrChip, ?videoChip, ?audioChip, ?resolutionChip];
 
     final videoLayer = _exo != null && _error == null
         ? ExoPlayerView(controller: _exo! as ExoPlayerController)
@@ -974,12 +1039,14 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
             return KeyEventResult.ignored;
           }
           final key = event.logicalKey;
-          final okKey = key == LogicalKeyboardKey.select ||
+          final okKey =
+              key == LogicalKeyboardKey.select ||
               key == LogicalKeyboardKey.enter ||
               key == LogicalKeyboardKey.numpadEnter ||
               key == LogicalKeyboardKey.space ||
               key == LogicalKeyboardKey.gameButtonA;
-          final mediaPlayKey = key == LogicalKeyboardKey.mediaPlay ||
+          final mediaPlayKey =
+              key == LogicalKeyboardKey.mediaPlay ||
               key == LogicalKeyboardKey.mediaPause ||
               key == LogicalKeyboardKey.mediaPlayPause;
 
@@ -1079,249 +1146,310 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
         child: Stack(
           children: [
             Positioned.fill(child: videoLayer),
-          // Full-screen tap catcher on top of the (Android platform) video
-          // layer. Hybrid-composition platform views can swallow touches, so a
-          // plain GestureDetector wrapping the view is unreliable; catching taps
-          // one layer up guarantees the controls always appear on touch.
-          Positioned.fill(
-            child: GestureDetector(
-              behavior: HitTestBehavior.translucent,
-              onTap: _onScreenTap,
-              child: const SizedBox.expand(),
-            ),
-          ),
-          if (_buffering && _backendReady && _error == null)
-            const Center(
-              child: CircularProgressIndicator(color: Colors.white),
-            ),
-          AnimatedSlide(
-            duration: const Duration(milliseconds: 200),
-            offset: _controlsVisible ? Offset.zero : const Offset(0, -1),
-            child: Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.black.withValues(alpha: 0.72),
-                    Colors.black.withValues(alpha: 0.35),
-                    Colors.transparent,
-                  ],
-                ),
+            // Full-screen tap + swipe catcher on top of the (Android platform)
+            // video layer. Hybrid-composition platform views can swallow
+            // touches, so catching gestures one layer up guarantees they always
+            // reach the app. Vertical drags adjust brightness (left half) or
+            // volume (right half); taps toggle controls.
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: _onScreenTap,
+                onVerticalDragStart: _onSwipeDragStart,
+                onVerticalDragUpdate: _onSwipeDragUpdate,
+                onVerticalDragEnd: _onSwipeDragEnd,
+                child: const SizedBox.expand(),
               ),
-              child: SafeArea(
-                bottom: false,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(4, 4, 4, 16),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          _TvControlButton(
-                            onPressed: () => Navigator.of(context).pop(),
-                            icon: const Icon(Icons.arrow_back),
+            ),
+            // Swipe-gesture feedback overlay (brightness / volume).
+            if (_swipeType != null || _swipeOverlayTimer?.isActive == true)
+              Center(
+                child: AnimatedOpacity(
+                  opacity: _swipeType != null ? 1.0 : 0.0,
+                  duration: const Duration(milliseconds: 200),
+                  child: Container(
+                    width: 140,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.65),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          _swipeType == _SwipeType.brightness
+                              ? Icons.brightness_6
+                              : Icons.volume_up,
+                          color: Colors.white,
+                          size: 28,
+                        ),
+                        const SizedBox(height: 8),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(2),
+                          child: LinearProgressIndicator(
+                            value: _swipeCurrentValue,
+                            minHeight: 4,
+                            backgroundColor: Colors.white24,
+                            valueColor: const AlwaysStoppedAnimation(
+                              Colors.white,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          '${(_swipeCurrentValue * 100).round()}%',
+                          style: const TextStyle(
                             color: Colors.white,
-                            onFocusChange: (_) => _showControls(),
-                          ),
-                          const SizedBox(width: 4),
-                          Expanded(
-                            child: Text(
-                              video.title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      if (chips.isNotEmpty) ...[
-                        const SizedBox(height: 4),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 8),
-                          child: SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
-                            child: Row(
-                              children: [
-                                for (final chip in chips)
-                                  Padding(
-                                    padding: const EdgeInsets.only(right: 8),
-                                    child: chip,
-                                  ),
-                              ],
-                            ),
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                       ],
-                    ],
+                    ),
                   ),
                 ),
               ),
-            ),
-          ),
-          AnimatedOpacity(
-            duration: const Duration(milliseconds: 200),
-            opacity: _controlsVisible ? 1 : 0,
-            child: IgnorePointer(
-              ignoring: !_controlsVisible,
-              child: Center(
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.4),
-                    borderRadius: BorderRadius.circular(36),
-                  ),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 6,
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _TvControlButton(
-                        onPressed: !_backendReady
-                            ? null
-                            : () =>
-                                _seekBy(const Duration(seconds: -10)),
-                        iconSize: 40,
-                        icon: const Icon(Icons.replay_10),
-                        color: Colors.white,
-                        onFocusChange: (_) => _showControls(),
-                      ),
-                      const SizedBox(width: 8),
-                      _TvControlButton(
-                        focusNode: _playPauseFocusNode,
-                        onPressed: !_backendReady ? null : _togglePlayPause,
-                        iconSize: 72,
-                        autofocus: true,
-                        icon: Icon(
-                          _completed
-                              ? Icons.replay
-                              : _playing
-                                  ? Icons.pause_circle_filled
-                                  : Icons.play_circle_fill,
-                        ),
-                        color: Colors.white,
-                        onFocusChange: (_) => _showControls(),
-                      ),
-                      const SizedBox(width: 8),
-                      _TvControlButton(
-                        onPressed: !_backendReady
-                            ? null
-                            : () =>
-                                _seekBy(const Duration(seconds: 10)),
-                        iconSize: 40,
-                        icon: const Icon(Icons.forward_10),
-                        color: Colors.white,
-                        onFocusChange: (_) => _showControls(),
-                      ),
-                    ],
-                  ),
-                ),
+            if (_buffering && _backendReady && _error == null)
+              const Center(
+                child: CircularProgressIndicator(color: Colors.white),
               ),
-            ),
-          ),
-          AnimatedSlide(
-            duration: const Duration(milliseconds: 200),
-            offset: _controlsVisible ? Offset.zero : const Offset(0, 1),
-            child: Align(
-              alignment: Alignment.bottomCenter,
+            AnimatedSlide(
+              duration: const Duration(milliseconds: 200),
+              offset: _controlsVisible ? Offset.zero : const Offset(0, -1),
               child: Container(
-                width: double.infinity,
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                     colors: [
-                      Colors.transparent,
-                      Colors.black.withValues(alpha: 0.35),
                       Colors.black.withValues(alpha: 0.72),
+                      Colors.black.withValues(alpha: 0.35),
+                      Colors.transparent,
                     ],
                   ),
                 ),
                 child: SafeArea(
-                  top: false,
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxHeight: MediaQuery.sizeOf(context).height * 0.5,
-                    ),
-                    child: SingleChildScrollView(
-                      reverse: true,
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(8, 2, 8, 2),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
+                  bottom: false,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(4, 4, 4, 16),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
                           children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text(
-                                  _formatDuration(_dragging
-                                      ? Duration(
-                                          milliseconds: _dragValue.round(),
-                                        )
-                                      : _position),
-                                  style: const TextStyle(color: Colors.white),
-                                ),
-                                Text(
-                                  _formatDuration(total),
-                                  style: const TextStyle(color: Colors.white),
-                                ),
-                              ],
-                            ),
-                            _BufferedSeekBar(
-                              value: sliderValue,
-                              max: maxMs,
-                              bufferedMs: _buffered.inMilliseconds
-                                  .toDouble()
-                                  .clamp(0, maxMs),
-                              onChangeStart: _onSeekStart,
-                              onChanged: _onSeekUpdate,
-                              onChangeEnd: _onSeekEnd,
+                            _TvControlButton(
+                              onPressed: () => Navigator.of(context).pop(),
+                              icon: const Icon(Icons.arrow_back),
+                              color: Colors.white,
                               onFocusChange: (_) => _showControls(),
                             ),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                _TvControlButton(
-                                  onPressed: _openAudioTrackSheet,
-                                  icon: const Icon(Icons.graphic_eq),
+                            const SizedBox(width: 4),
+                            Expanded(
+                              child: Text(
+                                video.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
                                   color: Colors.white,
-                                  onFocusChange: (_) => _showControls(),
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
                                 ),
-                                _TvControlButton(
-                                  onPressed: _openSubtitleSheet,
-                                  icon: Icon(
-                                    _subtitleOn
-                                        ? Icons.closed_caption
-                                        : Icons.closed_caption_off,
-                                  ),
-                                  color: _subtitleOn ? Colors.white : Colors.white54,
-                                  onFocusChange: (_) => _showControls(),
-                                ),
-                                _TvControlButton(
-                                  onPressed: _openFitModeSheet,
-                                  icon: const Icon(Icons.tune),
-                                  color: Colors.white,
-                                  onFocusChange: (_) => _showControls(),
-                                ),
-                                if (!_isTv)
-                                  _TvControlButton(
-                                    onPressed: _toggleFullscreen,
-                                    icon: Icon(
-                                      _fullscreen
-                                          ? Icons.fullscreen_exit
-                                          : Icons.fullscreen,
-                                    ),
-                                    color: Colors.white,
-                                  ),
-                              ],
+                              ),
                             ),
                           ],
+                        ),
+                        if (chips.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            child: SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: Row(
+                                children: [
+                                  for (final chip in chips)
+                                    Padding(
+                                      padding: const EdgeInsets.only(right: 8),
+                                      child: chip,
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            AnimatedOpacity(
+              duration: const Duration(milliseconds: 200),
+              opacity: _controlsVisible ? 1 : 0,
+              child: IgnorePointer(
+                ignoring: !_controlsVisible,
+                child: Center(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.4),
+                      borderRadius: BorderRadius.circular(36),
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _TvControlButton(
+                          onPressed: !_backendReady
+                              ? null
+                              : () => _seekBy(const Duration(seconds: -10)),
+                          iconSize: 40,
+                          icon: const Icon(Icons.replay_10),
+                          color: Colors.white,
+                          onFocusChange: (_) => _showControls(),
+                        ),
+                        const SizedBox(width: 8),
+                        _TvControlButton(
+                          focusNode: _playPauseFocusNode,
+                          onPressed: !_backendReady ? null : _togglePlayPause,
+                          iconSize: 72,
+                          autofocus: true,
+                          icon: Icon(
+                            _completed
+                                ? Icons.replay
+                                : _playing
+                                ? Icons.pause_circle_filled
+                                : Icons.play_circle_fill,
+                          ),
+                          color: Colors.white,
+                          onFocusChange: (_) => _showControls(),
+                        ),
+                        const SizedBox(width: 8),
+                        _TvControlButton(
+                          onPressed: !_backendReady
+                              ? null
+                              : () => _seekBy(const Duration(seconds: 10)),
+                          iconSize: 40,
+                          icon: const Icon(Icons.forward_10),
+                          color: Colors.white,
+                          onFocusChange: (_) => _showControls(),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            AnimatedSlide(
+              duration: const Duration(milliseconds: 200),
+              offset: _controlsVisible ? Offset.zero : const Offset(0, 1),
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: Container(
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Colors.transparent,
+                        Colors.black.withValues(alpha: 0.35),
+                        Colors.black.withValues(alpha: 0.72),
+                      ],
+                    ),
+                  ),
+                  child: SafeArea(
+                    top: false,
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxHeight: MediaQuery.sizeOf(context).height * 0.5,
+                      ),
+                      child: SingleChildScrollView(
+                        reverse: true,
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(8, 2, 8, 2),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    _formatDuration(
+                                      _dragging
+                                          ? Duration(
+                                              milliseconds: _dragValue.round(),
+                                            )
+                                          : _position,
+                                    ),
+                                    style: const TextStyle(color: Colors.white),
+                                  ),
+                                  Text(
+                                    _formatDuration(total),
+                                    style: const TextStyle(color: Colors.white),
+                                  ),
+                                ],
+                              ),
+                              _BufferedSeekBar(
+                                value: sliderValue,
+                                max: maxMs,
+                                bufferedMs: _buffered.inMilliseconds
+                                    .toDouble()
+                                    .clamp(0, maxMs),
+                                onChangeStart: _onSeekStart,
+                                onChanged: _onSeekUpdate,
+                                onChangeEnd: _onSeekEnd,
+                                onFocusChange: (_) => _showControls(),
+                              ),
+                              Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  _TvControlButton(
+                                    onPressed: _openAudioTrackSheet,
+                                    icon: const Icon(Icons.graphic_eq),
+                                    color: Colors.white,
+                                    onFocusChange: (_) => _showControls(),
+                                  ),
+                                  _TvControlButton(
+                                    onPressed: _openSubtitleSheet,
+                                    icon: Icon(
+                                      _subtitleOn
+                                          ? Icons.closed_caption
+                                          : Icons.closed_caption_off,
+                                    ),
+                                    color: _subtitleOn
+                                        ? Colors.white
+                                        : Colors.white54,
+                                    onFocusChange: (_) => _showControls(),
+                                  ),
+                                  _TvControlButton(
+                                    onPressed: _openFitModeSheet,
+                                    icon: const Icon(Icons.tune),
+                                    color: Colors.white,
+                                    onFocusChange: (_) => _showControls(),
+                                  ),
+                                  if (!_isTv)
+                                    _TvControlButton(
+                                      onPressed: _toggleFullscreen,
+                                      icon: Icon(
+                                        _fullscreen
+                                            ? Icons.fullscreen_exit
+                                            : Icons.fullscreen,
+                                      ),
+                                      color: Colors.white,
+                                    ),
+                                ],
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ),
@@ -1329,8 +1457,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                 ),
               ),
             ),
-          ),
-        ],
+          ],
         ),
       ),
     );
@@ -1419,36 +1546,21 @@ class _BufferedSeekBarState extends State<_BufferedSeekBar> {
         }
         return KeyEventResult.ignored;
       },
-      child: AnimatedScale(
-        scale: _focusNode.hasFocus ? 1.05 : 1.0,
+      child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(8),
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(8),
+          color: _focusNode.hasFocus
+              ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.12)
+              : Colors.transparent,
+          border: Border.all(
             color: _focusNode.hasFocus
-                ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.18)
+                ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.7)
                 : Colors.transparent,
-            border: Border.all(
-              color: _focusNode.hasFocus
-                  ? Theme.of(context).colorScheme.primary
-                  : Colors.transparent,
-              width: 3,
-            ),
-            boxShadow: _focusNode.hasFocus
-                ? [
-                    BoxShadow(
-                      color: Theme.of(context)
-                          .colorScheme
-                          .primary
-                          .withValues(alpha: 0.4),
-                      blurRadius: 12,
-                      spreadRadius: 2,
-                    ),
-                  ]
-                : null,
+            width: 2,
           ),
+        ),
         child: GestureDetector(
           onHorizontalDragStart: (details) {
             final box = context.findRenderObject() as RenderBox?;
@@ -1567,7 +1679,6 @@ class _BufferedSeekBarState extends State<_BufferedSeekBar> {
           ),
         ),
       ),
-      ),
     );
   }
 }
@@ -1605,7 +1716,9 @@ Widget _tvListTile({
             margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(10),
-              color: focused ? primary.withValues(alpha: 0.3) : Colors.transparent,
+              color: focused
+                  ? primary.withValues(alpha: 0.3)
+                  : Colors.transparent,
               border: Border.all(
                 color: focused ? primary : Colors.transparent,
                 width: 3,
@@ -1702,14 +1815,14 @@ class _TvControlButtonState extends State<_TvControlButton> {
           final primary = Theme.of(context).colorScheme.primary;
 
           return AnimatedScale(
-            scale: focused ? 1.25 : 1.0,
+            scale: focused ? 1.12 : 1.0,
             duration: const Duration(milliseconds: 150),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 150),
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 color: focused
-                    ? primary.withValues(alpha: 0.4)
+                    ? primary.withValues(alpha: 0.35)
                     : Colors.transparent,
                 border: Border.all(
                   color: focused ? primary : Colors.transparent,
@@ -1718,9 +1831,9 @@ class _TvControlButtonState extends State<_TvControlButton> {
                 boxShadow: focused
                     ? [
                         BoxShadow(
-                          color: primary.withValues(alpha: 0.4),
-                          blurRadius: 12,
-                          spreadRadius: 2,
+                          color: primary.withValues(alpha: 0.35),
+                          blurRadius: 9,
+                          spreadRadius: 1,
                         ),
                       ]
                     : null,

@@ -4,6 +4,8 @@ import '../models/video_item.dart';
 import '../services/jellyfin_client.dart';
 import '../services/library_folders.dart';
 import '../services/tmdb_client.dart';
+import '../widgets/tv_overscan.dart';
+import '../widgets/tv_tile.dart';
 import 'tmd_details_screen.dart';
 
 /// Jellyfin / Emby browser: saved + discovered servers -> libraries -> folders
@@ -410,7 +412,7 @@ class _JellyfinScreenState extends State<JellyfinScreen> {
               ],
             )
           : null,
-      body: _body(context),
+      body: TvOverscan(child: _body(context)),
     );
   }
 
@@ -498,7 +500,7 @@ class _JellyfinScreenState extends State<JellyfinScreen> {
         children: [
           const _SectionHeader('Saved servers'),
           for (final server in _servers)
-            ListTile(
+            TvTile(
               leading: const Icon(Icons.live_tv),
               title: Text(server.name, maxLines: 1, overflow: TextOverflow.ellipsis),
               subtitle: Text(
@@ -525,7 +527,7 @@ class _JellyfinScreenState extends State<JellyfinScreen> {
             ),
           if (_servers.isNotEmpty || _discovered.isNotEmpty)
             _SectionHeader('On this network'),
-          ListTile(
+          TvTile(
             dense: true,
             leading: const Icon(Icons.wifi_find, size: 20),
             title: Text(_scanning ? 'Scanning\u2026' : 'Scan local network'),
@@ -536,10 +538,11 @@ class _JellyfinScreenState extends State<JellyfinScreen> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : null,
-            onTap: _scanning ? null : _scanNetwork,
+            onTap: _scanning ? () {} : _scanNetwork,
+            enabled: !_scanning,
           ),
           for (final server in _discovered)
-            ListTile(
+            TvTile(
               leading: const Icon(Icons.radar),
               title: Text(server.name, maxLines: 1, overflow: TextOverflow.ellipsis),
               subtitle: Text(server.url, maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -594,7 +597,7 @@ class _JellyfinTile extends StatelessWidget {
     final color = item.isFolder ? colorScheme.primary : colorScheme.secondary;
     final subtitle = item.isFolder ? null : item.durationLabel;
     final posterUrl = posterUrlOf(tmdbMeta);
-    return ListTile(
+    return TvTile(
       leading: posterUrl != null
           ? _Poster(posterUrl: posterUrl)
           : Icon(icon, color: color),

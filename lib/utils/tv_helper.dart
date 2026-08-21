@@ -55,3 +55,13 @@ Future<bool> isAudioPassthroughEnabled() async {
   final prefs = await SharedPreferences.getInstance();
   return prefs.getBool(kAudioPassthroughKey) ?? false;
 }
+
+/// SharedPreferences key for the swipe-gestures toggle.
+const kSwipeGesturesKey = 'dreamplayer.swipeGestures';
+
+/// Whether vertical swipe gestures (brightness/volume) are enabled in the
+/// player. Default true (on for phones/tablets, never fires on TV).
+Future<bool> areSwipeGesturesEnabled() async {
+  final prefs = await SharedPreferences.getInstance();
+  return prefs.getBool(kSwipeGesturesKey) ?? true;
+}

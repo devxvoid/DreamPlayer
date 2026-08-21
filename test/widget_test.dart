@@ -26,6 +26,11 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Support'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('About'),
+      200,
+      scrollable: find.byType(Scrollable).last,
+    );
     expect(find.text('About'), findsOneWidget);
     await tester.scrollUntilVisible(
       find.text('Version'),

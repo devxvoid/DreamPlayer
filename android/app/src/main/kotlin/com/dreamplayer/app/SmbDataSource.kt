@@ -1,5 +1,6 @@
 package com.dreamplayer.app
 
+import android.app.ActivityManager
 import android.content.Context
 import android.net.Uri
 import android.util.Log
@@ -29,8 +30,65 @@ class SmbDataSourceFactory(private val context: Context) : DataSource.Factory {
     override fun createDataSource(): DataSource = SmbDataSource(context)
 }
 
+/// Heap-aware buffer sizing, shared by [SmbDataSource] (ring + prefetch temps)
+/// and the Media3 [DefaultLoadControl] target in ExoPlayerView. The Fire TV
+/// Stick 4K has a 192 MB app heap (`dalvik.vm.heapgrowthlimit=192m`); the old
+/// fixed budget — 96 MiB ring + 4×4 MiB temps + a 96 MiB sample-queue target —
+/// exhausted it mid-playback and surfaced as an "io unspecified" source error
+/// (OOM inside DefaultAllocator.allocate). Scale everything by
+/// ActivityManager.memoryClass; at the stick's ~1 MB/s SMB fill rate even a
+/// 24 MiB ring is ~24 s of read-ahead.
+internal object BufferTuning {
+    var ringCapacityBytes: Int = 96 * 1024 * 1024
+        private set
+    var chunkBytes: Int = 4 * 1024 * 1024
+        private set
+    var prefetchThreads: Int = 4
+        private set
+    var media3TargetBytes: Int = 96 * 1024 * 1024
+        private set
+
+    @Volatile private var tuned = false
+
+    fun tune(context: Context) {
+        if (tuned) return
+        synchronized(this) {
+            if (tuned) return
+            val am = context.applicationContext
+                .getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            if (am != null) {
+                val heapMb = am.memoryClass
+                val lowRam = am.isLowRamDevice
+                when {
+                    lowRam || heapMb <= 192 -> {
+                        ringCapacityBytes = 24 * 1024 * 1024
+                        chunkBytes = 2 * 1024 * 1024
+                        prefetchThreads = 3
+                        media3TargetBytes = 24 * 1024 * 1024
+                    }
+                    heapMb < 256 -> {
+                        ringCapacityBytes = 48 * 1024 * 1024
+                        media3TargetBytes = 48 * 1024 * 1024
+                    }
+                }
+                Log.i(
+                    "BufferTuning",
+                    "heap=${heapMb}MB lowRam=$lowRam -> ring=${ringCapacityBytes / 1048576}MB " +
+                        "chunk=${chunkBytes / 1048576}MB threads=$prefetchThreads " +
+                        "media3Target=${media3TargetBytes / 1048576}MB",
+                )
+            }
+            tuned = true
+        }
+    }
+}
+
 @UnstableApi
 class SmbDataSource(private val context: Context) : BaseDataSource(true) {
+
+    init {
+        BufferTuning.tune(context)
+    }
 
     // ---- SMB connection state (guarded by smbLock) ----
     private var file: SmbFile? = null
@@ -133,7 +191,7 @@ class SmbDataSource(private val context: Context) : BaseDataSource(true) {
                 killPrefetchersLocked()
 
                 val remaining = size - dataSpec.position
-                if (remaining in 1 until SMB_CHUNK) {
+                if (remaining in 1 until BufferTuning.chunkBytes) {
                     // Near-EOF: fill synchronously so the extractor can
                     // probe the tail without waiting for prefetch threads.
                     ensureRingCapacity()
@@ -146,7 +204,7 @@ class SmbDataSource(private val context: Context) : BaseDataSource(true) {
 
             // Near-EOF synchronous fill (outside ringLock for SMB I/O)
             val remaining = size - dataSpec.position
-            if (remaining in 1 until SMB_CHUNK) {
+            if (remaining in 1 until BufferTuning.chunkBytes) {
                 val tmp = ByteArray(remaining.toInt())
                 var off = 0
                 var left = remaining
@@ -315,8 +373,10 @@ class SmbDataSource(private val context: Context) : BaseDataSource(true) {
 
     private fun ensureRingCapacity() {
         if (ring != null && ringSize > 0) return
-        val target = minOf(BUFFER_CAPACITY.toLong(), maxOf(MIN_BUFFER_CAPACITY.toLong(), fileSize))
-            .toInt()
+        val target = minOf(
+            BufferTuning.ringCapacityBytes.toLong(),
+            maxOf(MIN_BUFFER_CAPACITY.toLong(), fileSize),
+        ).toInt()
         ring = ByteArray(target)
         ringSize = target
         Log.i(TAG, "ring allocated: ${ringSize / (1024 * 1024)} MiB")
@@ -338,7 +398,7 @@ class SmbDataSource(private val context: Context) : BaseDataSource(true) {
     }
 
     private fun startPrefetchers() {
-        for (i in 0 until PREFETCH_THREADS) {
+        for (i in 0 until BufferTuning.prefetchThreads) {
             val handle = if (i == 0) null else openSecondaryHandle()
             val t = Thread { prefetchLoop(prefetchGen, i, handle) }
             t.isDaemon = true
@@ -346,14 +406,14 @@ class SmbDataSource(private val context: Context) : BaseDataSource(true) {
             t.start()
             prefetchers.add(t)
         }
-        Log.i(TAG, "started $PREFETCH_THREADS prefetch threads")
+        Log.i(TAG, "started ${BufferTuning.prefetchThreads} prefetch threads")
     }
 
     private fun prefetchLoop(gen: Long, threadIdx: Int, secondaryHandle: SmbRandomAccessFile?) {
         // Per-thread temp buffer — SMB reads go here first, then get copied
         // into the ring inside ringLock (after epoch check). This prevents
         // stale writes from a killed/restarted thread from corrupting the ring.
-        val tmpBuf = ByteArray(SMB_CHUNK)
+        val tmpBuf = ByteArray(BufferTuning.chunkBytes)
 
         var lastHeartbeat = System.currentTimeMillis()
         var bytesSinceHeartbeat = 0L
@@ -380,7 +440,7 @@ class SmbDataSource(private val context: Context) : BaseDataSource(true) {
                     val room = ringSize.toLong() - (nextWritePos - bufStart)
                     if (room > 0) {
                         readAt = nextWritePos
-                        readLen = minOf(room, SMB_CHUNK.toLong(), tmpBuf.size.toLong()).toInt()
+                        readLen = minOf(room, BufferTuning.chunkBytes.toLong(), tmpBuf.size.toLong()).toInt()
                         readLen = minOf(readLen, ringSize - idx(readAt))
                         nextWritePos = readAt + readLen
                         epoch = ringEpoch
@@ -488,9 +548,6 @@ class SmbDataSource(private val context: Context) : BaseDataSource(true) {
 
     companion object {
         private const val TAG = "SmbDataSource"
-        private const val BUFFER_CAPACITY = 96 * 1024 * 1024
         private const val MIN_BUFFER_CAPACITY = 8 * 1024 * 1024
-        private const val SMB_CHUNK = 4 * 1024 * 1024
-        private const val PREFETCH_THREADS = 4
     }
 }

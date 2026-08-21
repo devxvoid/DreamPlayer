@@ -6,6 +6,8 @@ import '../services/file_browser.dart';
 import '../services/jellyfin_client.dart';
 import '../services/library_folders.dart';
 import '../services/tmdb_client.dart';
+import '../widgets/tv_overscan.dart';
+import '../widgets/tv_tile.dart';
 import 'tmd_details_screen.dart';
 
 /// The contents of a library folder. For a TV-show folder this is the episode
@@ -265,7 +267,7 @@ class _FolderScreenState extends State<FolderScreen> {
           onPressed: _goUp,
         ),
       ),
-      body: _body(context),
+      body: TvOverscan(child: _body(context)),
     );
   }
 
@@ -438,7 +440,7 @@ class _JellyfinFolderTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     if (item.isFolder) {
-      return ListTile(
+      return TvTile(
         leading: Icon(Icons.folder, color: colorScheme.primary),
         title: Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis),
         trailing: const Icon(Icons.chevron_right),
@@ -453,7 +455,7 @@ class _JellyfinFolderTile extends StatelessWidget {
 
     final posterUrl = posterUrlOf(tmdbMeta);
 
-    return ListTile(
+    return TvTile(
       leading: posterUrl != null
           ? _Poster(posterUrl: posterUrl)
           : Icon(
@@ -496,7 +498,7 @@ class _FolderTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     if (entry.isDirectory) {
-      return ListTile(
+      return TvTile(
         leading: Icon(Icons.folder, color: colorScheme.primary),
         title: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis),
         trailing: const Icon(Icons.chevron_right),
@@ -513,7 +515,7 @@ class _FolderTile extends StatelessWidget {
 
     final posterUrl = posterUrlOf(tmdbMeta);
 
-    return ListTile(
+    return TvTile(
       leading: posterUrl != null
           ? _Poster(posterUrl: posterUrl)
           : Icon(
