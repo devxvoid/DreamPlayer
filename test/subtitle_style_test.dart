@@ -125,5 +125,19 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
     });
+
+    testWidgets('landscape short viewport does not throw (clamp regression)', (
+      tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({});
+      // Landscape phone: 26% of 360 < the old 96px floor triggered
+      // ArgumentError from clamp().
+      tester.view.physicalSize = const Size(800, 360);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(const MaterialApp(home: SubtitleSettingsScreen()));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
   });
 }
