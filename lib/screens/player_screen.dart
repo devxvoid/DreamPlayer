@@ -7,8 +7,6 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../models/hdr_format.dart';
 import '../models/video_item.dart';
-import '../services/cast_service.dart';
-import '../services/dlna_service.dart';
 import '../services/continue_watching.dart';
 import '../services/exo_player.dart';
 import '../services/jellyfin_client.dart';
@@ -92,277 +90,6 @@ class _PlayerScreenState extends State<PlayerScreen>
   bool _transcodeRetried = false;
   bool _transcodeActive = false;
   String? _transcodeServerUrl;
-
-  /// Casting session state. While [_casting], transport controls drive the
-  /// receiver (Google Cast or DLNA) and native ExoPlayer events are ignored.
-  bool _casting = false;
-  bool _castViaDlna = false;
-  String? _castDeviceName;
-  StreamSubscription<CastMediaStatus>? _castSub;
-
-  /// Hands the current video to a Google Cast [device].
-  Future<void> _startCasting(CastDevice device) async {
-    final uri = _current.uri;
-    if (uri == null || !CastService.isSourceCastable(_current)) return;
-    final startPos = _position;
-    _exo?.pause();
-    try {
-      await CastService.instance.connectAndLoad(
-        device: device,
-        url: uri,
-        title: _current.title,
-        startAt: startPos,
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(CastService.friendlyError(e))),
-      );
-      return;
-    }
-    if (!mounted) return;
-    _castDeviceName = device.name;
-    _castViaDlna = false;
-    _completed = false;
-    _error = null;
-    await _castSub?.cancel();
-    _castSub = CastService.instance.statusStream.listen(_onCastStatus);
-    setState(() => _casting = true);
-    debugPrint('cast: now casting ${_current.title} → ${device.name}');
-  }
-
-  /// Hands the current video to a DLNA renderer [device].
-  Future<void> _startDlnaCasting(DlnaDevice device) async {
-    final uri = _current.uri;
-    if (uri == null || !CastService.isSourceCastable(_current)) return;
-    final startPos = _position;
-    _exo?.pause();
-    try {
-      await DlnaService.instance.connectAndLoad(
-        device: device,
-        url: uri,
-        title: _current.title,
-        startAt: startPos,
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(DlnaService.friendlyError(e))),
-      );
-      return;
-    }
-    if (!mounted) return;
-    _castDeviceName = device.name;
-    _castViaDlna = true;
-    _completed = false;
-    _error = null;
-    await _castSub?.cancel();
-    _castSub = DlnaService.instance.statusStream.listen(_onCastStatus);
-    setState(() => _casting = true);
-    debugPrint('dlna: now casting ${_current.title} → ${device.name}');
-  }
-
-  void _onCastStatus(CastMediaStatus s) {
-    if (!mounted || !_casting) return;
-    setState(() {
-      _playing = s.playing;
-      _buffering = s.buffering && !s.ended;
-      _completed = s.ended;
-      _position = s.position;
-      if (s.duration > Duration.zero) _duration = s.duration;
-    });
-    if (s.ended) {
-      final key = _resumeKey;
-      if (key.isNotEmpty && !_inTests) {
-        ResumeStore.clear(key);
-        ContinueWatchingStore.remove(key);
-      }
-      _restartHideTimer();
-    }
-  }
-
-  /// Leaves casting mode. When [resumeLocal] the video reloads locally at
-  /// the receiver's last position; otherwise the TV keeps playing on its own
-  /// (the sender session just detaches).
-  Future<void> _stopCasting({required bool resumeLocal}) async {
-    final castPos = _position;
-    await _castSub?.cancel();
-    _castSub = null;
-    if (_castViaDlna) {
-      await DlnaService.instance.disconnect(stopMedia: resumeLocal);
-    } else {
-      await CastService.instance.disconnect(stopMedia: resumeLocal);
-    }
-    // Allow Jellyfin transcode fallback to retry when resuming locally.
-    _transcodeRetried = false;
-    if (!mounted) return;
-    if (!resumeLocal) {
-      setState(() {
-        _casting = false;
-        _castViaDlna = false;
-      });
-      return;
-    }
-    setState(() {
-      _casting = false;
-      _castViaDlna = false;
-      _completed = false;
-      _playing = false;
-      _buffering = true;
-    });
-    await _reopenAt(
-      castPos,
-      _duration,
-    );
-  }
-
-  /// Device picker / session sheet for the top-bar cast button.
-  void _showCastSheet() {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: const Color(0xFF14181D),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (sheetContext) {
-        if (_casting) {
-          return SafeArea(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                ListTile(
-                  leading: const Icon(Icons.cast_connected,
-                      color: Colors.white70),
-                  title: Text('Casting to $_castDeviceName',
-                      style: const TextStyle(color: Colors.white)),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.tv, color: Colors.white70),
-                  title: const Text('Leave playing on the TV',
-                      style: TextStyle(color: Colors.white)),
-                  onTap: () {
-                    Navigator.pop(sheetContext);
-                    unawaited(_stopCasting(resumeLocal: false));
-                  },
-                ),
-                ListTile(
-                  leading:
-                      const Icon(Icons.smartphone, color: Colors.white70),
-                  title: const Text('Resume on this device',
-                      style: TextStyle(color: Colors.white)),
-                  onTap: () {
-                    Navigator.pop(sheetContext);
-                    unawaited(_stopCasting(resumeLocal: true));
-                  },
-                ),
-              ],
-            ),
-          );
-        }
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Padding(
-                padding: EdgeInsets.all(16),
-                child: Row(
-                  children: [
-                    Icon(Icons.cast, color: Colors.white70),
-                    SizedBox(width: 12),
-                    Text('Cast to',
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600)),
-                  ],
-                ),
-              ),
-              FutureBuilder<List<List<dynamic>>>(
-                future: Future.wait([
-                  CastService.instance.discover(),
-                  DlnaService.instance.discover(),
-                ]),
-                builder: (context, snap) {
-                  if (snap.connectionState != ConnectionState.done) {
-                    return const Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Center(
-                          child: CircularProgressIndicator(strokeWidth: 2)),
-                    );
-                  }
-                  final castDevices =
-                      (snap.data?[0] as List<CastDevice>?) ?? const [];
-                  final dlnaDevices =
-                      (snap.data?[1] as List<DlnaDevice>?) ?? const [];
-                  if (castDevices.isEmpty && dlnaDevices.isEmpty) {
-                    return const Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Text(
-                        'No cast devices found on this network.',
-                        style: TextStyle(color: Colors.white54),
-                      ),
-                    );
-                  }
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (castDevices.isNotEmpty) ...[
-                        const Padding(
-                          padding: EdgeInsets.fromLTRB(16, 4, 16, 4),
-                          child: Text('Google Cast',
-                              style: TextStyle(
-                                  color: Colors.white38, fontSize: 12)),
-                        ),
-                        for (final d in castDevices)
-                          ListTile(
-                            leading:
-                                const Icon(Icons.cast, color: Colors.white70),
-                            title: Text(d.name,
-                                style:
-                                    const TextStyle(color: Colors.white)),
-                            subtitle: Text(d.host,
-                                style:
-                                    const TextStyle(color: Colors.white38)),
-                            onTap: () {
-                              Navigator.pop(sheetContext);
-                              unawaited(_startCasting(d));
-                            },
-                          ),
-                      ],
-                      if (dlnaDevices.isNotEmpty) ...[
-                        const Padding(
-                          padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
-                          child: Text('DLNA / UPnP',
-                              style: TextStyle(
-                                  color: Colors.white38, fontSize: 12)),
-                        ),
-                        for (final d in dlnaDevices)
-                          ListTile(
-                            leading: const Icon(Icons.live_tv,
-                                color: Colors.white70),
-                            title: Text(d.name,
-                                style:
-                                    const TextStyle(color: Colors.white)),
-                            subtitle: Text(d.host,
-                                style:
-                                    const TextStyle(color: Colors.white38)),
-                            onTap: () {
-                              Navigator.pop(sheetContext);
-                              unawaited(_startDlnaCasting(d));
-                            },
-                          ),
-                      ],
-                    ],
-                  );
-                },
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
 
   String? _liveVideoCodec;
   String? _liveVideoCodecRaw;
@@ -685,9 +412,6 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   void _onExoEvent(ExoPlayerEvent e) {
-    // While casting, the receiver owns playback: ignore native position /
-    // state churn so the UI reflects the TV, not the paused local player.
-    if (_casting) return;
     final wasPlaying = _playing;
     final wasBuffering = _buffering;
     _playing = e.playing;
@@ -871,14 +595,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     _swipeOverlayTimer?.cancel();
     _saveResume(_position);
     _stopTranscodeJob();
-    if (_casting) {
-      _castSub?.cancel();
-      if (_castViaDlna) {
-        unawaited(DlnaService.instance.disconnect(stopMedia: false));
-      } else {
-        unawaited(CastService.instance.disconnect(stopMedia: false));
-      }
-    }
     // Restore system brightness so it doesn't stick after the player closes.
     if (Platform.isIOS && _iosOriginalBrightness >= 0) {
       _exo?.setBrightness(_iosOriginalBrightness);
@@ -1107,15 +823,6 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   Future<void> _openAudioTrackSheet() async {
     _showControls();
-    if (_casting) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text(
-                'Audio track switch isn’t available while casting — stop casting to change audio, then cast again.')),
-      );
-      return;
-    }
     final tracks = _audioTracks;
     if (tracks.isEmpty) return;
     final selected = _selectedAudioTrackIndex;
@@ -1198,15 +905,6 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// plus auto-paired sidecar files) plus an Off option.
   Future<void> _openSubtitleSheet() async {
     _showControls();
-    if (_casting) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text(
-                'Subtitles aren’t available while casting yet — local playback only. Burn-in via Jellyfin transcoding is planned.')),
-      );
-      return;
-    }
     final tracks = _subtitleTracks;
     if (tracks.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1350,15 +1048,6 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   void _seekBy(Duration delta) {
-    if (_casting) {
-      if (_castViaDlna) {
-        unawaited(DlnaService.instance.seekTo(_position + delta));
-      } else {
-        unawaited(CastService.instance.seekTo(_position + delta));
-      }
-      _showControls();
-      return;
-    }
     _exo?.seekTo(_position + delta);
     _showControls();
   }
@@ -1377,30 +1066,13 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   void _onSeekEnd(double value) {
     final target = Duration(milliseconds: value.round());
-    if (_casting) {
-      if (_castViaDlna) {
-        unawaited(DlnaService.instance.seekTo(target));
-      } else {
-        unawaited(CastService.instance.seekTo(target));
-      }
-    } else {
-      _exo?.seekTo(target);
-    }
+    _exo?.seekTo(target);
     _dragging = false;
     _dragValue = value;
     _showControls();
   }
 
   void _togglePlayPause() {
-    if (_casting) {
-      if (_castViaDlna) {
-        unawaited(DlnaService.instance.togglePlayPause());
-      } else {
-        unawaited(CastService.instance.togglePlayPause());
-      }
-      _showControls();
-      return;
-    }
     final exo = _exo;
     if (exo == null) return;
     if (_completed) {
@@ -1540,67 +1212,44 @@ class _PlayerScreenState extends State<PlayerScreen>
         : null;
     final chips = [hdrChip, ?videoChip, ?audioChip, ?resolutionChip];
 
-    final videoLayer = _casting
-        ? Container(
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [Color(0xFF1B2A41), Colors.black],
-              ),
-            ),
-            child: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.cast_connected,
-                      size: 84, color: Colors.white54),
-                  const SizedBox(height: 12),
-                  Text(
-                    'Casting to $_castDeviceName',
-                    style: const TextStyle(
-                        color: Colors.white70, fontSize: 15),
-                  ),
-                  if (_buffering)
-                    const Padding(
-                      padding: EdgeInsets.only(top: 16),
-                      child: SizedBox(
-                        width: 22,
-                        height: 22,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          )
-        : _exo != null && _error == null
+    // IMPORTANT: keep the widget-tree shape stable across casting state.
+    // The platform view must ALWAYS be mounted at the same slot — swapping
+    // it for a placeholder (or moving it under a conditional branch)
+    // recreates the native view, releases ExoPlayer mid-open and breaks
+    // "resume on this device". The casting overlay is an extra sibling
+    // stacked ON TOP; adding/removing it doesn't touch the player's slot.
+    final videoLayer = Stack(
+      fit: StackFit.expand,
+      children: [
+        _exo != null && _error == null
             ? ExoPlayerView(controller: _exo! as ExoPlayerController)
             : Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [colorScheme.primaryContainer, Colors.black],
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [colorScheme.primaryContainer, Colors.black],
+                  ),
+                ),
+                child: Center(
+                  child: _error != null
+                      ? Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Text(
+                            _error!,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(color: Colors.white70),
+                          ),
+                        )
+                      : const Icon(
+                          Icons.movie_filter,
+                          size: 96,
+                          color: Colors.white24,
+                        ),
+                ),
               ),
-            ),
-            child: Center(
-              child: _error != null
-                  ? Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: Text(
-                        _error!,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(color: Colors.white70),
-                      ),
-                    )
-                  : const Icon(
-                      Icons.movie_filter,
-                      size: 96,
-                      color: Colors.white24,
-                    ),
-            ),
-          );
+      ],
+    );
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -1853,19 +1502,6 @@ class _PlayerScreenState extends State<PlayerScreen>
                                 ),
                               ),
                             ),
-                            if (!_isTv &&
-                                CastService.isSourceCastable(video))
-                              IconButton(
-                                tooltip: 'Cast',
-                                onPressed: _showCastSheet,
-                                color: Colors.white,
-                                icon: Icon(
-                                  _casting
-                                      ? Icons.cast_connected
-                                      : Icons.cast,
-                                  size: 22,
-                                ),
-                              ),
                           ],
                         ),
                         if (chips.isNotEmpty) ...[

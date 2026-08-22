@@ -524,18 +524,6 @@ Run DreamPlayer on Apple TV as a real 10-foot app. **Status: SHIPPED as alpha in
 2. 10-foot pass: apply `TvOverscan` on tvOS, hide the dead picker tiles, focus polish.
 3. Longer term: TestFlight (paid account removes the Mac requirement for testers).
 
-### Casting (Google Cast / DLNA / AirPlay) — researched 2026-08-21, not started
-
-Cast videos so the **TV fetches and plays the file itself** (sender hands over a URL; receiver decodes). Key insight: our sources split cleanly by URL-readiness.
-
-**Phased plan:**
-1. **Phase 1 — Google Cast on Android, network sources only**: pure-Dart `cast` package (mDNS `_googlecast._tcp` discovery, TLS :8009 protobuf). Jellyfin/WebDAV/CX-proxy URLs are already LAN-reachable → hand them over directly. Smallest surface, biggest wow.
-2. **Phase 2 — DLNA/UPnP renderer targeting**: SSDP `M-SEARCH` + SOAP `AVTransport.SetAVTransportURI`. Unlocks Samsung Tizen / LG webOS / Xbox / older TVs with zero vendor SDKs (`dlna_dart` exists).
-3. **Phase 3 — in-app HTTP server for local files**: Dart `HttpServer` bound to the Wi-Fi IP serving byte-ranges (same pattern as CX's loopback proxy we already parse). Makes storage/Documents/SMB files castable everywhere.
-4. **Phase 4 — AirPlay on iOS/iPad**: `AVPlayer.externalPlayback` + system route picker — nearly free via the existing AetherEngine path. Note: our own tvOS app becomes an AirPlay *receiver* automatically.
-
-**Caveats:** receiver does the decoding — DV P5 renders pink/green on non-DV TVs (consider a pre-cast warning), HDR10 needs an HDR panel, sidecar subtitles need Cast text-track wiring or embedding.
-
 ### Player feature backlog (prioritized 2026-08-21)
 
 1. ~~Jellyfin transcoding fallback~~ — DONE (2026-08-22): direct-play errors retry once via server-side HLS `master.m3u8` (H.264/AAC, 20 Mbps cap); Media3 HLS module added; job stopped on player close.
