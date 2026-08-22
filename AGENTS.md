@@ -409,9 +409,9 @@ Swipe gestures on the player screen to adjust brightness and volume, for **Andro
 
 ### Android TV
 
-Run DreamPlayer on an Android TV box/panel as a real 10-foot app. **Status: Phase 1–4 done; playback rebuilt on the shared in-app platform view; video visible on Fire TV after transparent-window fix (2026-08); user re-testing on the TV tomorrow (2026-08-20).**
+Run DreamPlayer on an Android TV box/panel as a real 10-foot app. **Status: Phase 1–5 done; playback, video passthrough, and audio passthrough all verified on Fire TV Stick 4K (2026-08).**
 
-**Test hardware**: Amazon Fire TV Stick 4K (runs Fire OS, Android-based). TV supports Dolby Vision + Dolby Atmos passthrough. No eARC soundbar/AVR yet — audio bitstream goes to the TV directly over HDMI.
+**Test hardware**: Amazon Fire TV Stick 4K (runs Fire OS, Android-based). TV supports Dolby Vision + Dolby Atmos passthrough. Audio passthrough verified on-device — TV detects Atmos/DTS-HD correctly.
 
 **Core requirement (from the user, 2026-08):** the TV build must pass through, not decode:
 - **Video**: Dolby Vision + HDR10/HDR10+/HLG **to the TV panel** (the panel is the display, so the app's existing SurfaceView/compositing path is already correct — the TV displays PQ/BT.2020 natively).
@@ -443,7 +443,7 @@ Run DreamPlayer on an Android TV box/panel as a real 10-foot app. **Status: Phas
 - **Home scroll-on-return** (2026-08): `SliverAppBar` pinned (no floating), `jumpTo(0)` on initial load with stable `ValueKey`s on the grids, so tapping a card and pressing Back always lands at the top.
 - Detection: `isTvMode()` in `lib/utils/tv_helper.dart` — checks `Platform.isAndroid && width >= 960dp` via `MediaQuery`; no platform channel needed
 
-**Phase 3 — Audio Passthrough** (status: done)
+**Phase 3 — Audio Passthrough** (status: done, verified on-device 2026-08)
 - Detect HDMI output: `AudioManager.getDevices(GET_DEVICES_OUTPUTS)` → check for `TYPE_HDMI`, `TYPE_HDMI_ARC`, `TYPE_HDMI_EARC`
 - `mediaCodecSelector` TV override: when passthrough enabled AND HDMI detected, return empty decoder list for passthrough-capable formats (AC3, E-AC3, DTS, DTS-HD, TrueHD) — forces ExoPlayer's `DefaultAudioSink` to route them through `AudioTrack` passthrough mode to HDMI
 - On phone (passthrough OFF): current behavior unchanged — Dolby E-AC3 filter stays, FFmpeg handles DTS/TrueHD/FLAC as PCM decode
@@ -451,7 +451,7 @@ Run DreamPlayer on an Android TV box/panel as a real 10-foot app. **Status: Phas
 - Player overlay shows orange "Passthrough" chip when active
 - On Fire TV Stick: TV should show "Dolby Atmos" / "DTS-HD" on its info overlay when playing Atmos/DTS-HD content
 
-**Phase 4 — Video Passthrough Verify**
+**Phase 4 — Video Passthrough Verify** (status: done, verified on-device 2026-08)
 - Hybrid-composition SurfaceView already composites as `BT2020_ITU_PQ` directly — confirm on Fire TV Stick
 - `applyHdrHeadroom` window machinery is harmless on TV (early-returns or correctly sets HDR mode)
 - DV P7/P8 → HEVC fallback + DV P5 rejection still work
