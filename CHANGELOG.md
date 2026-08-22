@@ -3,6 +3,17 @@
 All notable changes to DreamPlayer are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## Unreleased
+
+### New features — player
+
+- **Horizontal-swipe seek** — swipe left/right anywhere on the video to scrub ±90 s per screen width, clamped to the file. A dark pill shows the target timestamp plus a signed delta (green = forward, orange = back); releasing with a change ≥ 500 ms commits the seek. Skipped on TV (D-pad already seeks). Time-only preview by design: frame thumbnails were tried and removed because `MediaMetadataRetriever` decodes Dolby Vision / 10-bit HDR content to blank frames on Qualcomm devices (`c2.qti.dv.decoder`) — exactly the content this app targets.
+- **Subtitle appearance settings** — Settings → Player → Subtitles: text size (S/M/L/XL), color swatches, background (none/semi/solid), outline toggle, and delay offset (−30…+30 s) with a live photo-backed preview. Persisted as JSON and pushed to the native player on every open. Android applies size/color/background/outline via Media3 `CaptionStyleCompat` + `SubtitleView.setFractionalTextSize`; **delay offset is currently iOS-only** (AetherEngine cue-window shift — Android needs a cue-pipeline refactor).
+
+### Fixed
+
+- Subtitle settings preview crashed in landscape (`clamp(96.0, …)` with min > max on short viewports) — replaced with explicit caps; preview now sizes adaptively (portrait full-width 16:9, landscape up to 42% of viewport height) over a bright royalty-free still so cue backgrounds/outlines read against real imagery.
+
 ## 0.2.1
 
 ### Bug fixes — player swipe gestures
