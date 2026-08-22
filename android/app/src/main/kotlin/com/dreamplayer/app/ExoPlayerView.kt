@@ -633,6 +633,13 @@ class ExoPlayerView(
                 "open" -> {
                     val path = call.argument<String>("path")
                     val uri = call.argument<String>("uri")
+                    android.util.Log.d(
+                        "DreamOpen",
+                        "open path=$path uri=$uri contentType=" +
+                            (if (uri.isNullOrEmpty()) -1
+                             else androidx.media3.common.util.Util.inferContentType(
+                                 android.net.Uri.parse(uri))),
+                    )
                     val subtitleUri = call.argument<String>("subtitleUri")
                     val startMs = call.argument<Number>("startPositionMs")?.toLong() ?: 0L
                     // HTTP request headers for this media item (e.g. WebDAV

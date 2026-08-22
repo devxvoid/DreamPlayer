@@ -318,15 +318,13 @@ class _PlayerScreenState extends State<PlayerScreen>
     await ContinueWatchingStore.remove(key);
   }
 
-  /// Overlay text shown while the transcode fallback spins up (cleared once
-  /// playback is healthy).
-  static const String transcodeNoteText =
-      'Direct playback failed — playing via server transcoding\u2026';
-
   /// Reopens the current Jellyfin video through the server's transcoder
   /// (HLS, H.264/AAC) at the last known position. Runs at most once per
   /// video ([_transcodeRetried] is set before this is called); on any
   /// failure the original direct-play error is surfaced instead.
+  /// IMPORTANT: [_error] must stay null while the HLS stream spins up —
+  /// the video layer (the platform view) only stays mounted while
+  /// `_error == null`, and unmounting it releases the player mid-open.
   Future<void> _tryTranscodeFallback(String directError) async {
     final pos = _position;
     VideoItem? fallback;
@@ -342,10 +340,13 @@ class _PlayerScreenState extends State<PlayerScreen>
     _transcodeServerUrl = '${u.scheme}://${u.host}:${u.port}';
     setState(() {
       _current = fallback!;
-      _error = transcodeNoteText;
+      // Spinner shows while HLS buffers; keep _error null so the platform
+      // view (and its player) survives the source swap.
       _buffering = true;
     });
-    debugPrint('jellyfin: switching to server transcode at ${pos.inMilliseconds}ms');
+    debugPrint(
+        'jellyfin: switching to server transcode at ${pos.inMilliseconds}ms '
+        'uri=${fallback.uri}');
     try {
       await _exo?.open(
         '',
@@ -458,12 +459,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         _tryTranscodeFallback(friendly);
         return;
       }
-      if (_playing && _error == transcodeNoteText) {
-        // Transcode recovered — drop the notice.
-        _error = null;
-      } else {
-        _error = friendly;
-      }
+      _error = friendly;
     }
     _subtitleOn = e.subtitleOn;
     _subtitleTracks = e.subtitleTracks;

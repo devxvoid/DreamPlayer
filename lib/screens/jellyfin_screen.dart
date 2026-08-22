@@ -694,9 +694,41 @@ class _ServerFormDialogState extends State<_ServerFormDialog> {
 
   String? _validate() {
     if (JellyfinClient.normalizeUrl(_url.text).isEmpty) {
-      return 'Server URL is required';
+      return 'Server address is required';
     }
     return null;
+  }
+
+  /// Consistent rounded, icon-prefixed field style for both dialogs.
+  static InputDecoration _fieldDecoration(
+    BuildContext context, {
+    required String label,
+    required String hint,
+    required IconData icon,
+    bool optional = false,
+    Widget? suffix,
+  }) {
+    final theme = Theme.of(context);
+    OutlineInputBorder border(Color color) => OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: color),
+        );
+    return InputDecoration(
+      labelText: optional ? '$label (optional)' : label,
+      hintText: hint,
+      prefixIcon: Icon(icon, size: 20),
+      suffixIcon: suffix,
+      filled: true,
+      fillColor: theme.colorScheme.surfaceContainerHighest
+          .withValues(alpha: 0.35),
+      contentPadding:
+          const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      border: border(theme.colorScheme.outline.withValues(alpha: 0.4)),
+      enabledBorder:
+          border(theme.colorScheme.outline.withValues(alpha: 0.4)),
+      focusedBorder: border(theme.colorScheme.primary),
+      labelStyle: TextStyle(color: theme.colorScheme.onSurfaceVariant),
+    );
   }
 
   Future<void> _test() async {
@@ -799,112 +831,185 @@ class _ServerFormDialogState extends State<_ServerFormDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return AlertDialog(
-      title: Text(_existing == null ? 'Add server' : 'Edit server'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      titlePadding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
+      contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+      actionsPadding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+      title: Row(
         children: [
-          Flexible(
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextField(
-                    controller: _name,
-                    decoration: const InputDecoration(
-                      labelText: 'Server name (optional)',
-                      hintText: 'e.g. Home Jellyfin',
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _url,
-                    keyboardType: TextInputType.url,
-                    decoration: const InputDecoration(
-                      labelText: 'Server URL',
-                      hintText: 'http://192.168.1.16:8096',
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _username,
-                    decoration: const InputDecoration(
-                      labelText: 'Username',
-                      hintText: 'admin',
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _password,
-                    obscureText: true,
-                    decoration: InputDecoration(
-                      labelText: 'Password',
-                      hintText: _existing?.token != null
-                          ? '(unchanged)'
-                          : 'Your password',
-                    ),
-                  ),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Accept self-signed certificate'),
-                    subtitle: const Text(
-                      'For HTTPS servers without a trusted certificate (NAS, '
-                      'etc.)',
-                    ),
-                    value: _allowSelfSigned,
-                    onChanged: (v) => setState(() => _allowSelfSigned = v),
-                  ),
-                ],
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.primary.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(
+              _existing == null ? Icons.add_link : Icons.dns_outlined,
+              size: 22,
+              color: theme.colorScheme.primary,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              _existing == null ? 'Add server' : 'Edit server',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w600,
               ),
             ),
           ),
-          if (_resultMessage != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 16),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(
-                    _resultSuccess == true
-                        ? Icons.check_circle
-                        : Icons.error_outline,
-                    size: 18,
-                    color: _resultSuccess == true
-                        ? const Color(0xFF4CAF50)
-                        : Theme.of(context).colorScheme.error,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      _resultMessage!,
-                      style: TextStyle(
-                        color: _resultSuccess == true
-                            ? const Color(0xFF4CAF50)
-                            : Theme.of(context).colorScheme.error,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
         ],
       ),
+      content: SizedBox(
+        width: 440,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Flexible(
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    TextField(
+                      controller: _name,
+                      textInputAction: TextInputAction.next,
+                      decoration: _fieldDecoration(
+                        context,
+                        label: 'Server name',
+                        hint: 'e.g. Home Jellyfin',
+                        icon: Icons.badge_outlined,
+                        optional: true,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: _url,
+                      keyboardType: TextInputType.url,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      textInputAction: TextInputAction.next,
+                      decoration: _fieldDecoration(
+                        context,
+                        label: 'Server address',
+                        hint: 'http://192.168.1.16:8096',
+                        icon: Icons.lan_outlined,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: _username,
+                      textInputAction: TextInputAction.next,
+                      autofillHints: const [AutofillHints.username],
+                      decoration: _fieldDecoration(
+                        context,
+                        label: 'Username',
+                        hint: 'admin',
+                        icon: Icons.person_outline,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    _PasswordField(
+                      controller: _password,
+                      label: _existing?.token != null
+                          ? 'Password (leave empty to keep)'
+                          : 'Password',
+                      hint: '••••••••',
+                    ),
+                    SwitchListTile(
+                      contentPadding: const EdgeInsets.only(top: 4),
+                      controlAffinity: ListTileControlAffinity.leading,
+                      dense: true,
+                      activeThumbColor: theme.colorScheme.primary,
+                      title: const Text('Self-signed certificate',
+                          style: TextStyle(fontSize: 14)),
+                      subtitle: const Text(
+                        'Trust HTTPS servers without a CA certificate',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                      value: _allowSelfSigned,
+                      onChanged: (v) => setState(() => _allowSelfSigned = v),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            if (_resultMessage != null)
+              Container(
+                margin: const EdgeInsets.fromLTRB(0, 12, 0, 12),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: (_resultSuccess == true
+                          ? const Color(0xFF4CAF50)
+                          : theme.colorScheme.error)
+                      .withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      _resultSuccess == true
+                          ? Icons.check_circle
+                          : Icons.error_outline,
+                      size: 18,
+                      color: _resultSuccess == true
+                          ? const Color(0xFF4CAF50)
+                          : theme.colorScheme.error,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        _resultMessage!,
+                        style: TextStyle(
+                          fontSize: 13,
+                          height: 1.35,
+                          color: _resultSuccess == true
+                              ? const Color(0xFF81C995)
+                              : theme.colorScheme.error,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
       actions: [
-        TextButton(
+        OutlinedButton.icon(
+          style: OutlinedButton.styleFrom(
+            side: BorderSide(color: theme.colorScheme.outline),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
           onPressed: _testing ? null : _test,
-          child: _testing
+          icon: _testing
               ? const SizedBox(
-                  width: 16,
-                  height: 16,
+                  width: 14,
+                  height: 14,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
-              : const Text('Test'),
+              : const Icon(Icons.wifi_tethering, size: 16),
+          label: const Text('Test'),
         ),
+        const Spacer(),
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Cancel'),
         ),
-        FilledButton(onPressed: _testing ? null : _save, child: const Text('Save')),
+        FilledButton.icon(
+          style: FilledButton.styleFrom(
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+          onPressed: _testing ? null : _save,
+          icon: const Icon(Icons.check_rounded, size: 16),
+          label: const Text('Save'),
+        ),
       ],
     );
   }
@@ -973,38 +1078,122 @@ class _LoginDialogState extends State<_LoginDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return AlertDialog(
-      title: Text('Sign in — ${widget.serverName}'),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(widget.url, style: Theme.of(context).textTheme.bodySmall),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _username,
-              autofocus: true,
-              decoration: const InputDecoration(
-                labelText: 'Username',
-                hintText: 'admin',
-              ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      titlePadding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
+      contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+      actionsPadding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+      title: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.primary.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(10),
             ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _password,
-              obscureText: true,
-              decoration: const InputDecoration(labelText: 'Password'),
-              onSubmitted: (_) => _submit(),
+            child: Icon(
+              Icons.login_rounded,
+              size: 22,
+              color: theme.colorScheme.primary,
             ),
-            if (_error != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: Text(
-                  _error!,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Sign in',
+                    style: theme.textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w600)),
+                Text(
+                  widget.serverName,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+      content: SizedBox(
+        width: 400,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.surfaceContainerHighest
+                      .withValues(alpha: 0.35),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.dns_outlined,
+                        size: 15, color: theme.colorScheme.onSurfaceVariant),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        widget.url,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-          ],
+              const SizedBox(height: 14),
+              TextField(
+                controller: _username,
+                autofocus: true,
+                textInputAction: TextInputAction.next,
+                autofillHints: const [AutofillHints.username],
+                decoration: _ServerFormDialogState._fieldDecoration(
+                  context,
+                  label: 'Username',
+                  hint: 'admin',
+                  icon: Icons.person_outline,
+                ),
+              ),
+              const SizedBox(height: 14),
+              _PasswordField(
+                controller: _password,
+                label: 'Password',
+                hint: '••••••••',
+                onSubmitted: (_) => _submit(),
+              ),
+              if (_error != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Row(
+                    children: [
+                      Icon(Icons.error_outline,
+                          size: 16, color: theme.colorScheme.error),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          _error!,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: theme.colorScheme.error,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              const SizedBox(height: 4),
+            ],
+          ),
         ),
       ),
       actions: [
@@ -1012,17 +1201,70 @@ class _LoginDialogState extends State<_LoginDialog> {
           onPressed: _busy ? null : () => Navigator.of(context).pop(),
           child: const Text('Cancel'),
         ),
-        FilledButton(
+        FilledButton.icon(
+          style: FilledButton.styleFrom(
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
           onPressed: _busy ? null : _submit,
-          child: _busy
+          icon: _busy
               ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Text('Sign in'),
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : const Icon(Icons.arrow_forward_rounded, size: 16),
+          label: const Text('Sign in'),
         ),
       ],
+    );
+  }
+}
+
+/// Password field with a visibility toggle, styled like the other dialog
+/// fields.
+class _PasswordField extends StatefulWidget {
+  const _PasswordField({
+    required this.controller,
+    required this.label,
+    required this.hint,
+    this.onSubmitted,
+  });
+
+  final TextEditingController controller;
+  final String label;
+  final String hint;
+  final ValueChanged<String>? onSubmitted;
+
+  @override
+  State<_PasswordField> createState() => _PasswordFieldState();
+}
+
+class _PasswordFieldState extends State<_PasswordField> {
+  bool _visible = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: widget.controller,
+      obscureText: !_visible,
+      autofillHints: const [AutofillHints.password],
+      onSubmitted: widget.onSubmitted,
+      textInputAction:
+          widget.onSubmitted != null ? TextInputAction.done : TextInputAction.next,
+      decoration: _ServerFormDialogState._fieldDecoration(
+        context,
+        label: widget.label,
+        hint: widget.hint,
+        icon: Icons.lock_outline,
+        suffix: IconButton(
+          visualDensity: VisualDensity.compact,
+          icon: Icon(
+            _visible ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+            size: 20,
+          ),
+          onPressed: () => setState(() => _visible = !_visible),
+        ),
+      ),
     );
   }
 }
