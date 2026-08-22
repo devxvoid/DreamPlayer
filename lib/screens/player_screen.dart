@@ -7,6 +7,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../models/hdr_format.dart';
 import '../models/video_item.dart';
+import '../services/cast_service.dart';
 import '../services/continue_watching.dart';
 import '../services/exo_player.dart';
 import '../services/jellyfin_client.dart';
@@ -90,6 +91,197 @@ class _PlayerScreenState extends State<PlayerScreen>
   bool _transcodeRetried = false;
   bool _transcodeActive = false;
   String? _transcodeServerUrl;
+
+  /// Google Cast session state. While [_casting], transport controls drive
+  /// the receiver via [CastService] and native ExoPlayer events are ignored.
+  bool _casting = false;
+  String? _castDeviceName;
+  StreamSubscription<CastMediaStatus>? _castSub;
+
+  /// Hands the current video to [device]: pauses local playback, loads the
+  /// URL on the receiver at the current position and switches the UI into
+  /// casting mode.
+  Future<void> _startCasting(CastDevice device) async {
+    final uri = _current.uri;
+    if (uri == null || !CastService.isSourceCastable(_current)) return;
+    final startPos = _position;
+    _exo?.pause();
+    try {
+      await CastService.instance.connectAndLoad(
+        device: device,
+        url: uri,
+        title: _current.title,
+        startAt: startPos,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(CastService.friendlyError(e))),
+      );
+      return;
+    }
+    if (!mounted) return;
+    _castDeviceName = device.name;
+    _completed = false;
+    _error = null;
+    await _castSub?.cancel();
+    _castSub = CastService.instance.statusStream.listen(_onCastStatus);
+    setState(() => _casting = true);
+    debugPrint('cast: now casting ${_current.title} → ${device.name}');
+  }
+
+  void _onCastStatus(CastMediaStatus s) {
+    if (!mounted || !_casting) return;
+    setState(() {
+      _playing = s.playing;
+      _buffering = s.buffering && !s.ended;
+      _completed = s.ended;
+      _position = s.position;
+      if (s.duration > Duration.zero) _duration = s.duration;
+    });
+    if (s.ended) {
+      final key = _resumeKey;
+      if (key.isNotEmpty && !_inTests) {
+        ResumeStore.clear(key);
+        ContinueWatchingStore.remove(key);
+      }
+      _restartHideTimer();
+    }
+  }
+
+  /// Leaves casting mode. When [resumeLocal] the video reloads locally at
+  /// the receiver's last position; otherwise the TV keeps playing on its own
+  /// (the sender session just detaches).
+  Future<void> _stopCasting({required bool resumeLocal}) async {
+    final castPos = _position;
+    await _castSub?.cancel();
+    _castSub = null;
+    await CastService.instance.disconnect(stopMedia: !resumeLocal);
+    if (!mounted) return;
+    if (!resumeLocal) {
+      setState(() => _casting = false);
+      return;
+    }
+    setState(() {
+      _casting = false;
+      _playing = false;
+      _buffering = true;
+    });
+    await _reopenAt(
+      castPos,
+      _duration,
+    );
+  }
+
+  /// Device picker / session sheet for the top-bar cast button.
+  void _showCastSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF14181D),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) {
+        if (_casting) {
+          return SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.cast_connected,
+                      color: Colors.white70),
+                  title: Text('Casting to $_castDeviceName',
+                      style: const TextStyle(color: Colors.white)),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.tv, color: Colors.white70),
+                  title: const Text('Leave playing on the TV',
+                      style: TextStyle(color: Colors.white)),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    unawaited(_stopCasting(resumeLocal: false));
+                  },
+                ),
+                ListTile(
+                  leading:
+                      const Icon(Icons.smartphone, color: Colors.white70),
+                  title: const Text('Resume on this device',
+                      style: TextStyle(color: Colors.white)),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    unawaited(_stopCasting(resumeLocal: true));
+                  },
+                ),
+              ],
+            ),
+          );
+        }
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    Icon(Icons.cast, color: Colors.white70),
+                    SizedBox(width: 12),
+                    Text('Cast to',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600)),
+                  ],
+                ),
+              ),
+              FutureBuilder<List<CastDevice>>(
+                future: CastService.instance.discover(),
+                builder: (context, snap) {
+                  if (snap.connectionState != ConnectionState.done) {
+                    return const Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Center(
+                          child: CircularProgressIndicator(strokeWidth: 2)),
+                    );
+                  }
+                  final devices = snap.data ?? const [];
+                  if (devices.isEmpty) {
+                    return const Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Text(
+                        'No cast devices found on this network.',
+                        style: TextStyle(color: Colors.white54),
+                      ),
+                    );
+                  }
+                  return Column(
+                    children: [
+                      for (final d in devices)
+                        ListTile(
+                          leading:
+                              const Icon(Icons.tv, color: Colors.white70),
+                          title: Text(d.name,
+                              style:
+                                  const TextStyle(color: Colors.white)),
+                          subtitle: Text(d.host,
+                              style:
+                                  const TextStyle(color: Colors.white38)),
+                          onTap: () {
+                            Navigator.pop(sheetContext);
+                            unawaited(_startCasting(d));
+                          },
+                        ),
+                    ],
+                  );
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
 
   String? _liveVideoCodec;
   String? _liveVideoCodecRaw;
@@ -412,6 +604,9 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   void _onExoEvent(ExoPlayerEvent e) {
+    // While casting, the receiver owns playback: ignore native position /
+    // state churn so the UI reflects the TV, not the paused local player.
+    if (_casting) return;
     final wasPlaying = _playing;
     final wasBuffering = _buffering;
     _playing = e.playing;
@@ -595,6 +790,10 @@ class _PlayerScreenState extends State<PlayerScreen>
     _swipeOverlayTimer?.cancel();
     _saveResume(_position);
     _stopTranscodeJob();
+    if (_casting) {
+      _castSub?.cancel();
+      unawaited(CastService.instance.disconnect(stopMedia: false));
+    }
     // Restore system brightness so it doesn't stick after the player closes.
     if (Platform.isIOS && _iosOriginalBrightness >= 0) {
       _exo?.setBrightness(_iosOriginalBrightness);
@@ -1048,6 +1247,12 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   void _seekBy(Duration delta) {
+    if (_casting) {
+      unawaited(
+          CastService.instance.seekTo(_position + delta));
+      _showControls();
+      return;
+    }
     _exo?.seekTo(_position + delta);
     _showControls();
   }
@@ -1065,13 +1270,23 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   void _onSeekEnd(double value) {
-    _exo?.seekTo(Duration(milliseconds: value.round()));
+    final target = Duration(milliseconds: value.round());
+    if (_casting) {
+      unawaited(CastService.instance.seekTo(target));
+    } else {
+      _exo?.seekTo(target);
+    }
     _dragging = false;
     _dragValue = value;
     _showControls();
   }
 
   void _togglePlayPause() {
+    if (_casting) {
+      unawaited(CastService.instance.togglePlayPause());
+      _showControls();
+      return;
+    }
     final exo = _exo;
     if (exo == null) return;
     if (_completed) {
@@ -1211,9 +1426,43 @@ class _PlayerScreenState extends State<PlayerScreen>
         : null;
     final chips = [hdrChip, ?videoChip, ?audioChip, ?resolutionChip];
 
-    final videoLayer = _exo != null && _error == null
-        ? ExoPlayerView(controller: _exo! as ExoPlayerController)
-        : Container(
+    final videoLayer = _casting
+        ? Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Color(0xFF1B2A41), Colors.black],
+              ),
+            ),
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.cast_connected,
+                      size: 84, color: Colors.white54),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Casting to $_castDeviceName',
+                    style: const TextStyle(
+                        color: Colors.white70, fontSize: 15),
+                  ),
+                  if (_buffering)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 16),
+                      child: SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          )
+        : _exo != null && _error == null
+            ? ExoPlayerView(controller: _exo! as ExoPlayerController)
+            : Container(
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
@@ -1490,6 +1739,19 @@ class _PlayerScreenState extends State<PlayerScreen>
                                 ),
                               ),
                             ),
+                            if (!_isTv &&
+                                CastService.isSourceCastable(video))
+                              IconButton(
+                                tooltip: 'Cast',
+                                onPressed: _showCastSheet,
+                                color: Colors.white,
+                                icon: Icon(
+                                  _casting
+                                      ? Icons.cast_connected
+                                      : Icons.cast,
+                                  size: 22,
+                                ),
+                              ),
                           ],
                         ),
                         if (chips.isNotEmpty) ...[
