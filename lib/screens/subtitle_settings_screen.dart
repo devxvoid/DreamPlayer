@@ -72,11 +72,15 @@ class _SubtitleSettingsScreenState extends State<SubtitleSettingsScreen> {
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                   child: LayoutBuilder(builder: (context, _) {
                     final media = MediaQuery.of(context).size;
-                    // Cap by viewport height so landscape stays scrollable.
+                    // Adaptive: portrait sizes from width; landscape gives
+                    // the preview a bigger share of the short viewport so
+                    // it stays readable while the page remains scrollable.
+                    final isLandscape = media.width > media.height;
                     var boxH = media.width * 9 / 16;
-                    final maxH = media.height * 0.26;
+                    final maxH =
+                        media.height * (isLandscape ? 0.42 : 0.35);
                     if (boxH > maxH) boxH = maxH;
-                    if (boxH < 56) boxH = 56;
+                    if (boxH < 120) boxH = 120;
                     final boxW = boxH * 16 / 9;
                     return Center(
                       child: Container(
