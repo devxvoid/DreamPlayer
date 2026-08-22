@@ -39,6 +39,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.CaptionStyleCompat
+import androidx.media3.ui.SubtitleView
 import androidx.media3.ui.PlayerView
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
@@ -1316,8 +1317,9 @@ class ExoPlayerView(
     /// Size is a multiplier around Media3's default fractional text size.
     private fun applySubtitleStyle(sizeMult: Double, color: Int, bg: Int, outline: Boolean) {
         val view = playerView.subtitleView ?: return
-        val fraction = (0.0533f * sizeMult.coerceIn(0.6, 2.0).toFloat())
-        view.setFractionalTextSizeWithViewHeight(fraction)
+        view.setFractionalTextSize(
+            SubtitleView.DEFAULT_TEXT_SIZE_FRACTION * sizeMult.coerceIn(0.6, 2.0).toFloat()
+        )
 
         val hasBg = (bg ushr 24) != 0
         val edgeType = if (outline)
