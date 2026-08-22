@@ -246,9 +246,6 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     /// Positive = cues appear LATER than authored.
     private var subtitleDelaySeconds: Double = 0
 
-    /// Reusable generator for seek-preview frames; rebuilt per source.
-    private var thumbGenerator: AVAssetImageGenerator?
-
     
 
     init(messenger: FlutterBinaryMessenger, viewId: Int64, frame: CGRect) {
@@ -363,15 +360,6 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                     self.subtitleOverlay.applyStyle(
                         size: size, color: color, bg: bg, outline: outline)
                     result(nil)
-                case "getThumbnail":
-                    let ms = (args?["ms"] as? NSNumber)?.doubleValue ?? 0
-                    self.thumbnail(atMs: ms) { data in
-                        if let data {
-                            result(["ok": true, "bytes": FlutterStandardTypedData(bytes: data)])
-                        } else {
-                            result(["ok": false])
-                        }
-                    }
                 case "setResizeMode":
                     let mode = (args?["mode"] as? NSNumber)?.intValue ?? 0
                     self.setResizeMode(mode)
@@ -842,43 +830,6 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             subtitleOverlay.show(image: image)
         }
     }
-
-    // MARK: - Seek-preview thumbnails
-
-    /// Extracts a preview frame near `ms` for the horizontal-seek scrubber.
-    /// Only sources AVAssetImageGenerator can read without our custom
-    /// transport qualify: local file URLs and plain http(s) (Jellyfin embeds
-    /// its token in the query). WebDAV-with-auth / self-signed degrade to a
-    /// time-only preview on the Dart side.
-    private func thumbnail(atMs ms: Double, completion: @escaping (Data?) -> Void) {
-        guard let url = lastSource?.url, lastWebDAVInfo == nil else {
-            completion(nil)
-            return
-        }
-        // (Re)build the per-source generator here, on the main thread.
-        if thumbGenerator == nil || thumbGeneratorURL != url {
-            let asset = AVURLAsset(url: url)
-            let generator = AVAssetImageGenerator(asset: asset)
-            generator.appliesPreferredTrackTransform = true
-            generator.maximumSize = CGSize(width: 480, height: 270)
-            generator.requestedTimeToleranceBefore = CMTime(seconds: 0.75, preferredTimescale: 600)
-            generator.requestedTimeToleranceAfter = CMTime(seconds: 0.75, preferredTimescale: 600)
-            thumbGenerator = generator
-            thumbGeneratorURL = url
-        }
-        let generator = thumbGenerator!
-        let time = CMTime(seconds: max(ms / 1000.0, 0), preferredTimescale: 600)
-        DispatchQueue.global(qos: .userInitiated).async {
-            do {
-                let cg = try generator.copyCGImage(at: time, actualTime: nil)
-                completion(UIImage(cgImage: cg).jpegData(compressionQuality: 0.8))
-            } catch {
-                completion(nil)
-            }
-        }
-    }
-
-    private var thumbGeneratorURL: URL?
 
     // MARK: - Format helpers
 

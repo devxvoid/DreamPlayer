@@ -124,9 +124,6 @@ class _PlayerScreenState extends State<PlayerScreen>
   int _seekBaseMs = 0;
   double _seekDragPx = 0;
   int _seekTargetMs = 0;
-  Uint8List? _seekThumbBytes;
-  int _seekThumbKey = 0;
-  Timer? _thumbDebounce;
 
   /// Seconds covered by a full-screen-width horizontal drag.
   static const double _seekDragSpanSeconds = 90;
@@ -521,7 +518,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     WidgetsBinding.instance.removeObserver(this);
     _hideTimer?.cancel();
     _swipeOverlayTimer?.cancel();
-    _thumbDebounce?.cancel();
     _saveResume(_position);
     // Restore system brightness so it doesn't stick after the player closes.
     if (Platform.isIOS && _iosOriginalBrightness >= 0) {
@@ -648,10 +644,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       _seekBaseMs = _position.inMilliseconds.clamp(0, dur);
       _seekDragPx = 0;
       _seekTargetMs = _seekBaseMs;
-      _seekThumbBytes = null;
     });
     _hideTimer?.cancel();
-    _requestSeekThumbnail();
   }
 
   void _onSeekDragUpdate(DragUpdateDetails details) {
@@ -665,7 +659,6 @@ class _PlayerScreenState extends State<PlayerScreen>
       _seekTargetMs =
           (_seekBaseMs + seconds * 1000).round().clamp(0, dur);
     });
-    _scheduleSeekThumbnail();
   }
 
   void _onSeekDragEnd(DragEndDetails details) {
@@ -675,34 +668,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     if ((targetMs - _position.inMilliseconds).abs() >= 500) {
       _exo?.seekTo(Duration(milliseconds: targetMs));
     }
-    _thumbDebounce?.cancel();
     _restartHideTimer();
-  }
-
-  int _lastThumbMs = -1;
-
-  /// Debounced thumbnail fetch — fires shortly after the finger pauses so
-  /// scrubbing doesn't spam frame extraction. Also skipped while the target
-  /// is within ~1.5 s of the last extracted frame.
-  void _scheduleSeekThumbnail() {
-    if ((_seekTargetMs - _lastThumbMs).abs() < 1500) return;
-    _thumbDebounce?.cancel();
-    _thumbDebounce = Timer(const Duration(milliseconds: 120), () {
-      _requestSeekThumbnail();
-    });
-  }
-
-  Future<void> _requestSeekThumbnail() async {
-    final exo = _exo;
-    if (exo == null || !_seekPreviewActive) return;
-    final key = ++_seekThumbKey;
-    final ms = _seekTargetMs;
-    _lastThumbMs = ms;
-    try {
-      final bytes = await exo.getThumbnail(Duration(milliseconds: ms));
-      if (!mounted || !_seekPreviewActive || key != _seekThumbKey) return;
-      setState(() => _seekThumbBytes = bytes);
-    } catch (_) {}
   }
 
   void _onSwipeDragEnd(DragEndDetails details) {
@@ -1052,69 +1018,41 @@ class _PlayerScreenState extends State<PlayerScreen>
     return '${two(m)}:${two(s)}';
   }
 
-  /// Horizontal-swipe seek preview: extracted frame above a timestamp pill
-  /// showing where the finger will land (and by how much it moves).
+  /// Horizontal-swipe seek preview: timestamp pill showing where the finger
+  /// will land (and by how much it moves).
   Widget _buildSeekPreview() {
     final target = Duration(milliseconds: _seekTargetMs);
     final deltaMs = _seekTargetMs - _seekBaseMs;
     final sign = deltaMs >= 0 ? '+' : '−';
     final delta = Duration(milliseconds: deltaMs.abs());
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        ClipRRect(
-          borderRadius: BorderRadius.circular(10),
-          child: Container(
-            width: 192,
-            height: 108,
-            color: Colors.black.withValues(alpha: 0.85),
-            alignment: Alignment.center,
-            child: _seekThumbBytes != null
-                ? Image.memory(
-                    _seekThumbBytes!,
-                    width: 192,
-                    height: 108,
-                    fit: BoxFit.cover,
-                    gaplessPlayback: true,
-                  )
-                : const SizedBox(
-                    width: 22,
-                    height: 22,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.65),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            _formatDuration(target),
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
+            ),
           ),
-        ),
-        const SizedBox(height: 8),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.65),
-            borderRadius: BorderRadius.circular(16),
+          const SizedBox(width: 10),
+          Text(
+            '$sign${_formatDuration(delta)}',
+            style: TextStyle(
+              color: deltaMs >= 0 ? Colors.lightGreenAccent : Colors.orangeAccent,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
           ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                _formatDuration(target),
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Text(
-                '$sign${_formatDuration(delta)}',
-                style: TextStyle(
-                  color: deltaMs >= 0 ? Colors.lightGreenAccent : Colors.orangeAccent,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 

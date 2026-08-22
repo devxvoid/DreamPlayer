@@ -327,11 +327,6 @@ abstract class PlaybackController {
   /// outline + cue delay).
   Future<void> setSubtitleStyle(SubtitleStyle style);
 
-  /// Extracts a preview frame near [position] for the horizontal-seek
-  /// thumbnail, or null when the source can't be probed (remote streams with
-  /// custom auth, unsupported containers...).
-  Future<Uint8List?> getThumbnail(Duration position);
-
   Future<void> setSubtitles(bool on);
 
   Future<void> setFitMode(VideoFitMode mode);
@@ -468,24 +463,6 @@ class ExoPlayerController implements PlaybackController {
   @override
   Future<void> setSubtitleStyle(SubtitleStyle style) =>
       _send('setSubtitleStyle', style.toChannelArgs());
-
-  @override
-  Future<Uint8List?> getThumbnail(Duration position) async {
-    final channel = _method;
-    if (channel == null) return null;
-    try {
-      final map = await channel.invokeMethod<Map<dynamic, dynamic>>(
-        'getThumbnail',
-        {'ms': position.inMilliseconds},
-      );
-      if (map == null || map['ok'] != true) return null;
-      final bytes = map['bytes'];
-      if (bytes is Uint8List && bytes.isNotEmpty) return bytes;
-      return null;
-    } catch (_) {
-      return null;
-    }
-  }
 
   /// Sets how the video fills the view (fit/crop/stretch/fixed ratio).
   @override
