@@ -27,19 +27,6 @@ Notes:
 - First-time setup of SideStore/AltStore needs a computer (or a second Apple device).
 - No automatic updates — re-download the newest IPA from this page when a new version is published.
 
-### Apple TV (tvOS) — alpha
-
-The `DreamPlayer-tvOS-alpha-<version>.ipa` is **unsigned** and in **alpha** (CI-built, not yet verified on Apple TV hardware). To sideload:
-
-1. Open Xcode (needs a Mac or Mac-in-the-cloud).
-2. **Window → Devices and Simulators** → select your Apple TV.
-3. Click **+** under Installed Apps → select the downloaded IPA.
-4. The app appears on the Apple TV home screen.
-
-What works: AetherEngine playback (DV/HDR10, lossless audio via FFmpeg), Jellyfin + WebDAV browsing/playback (self-signed HTTPS included), TMDB metadata, resume/continue-watching persistence (`shared_preferences_tvos`), saved servers. Navigate with the Siri Remote: swipe to move focus, click to select, play/pause button toggles playback, Menu goes back.
-
-Known alpha limitations: no overscan padding (edges may clip on some TVs); "Network shares" and "Add folder to library" are no-ops (no document picker on tvOS); server login requires typing via the remote; HDR chips have no EDR probe (content still plays).
-
 ## Versioning
 
 App version follows **semver**, bumped per release (current release: **0.2.1**).

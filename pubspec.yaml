@@ -40,16 +40,6 @@ dependencies:
   url_launcher: ^6.3.0
   package_info_plus: ^10.2.1
   multicast_dns: ^0.3.3+1
-  # tvOS variants (from fluttertv/plugins) — these provide the native
-  # implementation for Apple TV where the upstream plugins don't declare tvOS.
-  shared_preferences_tvos:
-    git:
-      url: https://github.com/fluttertv/plugins.git
-      path: packages/shared_preferences_tvos
-  package_info_plus_tvos:
-    git:
-      url: https://github.com/fluttertv/plugins.git
-      path: packages/package_info_plus_tvos
 dev_dependencies:
   flutter_test:
     sdk: flutter

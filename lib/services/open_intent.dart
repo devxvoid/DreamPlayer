@@ -86,7 +86,7 @@ class OpenIntentService {
         'getInitialIntent',
       );
     } on MissingPluginException {
-      // No intent channel (e.g. the TV engine / tvOS) — nothing to pick up.
+      // No intent channel available — nothing to pick up.
       initial = null;
     }
     if (initial != null) {

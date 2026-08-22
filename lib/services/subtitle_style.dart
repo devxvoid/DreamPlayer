@@ -5,7 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// User-configurable subtitle appearance, applied natively on both platforms
 /// (Media3 `SubtitleView` on Android, the host `SubtitleOverlayView` on
-/// iOS/tvOS) and persisted in shared_preferences as JSON.
+/// iOS) and persisted in shared_preferences as JSON.
 @immutable
 class SubtitleStyle {
   const SubtitleStyle({

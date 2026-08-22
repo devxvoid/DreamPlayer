@@ -872,10 +872,10 @@ class JellyfinClient {
       }
     } catch (_) {}
 
-    // mDNS discovery — multicast_dns is not available on tvOS (no native
-    // plugin), so it will throw MissingPluginException there; the try/catch
-    // handles that gracefully, and the 7359 broadcast probe above is the
-    // primary discovery path for modern Jellyfin servers anyway.
+    // mDNS discovery — multicast_dns may throw MissingPluginException on
+    // platforms without native mDNS; the try/catch handles that gracefully,
+    // and the 7359 broadcast probe above is the primary discovery path for
+    // modern Jellyfin servers anyway.
     try {
       final resolver = MDnsClient();
       try {

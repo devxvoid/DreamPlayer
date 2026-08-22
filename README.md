@@ -5,14 +5,14 @@
 </p>
 
 [![License: GPLv3](https://img.shields.io/github/license/mangeshghodke/DreamPlayer?style=flat)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Android%20%7C%20iOS%20%7C%20iPad%20%7C%20Android%20TV%20%7C%20Apple%20TV-blue)](https://github.com/mangeshghodke/DreamPlayer)
+[![Platform](https://img.shields.io/badge/platform-Android%20%7C%20iOS%20%7C%20iPad%20%7C%20Android%20TV-blue)](https://github.com/mangeshghodke/DreamPlayer)
 [![Flutter](https://img.shields.io/badge/Flutter-3.44-46A6F2?logo=flutter&logoColor=white&color=46A6F2)](https://flutter.dev)
 [![iOS build](https://img.shields.io/github/actions/workflow/status/mangeshghodke/DreamPlayer/ios.yml?label=iOS%20build)](https://github.com/mangeshghodke/DreamPlayer/actions/workflows/ios.yml)
 [![Donate](https://img.shields.io/badge/Donate-Razorpay-2D8CF0)](https://rzp.io/rzp/cZ5afqVG)
 [![GitHub Sponsors](https://img.shields.io/badge/GitHub_Sponsors-Support-EA4AAA?logo=github&logoColor=white)](https://github.com/sponsors/mangeshghodke/)
 ![Vibe Coded](https://img.shields.io/badge/vibe--coded-100%25-8A2BE2)
 
-A cross-platform video player for **Android, iOS/iPad, Android TV, and Apple TV (tvOS)** — built for true Dolby Vision, HDR10/HDR10+, and lossless audio playback.
+A cross-platform video player for **Android, iOS/iPad, and Android TV** — built for true Dolby Vision, HDR10/HDR10+, and lossless audio playback.
 
 > **This project is 100% vibe coded** — designed, directed, and tested by a human;
 > written end-to-end in collaboration with AI coding agents, one feature at a time.
@@ -68,14 +68,6 @@ A cross-platform video player for **Android, iOS/iPad, Android TV, and Apple TV 
 - Audio passthrough for Atmos/DTS:X over HDMI
 - Tested on Amazon Fire TV Stick 4K (Fire OS 7.1)
 
-### Apple TV (tvOS)
-- Siri Remote focus navigation (10-foot UI)
-- Dolby Vision + HDR10 via native AVPlayer
-- DTS/DTS-HD/TrueHD/E-AC3 audio via AetherEngine FFmpeg
-- Jellyfin + WebDAV network playback (pure Dart, no native changes)
-- CI builds unsigned IPA — sideload via Xcode
-- **Alpha** — CI-built and sideloadable; on-device verification on Apple TV hardware pending
-
 ## Screenshots
 
 <p align="center">
@@ -94,7 +86,6 @@ A cross-platform video player for **Android, iOS/iPad, Android TV, and Apple TV 
 |---|---|
 | Android | 5.0 (API 21) |
 | iOS / iPadOS | 16.0 |
-| tvOS | 17.0 |
 
 ## Download
 
@@ -102,7 +93,6 @@ Prebuilt binaries are on the [Releases](https://github.com/mangeshghodke/DreamPl
 
 - **Android** — universal APK + per-architecture APKs (arm64, armv7, x86_64)
 - **iOS / iPadOS** — unsigned IPA; sideload with [SideStore](https://sidestore.io) or [AltStore](https://altstore.io)
-- **Apple TV** — unsigned IPA (alpha); sideload via Xcode
 
 ### Installing on iPhone / iPad
 

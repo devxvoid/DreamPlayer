@@ -483,47 +483,6 @@ Run DreamPlayer on an Android TV box/panel as a real 10-foot app. **Status: Phas
 
 **Out of scope for v1**: AirPlay/DLNA casting, CEC control, live-TV tuner, Play Store/TV certification (leanback banner, `android.app.leanbacklauncher`), Android TV-specific recommendations UI.
 
-### Apple TV (tvOS)
-
-Run DreamPlayer on Apple TV as a real 10-foot app. **Status: SHIPPED as alpha in v0.2.0 (2026-08-21).** The CI build is green end-to-end (`tvos.yml` 9m07s and the release job 9m25s) and `DreamPlayer-tvOS-alpha-<version>.ipa` is attached to the GitHub Release. **Not yet verified on real Apple TV hardware** — sideloading requires a Mac (re-sign + Developer Mode; no AltStore/SideStore equivalent exists on tvOS). The `tvos/` directory is **not** checked into the repo — CI generates it via `flutter-tvos create` each build, backs up our adapted Swift files, overlays them back, then patches the Xcode project.
-
-**Why it's mostly free already**
-- Dart's `Platform.isIOS` returns **true on tvOS**, so the existing platform gates already pick the right path: `ExoPlayerView` (`lib/services/exo_player.dart`) builds the **`UiKitView` AetherEngine view**, `player_screen.dart` does not block it, and `settings_screen.dart`'s Engine label shows "AetherEngine (AVPlayer + FFmpeg)". Toolchain: **Flutter stable 3.47.x = the same base flutter-tvos forks** (local dev upgraded 3.44.9 → 3.47.1 to match).
-- **Jellyfin/WebDAV/TMDB are pure Dart or shared native Swift** — Jellyfin browse + direct-play work with zero extra tvOS code; WebDAV playback routes through `WebDAVByteRangeSource` (copied unchanged); ATS `NSAllowsLocalNetworking` matches the iOS Info.plist.
-- **Plugins ported (2026-08-21)**: `shared_preferences_tvos` + `package_info_plus_tvos` (git: `fluttertv/plugins`, path `packages/<name>_tvos`) give resume/continue-watching/TMDB-cache/saved-servers real persistence; `package_info_plus` bumped to `^10.2.1` (its platform_interface constraint must satisfy the tvos plugin's `^4.1.0`). Plugins without tvOS implementations are wrapped in **try/catch, never `Platform.isTvOS`** — that getter does not exist in the standard Dart VM and breaks compilation of every non-tvos build (hit locally: `Member not found: 'isTvOS'`). Affected call sites: `support_links.dart` (`launchUrl` try/catch), `jellyfin_client.dart` mDNS block (nested try/catch), `open_intent.dart` (`on MissingPluginException`). flutter-tvos writes its own Dart plugin registrant so federated tvos plugins register correctly.
-- **Siri Remote keys arrive as normal Flutter key events** through the player's unconditional `FocusScope.onKeyEvent`; `_isTv == false` on tvOS means the phone branches run, which is fine — arrows reveal controls/seek ±10s, select activates focused buttons, Menu hides-then-exits. **Fixed this release:** the media play/pause key only revealed controls off the TV path; it now calls `_togglePlayPause()` first (`player_screen.dart`, benefits Bluetooth-keyboard phones too).
-
-**CI build recipe (both `.github/workflows/tvos.yml` and the release.yml tvOS job — kept byte-equivalent except TMDB dart-define + version source):**
-1. Install `flutter-tvos` (clone `fluttertv/flutter-tvos`, `flutter-tvos precache` — **no `--appletvos` flag exists**).
-2. Scaffold: `flutter-tvos create --platforms=tvos "$TMPDIR/scaffold"` → **back up `tvos/Runner/*.swift` before `rm -rf tvos`** (the naive flow deletes our committed files then fails `cp: no such file or directory`) → copy scaffold's `tvos/` in → restore our files over it.
-3. Ruby `xcodeproj` patch of `tvos/Runner.xcodeproj`:
-   - SPM: `XCRemoteSwiftPackageReference` → `https://github.com/superuser404notfound/AetherEngine` (`upToNextMajorVersion` from 6.21.0); products **AetherEngine + AetherEngineSMB** into `target.package_product_dependencies` + `frameworks_build_phase` (`PBXBuildFile.product_ref`). **Gem API gotcha**: this version wants `pkg.repositoryURL=` (camelCase) but `dep.product_name=` (snake_case).
-   - Signing OFF: `CODE_SIGNING_ALLOWED=NO` + `CODE_SIGN_IDENTITY=''` — flutter-tvos has **no `--no-codesign` flag**; this is the equivalent.
-   - Deployment target **17.0** (AetherEngine minimum): the template pins `TVOS_DEPLOYMENT_TARGET=15.0` at **project level, which beats a target-level `IPHONEOS_DEPLOYMENT_TARGET`** — set BOTH names at BOTH project and target levels.
-   - **Sources phase**: the scaffold compiles only its own `AppDelegate.swift` — every overlaid `tvos/Runner/*.swift` must be added to `target.source_build_phase` (find-or-create the `Runner` group by `path == 'Runner'`; skip names already present). Without this: `cannot find 'AvPlayerViewFactory' in scope`.
-4. PlistBuddy adds `NSLocalNetworkUsageDescription`, `NSBonjourServices` (`_jellyfin._tcp`, `_emby._tcp`), `NSAppTransportSecurity:NSAllowsLocalNetworking`.
-5. Build: `flutter-tvos build tvos [--dart-define=TMDB_API_KEY=…]`. Output dir discovered dynamically (`find build -type d -name Runner.app`) instead of hardcoding `build/tvos/Release-appletvos/`.
-6. Zip as `Payload/Runner.app` → `DreamPlayer-tvOS-alpha-<version>.ipa`.
-
-**Adapted Swift files** (in `tvos/Runner/`, checked into repo):
-- `AvPlayerView.swift` — same as iOS with `#if !os(tvOS)` guards on `MPVolumeView`, `UIScreen.main.brightness` handlers, and `currentEDRHeadroom` (returns false on tvOS). Everything else — AetherEngine playback, subtitle overlay, channels — identical.
-- `AppDelegate.swift` — no IntentBridge; conforms to `FlutterImplicitEngineDelegate` and registers plugins + `AvPlayerViewFactory`/`FileBrowser`/`WebDAVClient`/`JellyfinDiscovery`/`CacheCleaner` in `didInitializeImplicitFlutterEngine`. Verified compatible: compile proves the symbols exist in flutter-tvos 3.47 engine; the template's `Main.storyboard` instantiates `FlutterViewController` as initial VC so the implicit-engine delegate fires.
-- `SceneDelegate.swift` — simplified, no URL forwarding.
-- `FileBrowser.swift` — Documents folder only; `pickFolder`/`pickLibraryFolder`/`openFilesHome` return nil (graceful no-ops — dead tiles but no crashes).
-- `WebDAVClient.swift`, `JellyfinDiscovery.swift`, `BufferedSMBReader.swift`, `CacheCleaner.swift` — copied from iOS unchanged.
-
-**Known alpha limitations (documented in release notes):**
-1. No overscan padding (`isTvMode()` is Android-only → TvOverscan skipped).
-2. "+ → Network shares" and "Add folder to library" are no-ops (no document picker on tvOS).
-3. Server login text entry via Siri Remote unverified.
-4. HDR chips have no EDR probe (`panelIsInHDRMode: false`); content still plays.
-5. Sideloading needs a Mac: re-sign frameworks+bundle (`codesign -f -s …` per framework then app) after pairing/enabling Developer Mode (Settings → System → Developer Mode).
-
-**What's needed next**
-1. Sideload on real Apple TV hardware — verify launch, playback (local/Jellyfin/WebDAV), persistence across relaunch, Siri Remote navigation incl. TextField IME behavior, then fix what breaks.
-2. 10-foot pass: apply `TvOverscan` on tvOS, hide the dead picker tiles, focus polish.
-3. Longer term: TestFlight (paid account removes the Mac requirement for testers).
-
 ### Player feature backlog (prioritized 2026-08-21)
 
 1. ~~Jellyfin transcoding fallback~~ — DONE (2026-08-22): direct-play errors retry once via server-side HLS `master.m3u8` (H.264/AAC, 20 Mbps cap); Media3 HLS module added; job stopped on player close.
@@ -552,7 +511,7 @@ The home library shows **only folders the user explicitly adds** — nothing is 
   - **Manual-only** (`workflow_dispatch` — no push trigger): run it from the Actions tab when a build is wanted; builds unsigned IPA artifact always.
   - Signed build + TestFlight upload run only when secrets are configured.
   - Secrets needed: `IOS_CERT_BASE64`, `IOS_CERT_PASSWORD`, `IOS_PROFILE_BASE64`, `APPSTORE_API_KEY`, `APPSTORE_API_KEY_ID`, `APPSTORE_ISSUER_ID`.
-- **GitHub Releases** (`.github/workflows/release.yml`): push a `v*` tag (`git tag v0.2.0 && git push origin v0.2.0`) → builds the **universal** release APK + **split-per-abi** APKs (`arm64-v8a`, `armeabi-v7a`, `x86_64`) on `ubuntu-latest` (+ tests first), the unsigned iOS IPA (`DreamPlayer-<version>.ipa`) on `macos-latest`, and the unsigned tvOS alpha IPA (`DreamPlayer-tvOS-alpha-<version>.ipa`) on `macos-latest` — the tvOS job runs the **same steps as tvos.yml** (scaffold backup/restore, SPM injection, signing off, deployment target 17, Sources registration, dynamic packaging) plus `--dart-define=TMDB_API_KEY=${{ secrets.TMDB_API_KEY }}`; then creates the GitHub Release on the tag with the matching `## <version>` section extracted from CHANGELOG.md + `.github/release_notes.md`, attaching all artifacts. **Gotcha (hit 2026-08-21)**: the tag must point at a commit containing the *fixed* workflow — v0.2.0 initially pointed at a commit with the old broken tvOS job and failed; delete + re-push the tag (`git tag -d vX && git push origin :refs/tags/vX && git tag vX && git push origin vX`). App version is **0.2.0** (`pubspec.yaml` `version: 0.2.0+1`) and must be bumped per release to match the tag. Android APKs are still **debug-signed** (`build.gradle.kts` falls back to debug config) — fine for sideloading; real signing setup was deferred (2026-08-21): generate an upload keystore, gitignored `android/key.properties`, gradle reads it with debug fallback, optional CI secrets later.
+- **GitHub Releases** (`.github/workflows/release.yml`): push a `v*` tag (`git tag v0.2.0 && git push origin v0.2.0`) → builds the **universal** release APK + **split-per-abi** APKs (`arm64-v8a`, `armeabi-v7a`, `x86_64`) on `ubuntu-latest` (+ tests first), and the unsigned iOS IPA (`DreamPlayer-<version>.ipa`) on `macos-latest`; then creates the GitHub Release on the tag with the matching `## <version>` section extracted from CHANGELOG.md + `.github/release_notes.md`, attaching all artifacts. App version is **0.2.0** (`pubspec.yaml` `version: 0.2.0+1`) and must be bumped per release to match the tag. Android APKs are still **debug-signed** (`build.gradle.kts` falls back to debug config) — fine for sideloading; real signing setup was deferred (2026-08-21): generate an upload keystore, gitignored `android/key.properties`, gradle reads it with debug fallback, optional CI secrets later.
 - **Bundle ID (iOS)**: `com.dreamplayer.app`. **App display name**: `DreamPlayer`.
 - **Android**: app label `DreamPlayer`; package `com.dreamplayer.app` (matches iOS bundle ID `com.dreamplayer.app`). Build/test locally on the phone.
 
@@ -636,15 +595,6 @@ ios/Runner/
   IntentBridge.swift            # "Open with" intent channel (same contract as MainActivity.kt)
   AppDelegate.swift             # registers the AvPlayerView factory + files/intent/webdav channels
   SceneDelegate.swift           # forwards scene-opened URLs to IntentBridge
-tvos/Runner/                     # (generated on CI via flutter-tvos create; adapted Swift files committed here)
-  AvPlayerView.swift            # same as iOS with #if !os(tvOS) guards on MPVolumeView / brightness
-  AppDelegate.swift             # no IntentBridge; registers AvPlayerView + files/webdav/multicast/cache channels
-  SceneDelegate.swift           # simplified, no IntentBridge
-  FileBrowser.swift             # Documents folder only (no Files app / document picker on tvOS)
-  WebDAVClient.swift            # copied from iOS unchanged
-  JellyfinDiscovery.swift       # copied from iOS unchanged
-  BufferedSMBReader.swift       # copied from iOS unchanged (WebDAV read-ahead)
-  CacheCleaner.swift            # copied from iOS unchanged
 test/
   widget_test.dart              # shell/navigation/overflow tests
   codec_info_test.dart          # HDR + codec formatting unit tests
