@@ -538,7 +538,7 @@ Cast videos so the **TV fetches and plays the file itself** (sender hands over a
 
 ### Player feature backlog (prioritized 2026-08-21)
 
-1. Jellyfin transcoding fallback when direct-play codecs aren't supported natively.
+1. ~~Jellyfin transcoding fallback~~ — DONE (2026-08-22): direct-play errors retry once via server-side HLS `master.m3u8` (H.264/AAC, 20 Mbps cap); Media3 HLS module added; job stopped on player close.
 2. ~~Subtitle appearance settings~~ — DONE (2026-08-22); Android delay offset still open (cue-pipeline refactor).
 3. ~~Horizontal-swipe seek~~ — DONE (2026-08-22, time-only pill; frame thumbnails impossible for DV/HDR via MMR).
 4. Android release signing (deferred — see CI/Deployment).

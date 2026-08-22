@@ -17,6 +17,12 @@ class TvTextField extends StatefulWidget {
     this.obscureText = false,
     this.keyboardType,
     this.onChanged,
+    this.onSubmitted,
+    this.autofocus = false,
+    this.textInputAction,
+    this.autofillHints,
+    this.autocorrect = true,
+    this.enableSuggestions = true,
   });
 
   final TextEditingController controller;
@@ -24,6 +30,12 @@ class TvTextField extends StatefulWidget {
   final bool obscureText;
   final TextInputType? keyboardType;
   final ValueChanged<String>? onChanged;
+  final ValueChanged<String>? onSubmitted;
+  final bool autofocus;
+  final TextInputAction? textInputAction;
+  final Iterable<String>? autofillHints;
+  final bool autocorrect;
+  final bool enableSuggestions;
 
   @override
   State<TvTextField> createState() => _TvTextFieldState();
@@ -101,6 +113,12 @@ class _TvTextFieldState extends State<TvTextField> {
       obscureText: widget.obscureText,
       keyboardType: widget.keyboardType,
       onChanged: widget.onChanged,
+      onSubmitted: widget.onSubmitted,
+      autofocus: widget.autofocus,
+      textInputAction: widget.textInputAction,
+      autofillHints: widget.autofillHints,
+      autocorrect: widget.autocorrect,
+      enableSuggestions: widget.enableSuggestions,
       decoration: widget.decoration,
     );
 

@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../models/video_item.dart';
 import '../services/smb_client.dart';
 import '../services/tmdb_client.dart';
+import '../widgets/server_form_kit.dart';
 import '../widgets/tv_overscan.dart';
 import '../widgets/tv_text_field.dart';
 import '../widgets/tv_tile.dart';
@@ -328,14 +329,21 @@ class _SmbScreenState extends State<SmbScreen> {
     final controller = TextEditingController();
     final name = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Add share'),
-        content: TextField(
+      builder: (context) => serverDialog(
+        title: const ServerDialogTitle(
+          icon: Icons.folder_special_outlined,
+          title: 'Add share',
+        ),
+        content: ServerTextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(
-            labelText: 'Share name',
-            hintText: 'e.g. Videos',
+          textInputAction: TextInputAction.done,
+          onSubmitted: (v) => Navigator.of(context).pop(v.trim()),
+          decoration: serverFieldDecoration(
+            context,
+            label: 'Share name',
+            hint: 'e.g. Videos',
+            icon: Icons.folder_open_outlined,
           ),
         ),
         actions: [
@@ -343,9 +351,15 @@ class _SmbScreenState extends State<SmbScreen> {
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('Cancel'),
           ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(controller.text.trim()),
-            child: const Text('Add'),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+            ),
+            onPressed: () =>
+                Navigator.of(context).pop(controller.text.trim()),
+            icon: const Icon(Icons.add_rounded, size: 16),
+            label: const Text('Add'),
           ),
         ],
       ),
@@ -751,6 +765,8 @@ class _ServerFormDialogState extends State<_ServerFormDialog> {
   late final TextEditingController _domain;
   late bool _guest;
   bool _testing = false;
+  String? _resultMessage;
+  bool? _resultSuccess;
 
   @override
   void initState() {
@@ -778,7 +794,10 @@ class _ServerFormDialogState extends State<_ServerFormDialog> {
   }
 
   Future<void> _test() async {
-    setState(() => _testing = true);
+    setState(() {
+      _testing = true;
+      _resultMessage = null;
+    });
     final result = await _smb.testConnection(
       host: _host.text.trim(),
       port: int.tryParse(_port.text.trim()) ?? 445,
@@ -788,21 +807,21 @@ class _ServerFormDialogState extends State<_ServerFormDialog> {
       anonymous: _guest,
     );
     if (!mounted) return;
-    setState(() => _testing = false);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(result.ok
-            ? 'Connected'
-            : 'Failed: ${result.error ?? 'unknown error'}'),
-      ),
-    );
+    setState(() {
+      _testing = false;
+      _resultSuccess = result.ok;
+      _resultMessage =
+          result.ok ? 'Connected' : 'Failed: ${result.error ?? 'unknown error'}';
+    });
   }
 
   Future<void> _save() async {
     final host = _host.text.trim();
     if (host.isEmpty) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Host is required')));
+      setState(() {
+        _resultSuccess = false;
+        _resultMessage = 'Host is required';
+      });
       return;
     }
     try {
@@ -820,86 +839,168 @@ class _ServerFormDialogState extends State<_ServerFormDialog> {
       if (mounted) Navigator.of(context).pop();
     } on PlatformException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.message ?? 'Save failed')));
+      setState(() {
+        _resultSuccess = false;
+        _resultMessage = e.message ?? 'Save failed';
+      });
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(widget.existing == null ? 'Add server' : 'Edit server'),
-      content: SingleChildScrollView(
+    final theme = Theme.of(context);
+    return serverDialog(
+      title: ServerDialogTitle(
+        icon: widget.existing == null ? Icons.add_link : Icons.dns_outlined,
+        title: widget.existing == null ? 'Add server' : 'Edit server',
+        subtitle: 'SMB / network share',
+      ),
+      content: SizedBox(
+        width: 440,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TvTextField(
-              controller: _name,
-              decoration: const InputDecoration(labelText: 'Name (optional)'),
-            ),
-            const SizedBox(height: 12),
-            TvTextField(
-              controller: _host,
-              decoration: const InputDecoration(
-                labelText: 'Host',
-                hintText: '192.168.1.10 or nas.local',
-              ),
-            ),
-            const SizedBox(height: 12),
-            TvTextField(
-              controller: _port,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'Port'),
-            ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Guest (no username/password)'),
-              value: _guest,
-              onChanged: (v) => setState(() => _guest = v),
-            ),
-            if (!_guest) ...[
-              TvTextField(
-                controller: _username,
-                decoration: const InputDecoration(labelText: 'Username'),
-              ),
-              const SizedBox(height: 12),
-              TvTextField(
-                controller: _password,
-                obscureText: true,
-                decoration: InputDecoration(
-                  labelText: 'Password',
-                  hintText: widget.existing?.hasPassword ?? false
-                      ? '(unchanged)'
-                      : null,
+            Flexible(
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    TvTextField(
+                      controller: _name,
+                      textInputAction: TextInputAction.next,
+                      decoration: serverFieldDecoration(
+                        context,
+                        label: 'Name',
+                        hint: 'e.g. Living room NAS',
+                        icon: Icons.badge_outlined,
+                        optional: true,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          flex: 3,
+                          child: TvTextField(
+                            controller: _host,
+                            autocorrect: false,
+                            enableSuggestions: false,
+                            textInputAction: TextInputAction.next,
+                            decoration: serverFieldDecoration(
+                              context,
+                              label: 'Host',
+                              hint: '192.168.1.10 or nas.local',
+                              icon: Icons.lan_outlined,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          flex: 2,
+                          child: TvTextField(
+                            controller: _port,
+                            keyboardType: TextInputType.number,
+                            textInputAction:
+                                _guest ? TextInputAction.done : TextInputAction.next,
+                            decoration: serverFieldDecoration(
+                              context,
+                              label: 'Port',
+                              hint: '445',
+                              icon: Icons.settings_ethernet,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    SwitchListTile(
+                      contentPadding: const EdgeInsets.only(top: 4),
+                      controlAffinity: ListTileControlAffinity.leading,
+                      dense: true,
+                      activeThumbColor: theme.colorScheme.primary,
+                      title: const Text('Guest — no username/password',
+                          style: TextStyle(fontSize: 14)),
+                      value: _guest,
+                      onChanged: (v) => setState(() => _guest = v),
+                    ),
+                    if (!_guest) ...[
+                      const SizedBox(height: 2),
+                      TvTextField(
+                        controller: _username,
+                        autofillHints: const [AutofillHints.username],
+                        textInputAction: TextInputAction.next,
+                        decoration: serverFieldDecoration(
+                          context,
+                          label: 'Username',
+                          hint: 'admin',
+                          icon: Icons.person_outline,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      ServerPasswordField(
+                        icon: Icons.lock_outline,
+                        controller: _password,
+                        label: widget.existing?.hasPassword ?? false
+                            ? 'Password (leave empty to keep)'
+                            : 'Password',
+                        hint: '••••••••',
+                      ),
+                      const SizedBox(height: 14),
+                      TvTextField(
+                        controller: _domain,
+                        textInputAction: TextInputAction.done,
+                        decoration: serverFieldDecoration(
+                          context,
+                          label: 'Domain',
+                          hint: 'WORKGROUP',
+                          icon: Icons.account_tree_outlined,
+                          optional: true,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
-              const SizedBox(height: 12),
-              TvTextField(
-                controller: _domain,
-                decoration: const InputDecoration(labelText: 'Domain (optional)'),
+            ),
+            if (_resultMessage != null)
+              ServerResultBanner(
+                success: _resultSuccess == true,
+                message: _resultMessage!,
+                margin: const EdgeInsets.fromLTRB(0, 12, 0, 0),
               ),
-            ],
           ],
         ),
       ),
       actions: [
-        TextButton(
+        OutlinedButton.icon(
+          style: OutlinedButton.styleFrom(
+            side: BorderSide(color: theme.colorScheme.outline),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
           onPressed: _testing ? null : _test,
-          child: _testing
+          icon: _testing
               ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Text('Test'),
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : const Icon(Icons.wifi_tethering, size: 16),
+          label: const Text('Test'),
         ),
+        const Spacer(),
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Cancel'),
         ),
-        FilledButton(
+        FilledButton.icon(
+          style: FilledButton.styleFrom(
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
           onPressed: _save,
-          child: const Text('Save'),
+          icon: const Icon(Icons.check_rounded, size: 16),
+          label: const Text('Save'),
         ),
       ],
     );

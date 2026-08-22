@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../models/video_item.dart';
 import '../services/tmdb_client.dart';
 import '../services/webdav_client.dart';
+import '../widgets/server_form_kit.dart';
 import '../widgets/tv_overscan.dart';
 import '../widgets/tv_text_field.dart';
 import '../widgets/tv_tile.dart';
@@ -641,179 +642,242 @@ class _ServerFormDialogState extends State<_ServerFormDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(widget.existing == null ? 'Add server' : 'Edit server'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Flexible(
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  TvTextField(
-                    controller: _name,
-                    decoration: const InputDecoration(
-                      labelText: 'Server name',
-                      hintText: 'e.g. Home NAS',
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  const Text(
-                    'Protocol',
-                    style: TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  RadioGroup<_WebDavProtocol>(
-                    groupValue: _protocol,
-                    onChanged: (v) {
-                      if (v != null) _setProtocol(v);
-                    },
-                    child: Wrap(
-                      spacing: 16,
-                      runSpacing: 4,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: const [
-                        Radio<_WebDavProtocol>(value: _WebDavProtocol.http),
-                        Text('HTTP'),
-                        Radio<_WebDavProtocol>(value: _WebDavProtocol.https),
-                        Text('HTTPS'),
-                      ],
-                    ),
-                  ),
-                  TvTextField(
-                    controller: _host,
-                    keyboardType: TextInputType.url,
-                    decoration: const InputDecoration(
-                      labelText: 'Host',
-                      hintText: '192.168.1.16',
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TvTextField(
-                    controller: _port,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      labelText: 'Port',
-                      hintText: '8080',
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TvTextField(
-                    controller: _path,
-                    decoration: const InputDecoration(
-                      labelText: 'Path',
-                      hintText: '/dav',
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TvTextField(
-                    controller: _username,
-                    decoration: const InputDecoration(
-                      labelText: 'Username (optional)',
-                      hintText: 'admin',
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-            TvTextField(
-              controller: _password,
-              obscureText: true,
-              decoration: InputDecoration(
-                labelText: 'Password',
-                hintText: widget.existing?.hasPassword ?? false
-                    ? '(unchanged)'
-                    : 'Your password',
-              ),
-            ),
-            if (!_isHttps &&
-                (_username.text.trim().isNotEmpty || _password.text.isNotEmpty))
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+    final theme = Theme.of(context);
+    return serverDialog(
+      title: ServerDialogTitle(
+        icon: widget.existing == null ? Icons.add_link : Icons.dns_outlined,
+        title: widget.existing == null ? 'Add server' : 'Edit server',
+        subtitle: 'WebDAV',
+      ),
+      content: SizedBox(
+        width: 440,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Flexible(
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Icon(
-                      Icons.warning_amber_rounded,
-                      size: 18,
-                      color: Theme.of(context).colorScheme.error,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'HTTP sends the password insecurely. Use HTTPS when '
-                        'connecting over the internet.',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Theme.of(context).colorScheme.error,
-                        ),
+                    TvTextField(
+                      controller: _name,
+                      textInputAction: TextInputAction.next,
+                      decoration: serverFieldDecoration(
+                        context,
+                        label: 'Server name',
+                        hint: 'e.g. Home NAS',
+                        icon: Icons.badge_outlined,
+                        optional: true,
                       ),
                     ),
+                    const SizedBox(height: 14),
+                    // Protocol segmented choice.
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _protocolChoice(
+                            context,
+                            icon: Icons.language,
+                            label: 'HTTP',
+                            selected: !_isHttps,
+                            onTap: () => _setProtocol(_WebDavProtocol.http),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: _protocolChoice(
+                            context,
+                            icon: Icons.lock_outline,
+                            label: 'HTTPS',
+                            selected: _isHttps,
+                            onTap: () => _setProtocol(_WebDavProtocol.https),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    TvTextField(
+                      controller: _host,
+                      keyboardType: TextInputType.url,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      textInputAction: TextInputAction.next,
+                      decoration: serverFieldDecoration(
+                        context,
+                        label: 'Host',
+                        hint: '192.168.1.16 or nas.local',
+                        icon: Icons.lan_outlined,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          flex: 2,
+                          child: TvTextField(
+                            controller: _port,
+                            keyboardType: TextInputType.number,
+                            textInputAction: TextInputAction.next,
+                            decoration: serverFieldDecoration(
+                              context,
+                              label: 'Port',
+                              hint: '8080',
+                              icon: Icons.settings_ethernet,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          flex: 3,
+                          child: TvTextField(
+                            controller: _path,
+                            textInputAction: TextInputAction.next,
+                            decoration: serverFieldDecoration(
+                              context,
+                              label: 'Path',
+                              hint: '/dav',
+                              icon: Icons.folder_open_outlined,
+                              optional: true,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    TvTextField(
+                      controller: _username,
+                      autofillHints: const [AutofillHints.username],
+                      textInputAction: TextInputAction.next,
+                      decoration: serverFieldDecoration(
+                        context,
+                        label: 'Username',
+                        hint: 'admin',
+                        icon: Icons.person_outline,
+                        optional: true,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    ServerPasswordField(
+                      icon: Icons.lock_outline,
+                      controller: _password,
+                      label: widget.existing?.hasPassword ?? false
+                          ? 'Password (leave empty to keep)'
+                          : 'Password',
+                      hint: '••••••••',
+                    ),
+                    if (!_isHttps &&
+                        (_username.text.trim().isNotEmpty ||
+                            _password.text.isNotEmpty))
+                      ServerResultBanner(
+                        success: false,
+                        margin: const EdgeInsets.only(top: 10),
+                        message: 'HTTP sends the password insecurely. Use '
+                            'HTTPS when connecting over the internet.',
+                      ),
+                    if (_isHttps)
+                      SwitchListTile(
+                        contentPadding: const EdgeInsets.only(top: 4),
+                        controlAffinity: ListTileControlAffinity.leading,
+                        dense: true,
+                        activeThumbColor: theme.colorScheme.primary,
+                        title: const Text('Self-signed certificate',
+                            style: TextStyle(fontSize: 14)),
+                        subtitle: const Text(
+                          'Trust HTTPS servers without a CA certificate '
+                          '(NAS, Nextcloud, etc.)',
+                          style: TextStyle(fontSize: 12),
+                        ),
+                        value: _allowSelfSigned,
+                        onChanged: (v) => setState(() => _allowSelfSigned = v),
+                      ),
                   ],
                 ),
               ),
-                  if (_isHttps)
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Accept self-signed certificate'),
-                      subtitle: const Text(
-                        'For HTTPS servers without a trusted certificate (NAS, '
-                        'Nextcloud, etc.)',
-                      ),
-                      value: _allowSelfSigned,
-                      onChanged: (v) => setState(() => _allowSelfSigned = v),
-                    ),
-                ],
-              ),
             ),
-          ),
-          if (_resultMessage != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 16),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(
-                    _resultSuccess == true
-                        ? Icons.check_circle
-                        : Icons.error_outline,
-                    size: 18,
-                    color: _resultSuccess == true
-                        ? const Color(0xFF4CAF50)
-                        : Theme.of(context).colorScheme.error,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      _resultMessage!,
-                      style: TextStyle(
-                        color: _resultSuccess == true
-                            ? const Color(0xFF4CAF50)
-                            : Theme.of(context).colorScheme.error,
-                      ),
-                    ),
-                  ),
-                ],
+            if (_resultMessage != null)
+              ServerResultBanner(
+                success: _resultSuccess == true,
+                message: _resultMessage!,
+                margin: const EdgeInsets.fromLTRB(0, 12, 0, 0),
               ),
-            ),
-        ],
+          ],
+        ),
       ),
       actions: [
-        TextButton(
+        OutlinedButton.icon(
+          style: OutlinedButton.styleFrom(
+            side: BorderSide(color: theme.colorScheme.outline),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
           onPressed: _testing ? null : _test,
-          child: _testing
+          icon: _testing
               ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Text('Test'),
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : const Icon(Icons.wifi_tethering, size: 16),
+          label: const Text('Test'),
         ),
+        const Spacer(),
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Cancel'),
         ),
-        FilledButton(onPressed: _save, child: const Text('Save')),
+        FilledButton.icon(
+          style: FilledButton.styleFrom(
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+          onPressed: _save,
+          icon: const Icon(Icons.check_rounded, size: 16),
+          label: const Text('Save'),
+        ),
       ],
+    );
+  }
+
+  /// One half of the HTTP/HTTPS segmented protocol picker.
+  Widget _protocolChoice(
+    BuildContext context, {
+    required IconData icon,
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    final theme = Theme.of(context);
+    final color = selected ? theme.colorScheme.primary : theme.colorScheme.outline;
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        decoration: BoxDecoration(
+          color: selected
+              ? theme.colorScheme.primary.withValues(alpha: 0.15)
+              : theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color, width: selected ? 1.4 : 1),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 17, color: color),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                fontSize: 13.5,
+                color: selected ? theme.colorScheme.primary : null,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

@@ -3,7 +3,12 @@
 All notable changes to DreamPlayer are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
-## Unreleased
+## 0.2.2
+
+### New features — playback
+
+- **Jellyfin server transcoding** — when direct play fails (undecodable codec, DV Profile 5 on non-DV hardware, expired stream…), the player retries once through the Jellyfin server's HLS transcoder (`master.m3u8`, H.264 video + AAC/AC3/EAC3 audio, 20 Mbps cap) and resumes at the last position. The server-side transcode job is stopped when the player closes so the host stops burning CPU. Android needed the Media3 HLS module (`media3-exoplayer-hls`); iOS plays HLS natively.
+- **Redesigned network-server dialogs (Jellyfin / WebDAV / SMB)** — shared visual language across all three: shaped dialogs with icon-badge titles, rounded icon-prefixed fields, HTTP/HTTPS segmented picker on WebDAV, password show/hide toggles, OS autofill hints, tinted inline test-result banners (SMB results moved out of SnackBars), and consistent action rows. Fields stay D-pad friendly on Fire TV via `TvTextField`.
 
 ### New features — player
 
@@ -13,6 +18,7 @@ pulled into the GitHub Release body automatically by `.github/workflows/release.
 ### Fixed
 
 - Subtitle settings preview crashed in landscape (`clamp(96.0, …)` with min > max on short viewports) — replaced with explicit caps; preview now sizes adaptively (portrait full-width 16:9, landscape up to 42% of viewport height) over a bright royalty-free still so cue backgrounds/outlines read against real imagery.
+- Jellyfin transcode fallback no longer kills itself: the "playing via server transcoding" note used to unmount the player platform view mid-open; the swap now keeps the view alive and shows the buffering spinner.
 
 ## 0.2.1
 
