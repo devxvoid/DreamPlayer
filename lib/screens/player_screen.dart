@@ -8,6 +8,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../models/hdr_format.dart';
 import '../models/video_item.dart';
 import '../services/cast_service.dart';
+import '../services/dlna_service.dart';
 import '../services/continue_watching.dart';
 import '../services/exo_player.dart';
 import '../services/jellyfin_client.dart';
@@ -92,15 +93,14 @@ class _PlayerScreenState extends State<PlayerScreen>
   bool _transcodeActive = false;
   String? _transcodeServerUrl;
 
-  /// Google Cast session state. While [_casting], transport controls drive
-  /// the receiver via [CastService] and native ExoPlayer events are ignored.
+  /// Casting session state. While [_casting], transport controls drive the
+  /// receiver (Google Cast or DLNA) and native ExoPlayer events are ignored.
   bool _casting = false;
+  bool _castViaDlna = false;
   String? _castDeviceName;
   StreamSubscription<CastMediaStatus>? _castSub;
 
-  /// Hands the current video to [device]: pauses local playback, loads the
-  /// URL on the receiver at the current position and switches the UI into
-  /// casting mode.
+  /// Hands the current video to a Google Cast [device].
   Future<void> _startCasting(CastDevice device) async {
     final uri = _current.uri;
     if (uri == null || !CastService.isSourceCastable(_current)) return;
@@ -122,12 +122,44 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
     if (!mounted) return;
     _castDeviceName = device.name;
+    _castViaDlna = false;
     _completed = false;
     _error = null;
     await _castSub?.cancel();
     _castSub = CastService.instance.statusStream.listen(_onCastStatus);
     setState(() => _casting = true);
     debugPrint('cast: now casting ${_current.title} → ${device.name}');
+  }
+
+  /// Hands the current video to a DLNA renderer [device].
+  Future<void> _startDlnaCasting(DlnaDevice device) async {
+    final uri = _current.uri;
+    if (uri == null || !CastService.isSourceCastable(_current)) return;
+    final startPos = _position;
+    _exo?.pause();
+    try {
+      await DlnaService.instance.connectAndLoad(
+        device: device,
+        url: uri,
+        title: _current.title,
+        startAt: startPos,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(DlnaService.friendlyError(e))),
+      );
+      return;
+    }
+    if (!mounted) return;
+    _castDeviceName = device.name;
+    _castViaDlna = true;
+    _completed = false;
+    _error = null;
+    await _castSub?.cancel();
+    _castSub = DlnaService.instance.statusStream.listen(_onCastStatus);
+    setState(() => _casting = true);
+    debugPrint('dlna: now casting ${_current.title} → ${device.name}');
   }
 
   void _onCastStatus(CastMediaStatus s) {
@@ -156,7 +188,11 @@ class _PlayerScreenState extends State<PlayerScreen>
     final castPos = _position;
     await _castSub?.cancel();
     _castSub = null;
-    await CastService.instance.disconnect(stopMedia: !resumeLocal);
+    if (_castViaDlna) {
+      await DlnaService.instance.disconnect(stopMedia: !resumeLocal);
+    } else {
+      await CastService.instance.disconnect(stopMedia: !resumeLocal);
+    }
     if (!mounted) return;
     if (!resumeLocal) {
       setState(() => _casting = false);
@@ -234,8 +270,11 @@ class _PlayerScreenState extends State<PlayerScreen>
                   ],
                 ),
               ),
-              FutureBuilder<List<CastDevice>>(
-                future: CastService.instance.discover(),
+              FutureBuilder<List<List<dynamic>>>(
+                future: Future.wait([
+                  CastService.instance.discover(),
+                  DlnaService.instance.discover(),
+                ]),
                 builder: (context, snap) {
                   if (snap.connectionState != ConnectionState.done) {
                     return const Padding(
@@ -244,8 +283,11 @@ class _PlayerScreenState extends State<PlayerScreen>
                           child: CircularProgressIndicator(strokeWidth: 2)),
                     );
                   }
-                  final devices = snap.data ?? const [];
-                  if (devices.isEmpty) {
+                  final castDevices =
+                      (snap.data?[0] as List<CastDevice>?) ?? const [];
+                  final dlnaDevices =
+                      (snap.data?[1] as List<DlnaDevice>?) ?? const [];
+                  if (castDevices.isEmpty && dlnaDevices.isEmpty) {
                     return const Padding(
                       padding: EdgeInsets.all(24),
                       child: Text(
@@ -255,22 +297,54 @@ class _PlayerScreenState extends State<PlayerScreen>
                     );
                   }
                   return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      for (final d in devices)
-                        ListTile(
-                          leading:
-                              const Icon(Icons.tv, color: Colors.white70),
-                          title: Text(d.name,
-                              style:
-                                  const TextStyle(color: Colors.white)),
-                          subtitle: Text(d.host,
-                              style:
-                                  const TextStyle(color: Colors.white38)),
-                          onTap: () {
-                            Navigator.pop(sheetContext);
-                            unawaited(_startCasting(d));
-                          },
+                      if (castDevices.isNotEmpty) ...[
+                        const Padding(
+                          padding: EdgeInsets.fromLTRB(16, 4, 16, 4),
+                          child: Text('Google Cast',
+                              style: TextStyle(
+                                  color: Colors.white38, fontSize: 12)),
                         ),
+                        for (final d in castDevices)
+                          ListTile(
+                            leading:
+                                const Icon(Icons.cast, color: Colors.white70),
+                            title: Text(d.name,
+                                style:
+                                    const TextStyle(color: Colors.white)),
+                            subtitle: Text(d.host,
+                                style:
+                                    const TextStyle(color: Colors.white38)),
+                            onTap: () {
+                              Navigator.pop(sheetContext);
+                              unawaited(_startCasting(d));
+                            },
+                          ),
+                      ],
+                      if (dlnaDevices.isNotEmpty) ...[
+                        const Padding(
+                          padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
+                          child: Text('DLNA / UPnP',
+                              style: TextStyle(
+                                  color: Colors.white38, fontSize: 12)),
+                        ),
+                        for (final d in dlnaDevices)
+                          ListTile(
+                            leading: const Icon(Icons.live_tv,
+                                color: Colors.white70),
+                            title: Text(d.name,
+                                style:
+                                    const TextStyle(color: Colors.white)),
+                            subtitle: Text(d.host,
+                                style:
+                                    const TextStyle(color: Colors.white38)),
+                            onTap: () {
+                              Navigator.pop(sheetContext);
+                              unawaited(_startDlnaCasting(d));
+                            },
+                          ),
+                      ],
                     ],
                   );
                 },
@@ -792,7 +866,11 @@ class _PlayerScreenState extends State<PlayerScreen>
     _stopTranscodeJob();
     if (_casting) {
       _castSub?.cancel();
-      unawaited(CastService.instance.disconnect(stopMedia: false));
+      if (_castViaDlna) {
+        unawaited(DlnaService.instance.disconnect(stopMedia: false));
+      } else {
+        unawaited(CastService.instance.disconnect(stopMedia: false));
+      }
     }
     // Restore system brightness so it doesn't stick after the player closes.
     if (Platform.isIOS && _iosOriginalBrightness >= 0) {
@@ -1248,8 +1326,11 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   void _seekBy(Duration delta) {
     if (_casting) {
-      unawaited(
-          CastService.instance.seekTo(_position + delta));
+      if (_castViaDlna) {
+        unawaited(DlnaService.instance.seekTo(_position + delta));
+      } else {
+        unawaited(CastService.instance.seekTo(_position + delta));
+      }
       _showControls();
       return;
     }
@@ -1272,7 +1353,11 @@ class _PlayerScreenState extends State<PlayerScreen>
   void _onSeekEnd(double value) {
     final target = Duration(milliseconds: value.round());
     if (_casting) {
-      unawaited(CastService.instance.seekTo(target));
+      if (_castViaDlna) {
+        unawaited(DlnaService.instance.seekTo(target));
+      } else {
+        unawaited(CastService.instance.seekTo(target));
+      }
     } else {
       _exo?.seekTo(target);
     }
@@ -1283,7 +1368,11 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   void _togglePlayPause() {
     if (_casting) {
-      unawaited(CastService.instance.togglePlayPause());
+      if (_castViaDlna) {
+        unawaited(DlnaService.instance.togglePlayPause());
+      } else {
+        unawaited(CastService.instance.togglePlayPause());
+      }
       _showControls();
       return;
     }
