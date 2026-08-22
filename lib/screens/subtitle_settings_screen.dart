@@ -64,38 +64,66 @@ class _SubtitleSettingsScreenState extends State<SubtitleSettingsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                // Live preview over a fake video frame.
+                // Live preview over a real still (banner art) so background
+                // boxes and outlines can be judged against actual imagery.
+                // Height-capped so in landscape (short viewport) it stays a
+                // strip, not a wall.
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-                  child: AspectRatio(
-                    aspectRatio: 16 / 9,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF101418),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: theme.dividerColor),
-                      ),
-                      alignment: Alignment.bottomCenter,
-                      padding: const EdgeInsets.only(bottom: 14),
-                      child: Text(
-                        'Sample subtitle line',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 17 * _style.sizeMultiplier,
-                          fontWeight: FontWeight.w600,
-                          color: _style.color,
-                          backgroundColor: _style.hasBackground
-                              ? _style.backgroundColor
-                              : null,
-                          shadows: _style.outline
-                              ? const [
-                                  Shadow(color: Colors.black, offset: Offset(1, 1)),
-                                ]
-                              : null,
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                  child: LayoutBuilder(builder: (context, _) {
+                    final media = MediaQuery.of(context).size;
+                    final boxH =
+                        (media.width * 9 / 16).clamp(96.0, media.height * 0.26);
+                    final boxW = boxH * 16 / 9;
+                    return Center(
+                      child: Container(
+                        width: boxW,
+                        height: boxH,
+                        foregroundDecoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: theme.dividerColor),
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(10),
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              Image.asset(
+                                'assets/preview_backdrop.jpg',
+                                fit: BoxFit.cover,
+                              ),
+                              Align(
+                                alignment: Alignment.bottomCenter,
+                                child: Padding(
+                                  padding: EdgeInsets.only(bottom: boxH * 0.09),
+                                  child: Text(
+                                    'Sample subtitle line',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      fontSize:
+                                          boxH * 0.11 * _style.sizeMultiplier,
+                                      fontWeight: FontWeight.w600,
+                                      color: _style.color,
+                                      backgroundColor: _style.hasBackground
+                                          ? _style.backgroundColor
+                                          : null,
+                                      shadows: _style.outline
+                                          ? const [
+                                              Shadow(
+                                                  color: Colors.black,
+                                                  offset: Offset(1, 1)),
+                                            ]
+                                          : null,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
-                    ),
-                  ),
+                    );
+                  }),
                 ),
                 _section(theme, 'Text size'),
                 Padding(
