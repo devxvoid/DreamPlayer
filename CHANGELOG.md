@@ -3,6 +3,15 @@
 All notable changes to DreamPlayer are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## 0.2.3
+
+### Fixed
+
+- Removed Apple TV / tvOS support (no hardware to test — builds kept failing and the alpha was never verified)
+- Removed Google Cast / DLNA casting (removed entirely — broken resume-on-device and audio-track-on-TV bugs, no test device)
+- Cleaned stale tvOS references from shared Dart files, README, AGENTS.md, and CI workflows
+- Updated repo description to reflect current platform support
+
 ## 0.2.2
 
 ### New features — playback
