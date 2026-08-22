@@ -662,6 +662,114 @@ class JellyfinClient {
     return uri.toString();
   }
 
+  /// Server-transcoded HLS URL. The Jellyfin backend re-encodes the file to
+  /// H.264 + a broadly-supported audio codec in an HLS live playlist, so files
+  /// whose codecs the device can't decode natively still play. Hitting
+  /// `master.m3u8` directly starts the transcode job — no PlaybackInfo round
+  /// trip needed. [maxBitrateBps] caps the output quality; [devId] tags the
+  /// server-side job so [stopActiveEncoding] can find it later.
+  String transcodeUrl(
+    JellyfinServer server,
+    JellyfinItem item, {
+    required String devId,
+    int maxBitrateBps = defaultTranscodeBitrateBps,
+  }) {
+    final uri = Uri.parse('${server.url}/Videos/${item.id}/master.m3u8')
+        .replace(queryParameters: {
+      'MediaSourceId': item.mediaSourceId ?? item.id,
+      'DeviceId': devId,
+      'VideoCodec': 'h264',
+      // AAC first; AC3/EAC3 kept for receivers that accept them without a
+      // full re-encode on the audio leg.
+      'AudioCodec': 'aac,ac3,eac3,mp3',
+      'VideoBitrate': '$maxBitrateBps',
+      'MaxStreamingBitrate': '$maxBitrateBps',
+      'TranscodeReasons': 'CodecNotSupported',
+      'api_key': server.token ?? '',
+    });
+    return uri.toString();
+  }
+
+  /// Default transcode ceiling: ~20 Mbps covers most 1080p sources without
+  /// hammering the server CPU.
+  static const int defaultTranscodeBitrateBps = 20000000;
+
+  /// Stable per-install device id so this client's server-side transcode jobs
+  /// can be identified and stopped ([stopActiveEncoding]).
+  Future<String> get deviceId async {
+    final prefs = await _sharedPrefs;
+    var id = prefs.getString(_deviceIdKey);
+    if (id == null || id.isEmpty) {
+      id = 'dp${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}';
+      await prefs.setString(_deviceIdKey, id);
+    }
+    return id;
+  }
+
+  /// Builds the direct-play [VideoItem] for [item] as a server-transcoded
+  /// fallback: same identity/resume key, but the playable URI is the HLS
+  /// master playlist. Returns null when [video] isn't a Jellyfin item or its
+  /// server is no longer saved (nothing to fall back to).
+  Future<VideoItem?> transcodeFallbackFor(VideoItem video) async {
+    final itemId = video.jellyfinItemId;
+    final serverId = video.jellyfinServerId;
+    if (itemId == null || itemId.isEmpty || serverId == null) return null;
+    final servers = await loadServers();
+    JellyfinServer? server;
+    for (final s in servers) {
+      if (s.urlHost == serverId && s.isAuthenticated) {
+        server = s;
+        break;
+      }
+    }
+    if (server == null) return null;
+    final item = JellyfinItem(id: itemId, name: video.title);
+    return VideoItem(
+      id: video.id,
+      title: video.title,
+      uri: transcodeUrl(server, item, devId: await deviceId),
+      resumeKey: video.resumeKey,
+      duration: video.duration,
+      sizeBytes: video.sizeBytes,
+      resolution: video.resolution,
+      allowSelfSigned: server.allowSelfSigned,
+      jellyfinServerId: serverId,
+      jellyfinItemId: itemId,
+    );
+  }
+
+  /// Best-effort stop of this device's server-side transcode job(s). Called
+  /// when a transcoded playback session closes so the server stops burning
+  /// CPU on a stream nobody is watching.
+  Future<void> stopActiveEncoding(String serverUrl) async {
+    try {
+      final id = await deviceId;
+      final client = _httpClient(allowSelfSigned: false);
+      try {
+        final req = await client.deleteUrl(
+          Uri.parse('$serverUrl/Videos/ActiveEncodings')
+              .replace(queryParameters: {'DeviceId': id}),
+        );
+        final token = (await serverForUrl(serverUrl))?.token;
+        if (token != null && token.isNotEmpty) {
+          req.headers.set('X-Emby-Token', token);
+        }
+        await req.close().timeout(const Duration(seconds: 5));
+      } finally {
+        client.close(force: true);
+      }
+    } catch (_) {
+      // Best-effort — the job also dies when the session times out.
+    }
+  }
+
+  /// True when [uri] points at a Jellyfin transcode playlist rather than a
+  /// direct stream (used to avoid retrying the fallback twice).
+  static bool isTranscodeUri(String? uri) =>
+      uri != null && uri.contains('master.m3u8');
+
+  static const _deviceIdKey = 'dreamplayer.jellyfinDeviceId';
+
   /// Stable resume key for a Jellyfin item, surviving session token rotation.
   String resumeKey(JellyfinServer server, JellyfinItem item) =>
       'jellyfin:${server.urlHost}/${item.id}';

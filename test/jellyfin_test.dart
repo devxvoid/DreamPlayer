@@ -353,4 +353,122 @@ void main() {
       expect(await JellyfinClient().loadAllFolderMeta(), isEmpty);
     });
   });
+
+  group('transcode fallback', () {
+    const server = JellyfinServer(
+      name: 'Home',
+      url: 'http://192.168.1.16:8096',
+      username: 'me',
+      token: 'tok123',
+      userId: 'u1',
+    );
+
+    final item = JellyfinItem(
+      id: 'vid42',
+      name: 'Oldboy',
+      mediaType: 'Video',
+      mediaSourceId: 'msrc9',
+    );
+
+    test('transcodeUrl builds an HLS master playlist request', () {
+      final url = JellyfinClient().transcodeUrl(server, item, devId: 'dev1');
+      expect(url, contains('/Videos/vid42/master.m3u8'));
+      expect(url, contains('MediaSourceId=msrc9'));
+      expect(url, contains('DeviceId=dev1'));
+      expect(url, contains('VideoCodec=h264'));
+      expect(url, contains('AudioCodec=aac'));
+      expect(url, contains('api_key=tok123'));
+      expect(
+        url,
+        contains(
+          'MaxStreamingBitrate=${JellyfinClient.defaultTranscodeBitrateBps}',
+        ),
+      );
+    });
+
+    test('transcodeUrl honors a custom bitrate cap', () {
+      const low = 4000000;
+      final url =
+          JellyfinClient().transcodeUrl(server, item, devId: 'd', maxBitrateBps: low);
+      expect(url, contains('MaxStreamingBitrate=$low'));
+    });
+
+    test('isTranscodeUri detects m3u8 and ignores direct streams', () {
+      expect(
+        JellyfinClient.isTranscodeUri(
+          'http://s:8096/Videos/a/master.m3u8?DeviceId=x',
+        ),
+        isTrue,
+      );
+      expect(
+        JellyfinClient.isTranscodeUri(
+          'http://s:8096/Videos/a/stream?static=true',
+        ),
+        isFalse,
+      );
+      expect(JellyfinClient.isTranscodeUri(null), isFalse);
+    });
+
+    test('transcodeFallbackFor returns null for non-Jellyfin videos', () async {
+      const video = VideoItem(
+        id: 'f1',
+        title: 'Local file',
+        duration: Duration.zero,
+      );
+      expect(await JellyfinClient().transcodeFallbackFor(video), isNull);
+    });
+
+    test('transcodeFallbackFor swaps the URI for HLS and keeps identity',
+        () async {
+      SharedPreferences.setMockInitialValues({
+        'dreamplayer.jellyfinServers':
+            '[{"name":"Home","url":"http://192.168.1.16:8096","username":"me","token":"tok123","userId":"u1","allowSelfSigned":true}]',
+      });
+      const video = VideoItem(
+        id: 'jf1',
+        title: 'Oldboy',
+        uri:
+            'http://192.168.1.16:8096/Videos/vid42/stream?static=true&mediaSourceId=msrc9&api_key=tok123',
+        resumeKey: 'jellyfin:192.168.1.16/vid42',
+        duration: Duration(minutes: 97),
+        jellyfinServerId: '192.168.1.16',
+        jellyfinItemId: 'vid42',
+      );
+      final fb = await JellyfinClient().transcodeFallbackFor(video);
+      expect(fb, isNotNull);
+      expect(fb!.uri, contains('/Videos/vid42/master.m3u8'));
+      expect(fb.uri, contains('api_key=tok123'));
+      expect(fb.resumeKey, video.resumeKey);
+      expect(fb.jellyfinItemId, video.jellyfinItemId);
+      expect(fb.allowSelfSigned, isTrue);
+      expect(JellyfinClient.isTranscodeUri(fb.uri), isTrue);
+    });
+
+    test('transcodeFallbackFor returns null when server is unknown or '
+        'unauthenticated', () async {
+      const video = VideoItem(
+        id: 'jf2',
+        title: 'Movie',
+        resumeKey: 'jellyfin:10.0.0.99/x1',
+        duration: Duration.zero,
+        jellyfinServerId: '10.0.0.99',
+        jellyfinItemId: 'x1',
+      );
+      // No saved servers at all.
+      expect(await JellyfinClient().transcodeFallbackFor(video), isNull);
+      // Saved but no token (never signed in).
+      SharedPreferences.setMockInitialValues({
+        'dreamplayer.jellyfinServers':
+            '[{"name":"Far","url":"http://10.0.0.99:8096","username":"me"}]',
+      });
+      expect(await JellyfinClient().transcodeFallbackFor(video), isNull);
+    });
+
+    test('deviceId persists across client instances', () async {
+      final first = await JellyfinClient().deviceId;
+      expect(first, isNotEmpty);
+      final second = await JellyfinClient().deviceId;
+      expect(second, first);
+    });
+  });
 }

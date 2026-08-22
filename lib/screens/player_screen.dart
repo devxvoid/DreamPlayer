@@ -9,6 +9,7 @@ import '../models/hdr_format.dart';
 import '../models/video_item.dart';
 import '../services/continue_watching.dart';
 import '../services/exo_player.dart';
+import '../services/jellyfin_client.dart';
 import '../services/resume_store.dart';
 import '../services/subtitle_style.dart';
 import '../utils/codec_info.dart';
@@ -36,8 +37,10 @@ class _PlayerScreenState extends State<PlayerScreen>
   PlaybackController? _exo;
   StreamSubscription<ExoPlayerEvent>? _exoSub;
 
-  /// The video currently on screen; follows [PlayerScreen.video] on first load.
-  late final VideoItem _current = widget.video;
+  /// The video currently on screen; follows [PlayerScreen.video] on first
+  /// load, and is replaced by the server-transcoded variant when the Jellyfin
+  /// transcode fallback fires.
+  late VideoItem _current = widget.video;
 
   bool _controlsVisible = true;
   bool _fullscreen = false;
@@ -81,6 +84,12 @@ class _PlayerScreenState extends State<PlayerScreen>
   int _ioRetries = 0;
   static const int _maxIoRetries = 3;
   bool _retrying = false;
+
+  /// Jellyfin transcode fallback: tried at most once per video, and only
+  /// while the current URI is still a direct stream.
+  bool _transcodeRetried = false;
+  bool _transcodeActive = false;
+  String? _transcodeServerUrl;
 
   String? _liveVideoCodec;
   String? _liveVideoCodecRaw;
@@ -309,6 +318,60 @@ class _PlayerScreenState extends State<PlayerScreen>
     await ContinueWatchingStore.remove(key);
   }
 
+  /// Overlay text shown while the transcode fallback spins up (cleared once
+  /// playback is healthy).
+  static const String transcodeNoteText =
+      'Direct playback failed — playing via server transcoding\u2026';
+
+  /// Reopens the current Jellyfin video through the server's transcoder
+  /// (HLS, H.264/AAC) at the last known position. Runs at most once per
+  /// video ([_transcodeRetried] is set before this is called); on any
+  /// failure the original direct-play error is surfaced instead.
+  Future<void> _tryTranscodeFallback(String directError) async {
+    final pos = _position;
+    VideoItem? fallback;
+    try {
+      fallback = await JellyfinClient().transcodeFallbackFor(_current);
+    } catch (_) {}
+    if (!mounted) return;
+    if (fallback?.uri == null || !JellyfinClient.isTranscodeUri(fallback!.uri)) {
+      setState(() => _error = directError);
+      return;
+    }
+    final u = Uri.parse(fallback.uri!);
+    _transcodeServerUrl = '${u.scheme}://${u.host}:${u.port}';
+    setState(() {
+      _current = fallback!;
+      _error = transcodeNoteText;
+      _buffering = true;
+    });
+    debugPrint('jellyfin: switching to server transcode at ${pos.inMilliseconds}ms');
+    try {
+      await _exo?.open(
+        '',
+        uri: fallback.uri,
+        startPositionMs: pos.inMilliseconds,
+        allowSelfSigned: fallback.allowSelfSigned,
+        resumeKey: _resumeKey,
+        title: fallback.title,
+      );
+      _exo?.setFitMode(_fitMode);
+    } catch (_) {
+      if (mounted) setState(() => _error = directError);
+    }
+  }
+
+  /// Stops the server-side transcode job after a transcoded session ends so
+  /// the Jellyfin host stops burning CPU on an unwatched stream.
+  void _stopTranscodeJob() {
+    final url = _transcodeServerUrl;
+    if (!_transcodeActive || url == null || _inTests) return;
+    _transcodeActive = false;
+    // Fire-and-forget; a fresh client instance carries the same persisted
+    // device id that tagged the job.
+    unawaited(JellyfinClient().stopActiveEncoding(url));
+  }
+
   /// Maps a native PlaybackException to something a user can act on.
   String _friendlyError(ExoPlayerEvent e) {
     final code = e.error ?? '';
@@ -384,7 +447,23 @@ class _PlayerScreenState extends State<PlayerScreen>
         setState(() {});
         return;
       }
-      _error = _friendlyError(e);
+      final friendly = _friendlyError(e);
+      // Jellyfin direct-play failed (undecodable codec, expired stream, …).
+      // Ask the server to transcode once before giving up — the HLS output
+      // (H.264/AAC) plays everywhere, including DV P5 on non-DV hardware.
+      if (!_transcodeRetried &&
+          _current.jellyfinItemId != null &&
+          !JellyfinClient.isTranscodeUri(_current.uri)) {
+        _transcodeRetried = true;
+        _tryTranscodeFallback(friendly);
+        return;
+      }
+      if (_playing && _error == transcodeNoteText) {
+        // Transcode recovered — drop the notice.
+        _error = null;
+      } else {
+        _error = friendly;
+      }
     }
     _subtitleOn = e.subtitleOn;
     _subtitleTracks = e.subtitleTracks;
@@ -519,6 +598,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _hideTimer?.cancel();
     _swipeOverlayTimer?.cancel();
     _saveResume(_position);
+    _stopTranscodeJob();
     // Restore system brightness so it doesn't stick after the player closes.
     if (Platform.isIOS && _iosOriginalBrightness >= 0) {
       _exo?.setBrightness(_iosOriginalBrightness);
