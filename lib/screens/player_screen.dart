@@ -189,17 +189,24 @@ class _PlayerScreenState extends State<PlayerScreen>
     await _castSub?.cancel();
     _castSub = null;
     if (_castViaDlna) {
-      await DlnaService.instance.disconnect(stopMedia: !resumeLocal);
+      await DlnaService.instance.disconnect(stopMedia: resumeLocal);
     } else {
-      await CastService.instance.disconnect(stopMedia: !resumeLocal);
+      await CastService.instance.disconnect(stopMedia: resumeLocal);
     }
+    // Allow Jellyfin transcode fallback to retry when resuming locally.
+    _transcodeRetried = false;
     if (!mounted) return;
     if (!resumeLocal) {
-      setState(() => _casting = false);
+      setState(() {
+        _casting = false;
+        _castViaDlna = false;
+      });
       return;
     }
     setState(() {
       _casting = false;
+      _castViaDlna = false;
+      _completed = false;
       _playing = false;
       _buffering = true;
     });
@@ -1100,6 +1107,15 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   Future<void> _openAudioTrackSheet() async {
     _showControls();
+    if (_casting) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text(
+                'Audio track switch isn’t available while casting — stop casting to change audio, then cast again.')),
+      );
+      return;
+    }
     final tracks = _audioTracks;
     if (tracks.isEmpty) return;
     final selected = _selectedAudioTrackIndex;
@@ -1182,6 +1198,15 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// plus auto-paired sidecar files) plus an Off option.
   Future<void> _openSubtitleSheet() async {
     _showControls();
+    if (_casting) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text(
+                'Subtitles aren’t available while casting yet — local playback only. Burn-in via Jellyfin transcoding is planned.')),
+      );
+      return;
+    }
     final tracks = _subtitleTracks;
     if (tracks.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
