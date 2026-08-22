@@ -7,6 +7,8 @@ import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaExtractor
 import android.media.MediaFormat
+import android.media.MediaMetadataRetriever
+import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
@@ -36,6 +38,7 @@ import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
@@ -75,6 +78,19 @@ class ExoPlayerView(
         setShutterBackgroundColor(android.graphics.Color.BLACK)
         setKeepContentOnPlayerReset(true)
     }
+
+    /// Serial executor for seek-preview frame extraction — MediaMetadataRetriever
+    /// is strictly serial and must stay off the main thread.
+    private val thumbExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+
+    /// Reusable retriever bound to the currently-open media. Created lazily on
+    /// the first `getThumbnail` call (many sources — e.g. CX's loopback proxy —
+    /// are fine for playback but not worth probing up front).
+    @Volatile
+    private var thumbRetriever: android.media.MediaMetadataRetriever? = null
+
+    /// The data source the retriever was bound to, so a new `open` rebinds it.
+    private var thumbSourceKey: String? = null
 
     /// Last value handed to `Window.setDesiredHdrHeadroom`, to avoid re-setting
     /// the same ratio on every emit.
@@ -764,6 +780,40 @@ class ExoPlayerView(
                     selectSubtitleTrack(index)
                     result.success(null)
                 }
+                "setSubtitleStyle" -> {
+                    applySubtitleStyle(
+                        (call.argument<Number>("size")?.toDouble()) ?: 1.0,
+                        call.argument<Number>("color")?.toInt() ?: 0xFFFFFFFF.toInt(),
+                        call.argument<Number>("bg")?.toInt() ?: 0x80000000.toInt(),
+                        call.argument<Boolean>("outline") ?: true,
+                    )
+                    result.success(null)
+                }
+                "getThumbnail" -> {
+                    val ms = call.argument<Number>("ms")?.toLong() ?: 0L
+                    val path = currentThumbSource()
+                    if (path == null) {
+                        result.success(mapOf("ok" to false))
+                    } else {
+                        thumbExecutor.execute {
+                            try {
+                                val bytes = extractThumbnail(path, ms)
+                                // MethodChannel results must be delivered on
+                                // the platform main thread.
+                                activity.runOnUiThread {
+                                    result.success(
+                                        if (bytes != null) mapOf("ok" to true, "bytes" to bytes)
+                                        else mapOf("ok" to false)
+                                    )
+                                }
+                            } catch (e: Exception) {
+                                activity.runOnUiThread {
+                                    result.success(mapOf("ok" to false))
+                                }
+                            }
+                        }
+                    }
+                }
                 "setResizeMode" -> {
                     applyFitMode(call.argument<Number>("mode")?.toInt() ?: 0)
                     result.success(null)
@@ -1193,6 +1243,98 @@ class ExoPlayerView(
     /// Applies the Dart-side [VideoFitMode] to the surface. Fixed ratios
     /// (16:9 / 4:3) force the content frame's aspect ratio and zoom-crop into
     /// it; the others map 1:1 to Media3 resize modes.
+    /// Resolves a probe-able source for the seek-preview retriever: absolute
+    /// file paths, `content://` URIs and plain http(s) URLs (Jellyfin's token
+    /// is embedded in the query). Sources needing custom headers or permissive
+    /// TLS return null — the preview degrades to time-only on Dart's side.
+    private fun currentThumbSource(): String? {
+        val mediaItem = player.currentMediaItem ?: return null
+        val uri = mediaItem.localConfiguration?.uri ?: return null
+        return when (uri.scheme) {
+            null -> uri.path // plain file path
+            "file", "content", "http", "https" -> uri.toString()
+            else -> null
+        }
+    }
+
+    private fun extractThumbnail(source: String, ms: Long): ByteArray? {
+        val retriever = synchronized(this) {
+            var r = thumbRetriever
+            if (r == null || thumbSourceKey != source) {
+                if (r != null) {
+                    try { r.release() } catch (_: Exception) {}
+                }
+                r = MediaMetadataRetriever()
+                try {
+                    when {
+                        source.startsWith("content://") -> {
+                            val fd = activity.contentResolver
+                                .openFileDescriptor(android.net.Uri.parse(source), "r")
+                            if (fd != null) {
+                                r!!.setDataSource(fd.fileDescriptor)
+                                fd.close()
+                            } else {
+                                return null
+                            }
+                        }
+                        source.startsWith("http") -> r!!.setDataSource(
+                            source, mapOf("User-Agent" to "DreamPlayer/1.0")
+                        )
+                        else -> r!!.setDataSource(source)
+                    }
+                } catch (e: Exception) {
+                    try { r?.release() } catch (_: Exception) {}
+                    thumbRetriever = null
+                    thumbSourceKey = null
+                    return null
+                }
+                thumbRetriever = r
+                thumbSourceKey = source
+            }
+            r!!
+        }
+        val us = ms * 1000
+        // Scaled frame keeps extraction fast; OPTION_CLOSEST_SYNC is the cheap
+        // keyframe lookup (exact-frame OPTION_CLOSEST is too slow for scrubbing).
+        val bitmap = try {
+            if (android.os.Build.VERSION.SDK_INT >= 27) {
+                retriever.getScaledFrameAtTime(us, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 480, 270)
+                    ?: retriever.getFrameAtTime(us, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            } else {
+                retriever.getFrameAtTime(us, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            }
+        } catch (e: Exception) {
+            null
+        } ?: return null
+        val stream = java.io.ByteArrayOutputStream()
+        bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, stream)
+        bitmap.recycle()
+        return stream.toByteArray()
+    }
+
+    /// Applies the user's subtitle appearance to Media3's SubtitleView.
+    /// Size is a multiplier around Media3's default fractional text size.
+    private fun applySubtitleStyle(sizeMult: Double, color: Int, bg: Int, outline: Boolean) {
+        val view = playerView.subtitleView ?: return
+        val fraction = (0.0533f * sizeMult.coerceIn(0.6, 2.0).toFloat())
+        view.setFractionalTextSizeWithViewHeight(fraction)
+
+        val hasBg = (bg ushr 24) != 0
+        val edgeType = if (outline)
+            CaptionStyleCompat.EDGE_TYPE_OUTLINE
+        else
+            CaptionStyleCompat.EDGE_TYPE_NONE
+        val style = CaptionStyleCompat(
+            color,
+            if (hasBg) bg else Color.TRANSPARENT,
+            Color.TRANSPARENT,
+            edgeType,
+            if (outline) Color.BLACK else Color.TRANSPARENT,
+            null,
+        )
+        view.setStyle(style)
+    }
+
     private fun applyFitMode(mode: Int) {
         when (mode) {
             1 -> { // Crop to screen (keeps aspect, fills view)
@@ -1226,6 +1368,12 @@ class ExoPlayerView(
         eventChannel.setStreamHandler(null)
         player.release()
         playerView.player = null
+        thumbExecutor.shutdownNow()
+        synchronized(this) {
+            try { thumbRetriever?.release() } catch (_: Exception) {}
+            thumbRetriever = null
+            thumbSourceKey = null
+        }
     }
 
     companion object {

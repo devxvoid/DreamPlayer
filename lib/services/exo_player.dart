@@ -8,6 +8,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'subtitle_style.dart';
+
 const String exoPlayerViewType = 'dreamplayer/exo_player';
 
 /// How the video fills the playback view.
@@ -321,6 +323,15 @@ abstract class PlaybackController {
 
   Future<void> selectSubtitleTrack(int index);
 
+  /// Applies the user's subtitle appearance natively (size/color/background/
+  /// outline + cue delay).
+  Future<void> setSubtitleStyle(SubtitleStyle style);
+
+  /// Extracts a preview frame near [position] for the horizontal-seek
+  /// thumbnail, or null when the source can't be probed (remote streams with
+  /// custom auth, unsupported containers...).
+  Future<Uint8List?> getThumbnail(Duration position);
+
   Future<void> setSubtitles(bool on);
 
   Future<void> setFitMode(VideoFitMode mode);
@@ -453,6 +464,28 @@ class ExoPlayerController implements PlaybackController {
   @override
   Future<void> selectSubtitleTrack(int index) =>
       _send('setSubtitleTrack', {'index': index});
+
+  @override
+  Future<void> setSubtitleStyle(SubtitleStyle style) =>
+      _send('setSubtitleStyle', style.toChannelArgs());
+
+  @override
+  Future<Uint8List?> getThumbnail(Duration position) async {
+    final channel = _method;
+    if (channel == null) return null;
+    try {
+      final map = await channel.invokeMethod<Map<dynamic, dynamic>>(
+        'getThumbnail',
+        {'ms': position.inMilliseconds},
+      );
+      if (map == null || map['ok'] != true) return null;
+      final bytes = map['bytes'];
+      if (bytes is Uint8List && bytes.isNotEmpty) return bytes;
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
 
   /// Sets how the video fills the view (fit/crop/stretch/fixed ratio).
   @override

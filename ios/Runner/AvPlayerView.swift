@@ -42,6 +42,33 @@ private final class SubtitleOverlayView: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    // MARK: - User subtitle appearance
+
+    /// Applies the user's subtitle appearance from Dart (`setSubtitleStyle`).
+    /// - `size` multiplies the base glyph size.
+    /// - `color` is the text ARGB; `bg` an ARGB cue-box (alpha 0 = none).
+    /// - `outline` toggles the black shadow behind glyphs.
+    func applyStyle(size: Double, color: Int, bg: Int, outline: Bool) {
+        let base = CGFloat(17 * size.clamped(0.6...2.0))
+        label.font = .systemFont(ofSize: base, weight: .semibold)
+        label.textColor = UIColor(argb: color)
+        if (bg >> 24) != 0 {
+            label.backgroundColor = UIColor(argb: bg)
+            layer.cornerRadius = 4
+            label.layer.cornerRadius = 4
+            label.clipsToBounds = true
+        } else {
+            label.backgroundColor = nil
+        }
+        if outline {
+            label.shadowColor = .black
+            label.shadowOffset = CGSize(width: 1, height: 1)
+        } else {
+            label.shadowColor = nil
+        }
+        setNeedsLayout()
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
         positionActiveCue()
@@ -215,6 +242,13 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     private var lastLoadOptions = LoadOptions()
     private var lastWebDAVInfo: (url: URL, headers: [String: String], allowSelfSigned: Bool)?
 
+    /// Subtitle cue shift from the user's appearance settings (seconds).
+    /// Positive = cues appear LATER than authored.
+    private var subtitleDelaySeconds: Double = 0
+
+    /// Reusable generator for seek-preview frames; rebuilt per source.
+    private var thumbGenerator: AVAssetImageGenerator?
+
     
 
     init(messenger: FlutterBinaryMessenger, viewId: Int64, frame: CGRect) {
@@ -319,6 +353,25 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                     let index = (args?["index"] as? NSNumber)?.intValue ?? -1
                     self.selectSubtitleTrack(index)
                     result(nil)
+                case "setSubtitleStyle":
+                    let size = (args?["size"] as? NSNumber)?.doubleValue ?? 1.0
+                    let color = (args?["color"] as? NSNumber)?.intValue ?? 0xFFFFFFFF
+                    let bg = (args?["bg"] as? NSNumber)?.intValue ?? 0x80000000
+                    let outline = (args?["outline"] as? Bool) ?? true
+                    self.subtitleDelaySeconds =
+                        ((args?["delayMs"] as? NSNumber)?.doubleValue ?? 0) / 1000.0
+                    self.subtitleOverlay.applyStyle(
+                        size: size, color: color, bg: bg, outline: outline)
+                    result(nil)
+                case "getThumbnail":
+                    let ms = (args?["ms"] as? NSNumber)?.doubleValue ?? 0
+                    self.thumbnail(atMs: ms) { data in
+                        if let data {
+                            result(["ok": true, "bytes": FlutterStandardTypedData(bytes: data)])
+                        } else {
+                            result(["ok": false])
+                        }
+                    }
                 case "setResizeMode":
                     let mode = (args?["mode"] as? NSNumber)?.intValue ?? 0
                     self.setResizeMode(mode)
@@ -774,7 +827,8 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     private func updateSubtitleOverlay() {
         guard let engine else { return }
         subtitleOverlay.videoSize = CGSize(width: CGFloat(videoWidth), height: CGFloat(videoHeight))
-        let t = engine.sourceTime
+        // Apply the user's delay: positive = look for cues authored later.
+        let t = engine.sourceTime - subtitleDelaySeconds
         guard let cue = engine.subtitleCues.first(where: { $0.startTime <= t && t < $0.endTime }) else {
             subtitleOverlay.clear()
             return
@@ -788,6 +842,43 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             subtitleOverlay.show(image: image)
         }
     }
+
+    // MARK: - Seek-preview thumbnails
+
+    /// Extracts a preview frame near `ms` for the horizontal-seek scrubber.
+    /// Only sources AVAssetImageGenerator can read without our custom
+    /// transport qualify: local file URLs and plain http(s) (Jellyfin embeds
+    /// its token in the query). WebDAV-with-auth / self-signed degrade to a
+    /// time-only preview on the Dart side.
+    private func thumbnail(atMs ms: Double, completion: @escaping (Data?) -> Void) {
+        guard let url = lastSource?.url, lastWebDAVInfo == nil else {
+            completion(nil)
+            return
+        }
+        // (Re)build the per-source generator here, on the main thread.
+        if thumbGenerator == nil || thumbGeneratorURL != url {
+            let asset = AVURLAsset(url: url)
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 480, height: 270)
+            generator.requestedTimeToleranceBefore = CMTime(seconds: 0.75, preferredTimescale: 600)
+            generator.requestedTimeToleranceAfter = CMTime(seconds: 0.75, preferredTimescale: 600)
+            thumbGenerator = generator
+            thumbGeneratorURL = url
+        }
+        let generator = thumbGenerator!
+        let time = CMTime(seconds: max(ms / 1000.0, 0), preferredTimescale: 600)
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let cg = try generator.copyCGImage(at: time, actualTime: nil)
+                completion(UIImage(cgImage: cg).jpegData(compressionQuality: 0.8))
+            } catch {
+                completion(nil)
+            }
+        }
+    }
+
+    private var thumbGeneratorURL: URL?
 
     // MARK: - Format helpers
 
@@ -947,5 +1038,25 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         mpVolumeView?.removeFromSuperview()
         mpVolumeView = nil
         UIApplication.shared.isIdleTimerDisabled = false
+    }
+}
+
+// MARK: - Style helpers
+
+private extension Double {
+    func clamped(_ range: ClosedRange<Double>) -> Double {
+        Swift.min(Swift.max(self, range.lowerBound), range.upperBound)
+    }
+}
+
+private extension UIColor {
+    /// ARGB int from the Dart side (alpha in the top byte).
+    convenience init(argb: Int) {
+        self.init(
+            red: CGFloat((argb >> 16) & 0xFF) / 255.0,
+            green: CGFloat((argb >> 8) & 0xFF) / 255.0,
+            blue: CGFloat(argb & 0xFF) / 255.0,
+            alpha: CGFloat((argb >> 24) & 0xFF) / 255.0
+        )
     }
 }

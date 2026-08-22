@@ -10,6 +10,7 @@ import '../utils/tv_helper.dart';
 import '../widgets/tv_overscan.dart';
 import '../widgets/tv_tile.dart';
 import 'licenses_screen.dart';
+import 'subtitle_settings_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -196,6 +197,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   final prefs = await SharedPreferences.getInstance();
                   await prefs.setBool(kSwipeGesturesKey, value);
                   if (mounted) setState(() => _swipeGestures = value);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.closed_caption_outlined),
+                title: const Text('Subtitles'),
+                subtitle: const Text('Size, color, background and delay'),
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const SubtitleSettingsScreen(),
+                    ),
+                  );
                 },
               ),
             ],
