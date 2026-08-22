@@ -538,11 +538,12 @@ Cast videos so the **TV fetches and plays the file itself** (sender hands over a
 
 ### Player feature backlog (prioritized 2026-08-21)
 
-1. **Picture-in-Picture** (Android `enterPictureInPictureMode`, iOS/tvOS `AVPictureInPictureController`) — top pick for next session.
+1. Jellyfin transcoding fallback when direct-play codecs aren't supported natively.
 2. ~~Subtitle appearance settings~~ — DONE (2026-08-22); Android delay offset still open (cue-pipeline refactor).
 3. ~~Horizontal-swipe seek~~ — DONE (2026-08-22, time-only pill; frame thumbnails impossible for DV/HDR via MMR).
-4. Jellyfin transcoding fallback when direct-play codecs aren't supported natively.
-5. Android release signing (deferred — see CI/Deployment).
+4. Android release signing (deferred — see CI/Deployment).
+
+**Rejected by user**: Picture-in-Picture (2026-08-22) — do not re-propose.
 
 ### Library (user-added folders)
 
