@@ -76,6 +76,18 @@ A cross-platform video player for **Android, iOS/iPad, Android TV, and Apple TV 
 - CI builds unsigned IPA — sideload via Xcode
 - **Alpha** — CI-built and sideloadable; on-device verification on Apple TV hardware pending
 
+## Screenshots
+
+<p align="center">
+  <img src="screenshots/home.jpg" width="240" alt="Home screen">
+  &nbsp;&nbsp;
+  <img src="screenshots/movie_detail.jpg" width="240" alt="Movie details">
+  &nbsp;&nbsp;
+  <img src="screenshots/menu.jpg" width="240" alt="Add content menu">
+  &nbsp;&nbsp;
+  <img src="screenshots/settings.jpg" width="240" alt="Settings">
+</p>
+
 ## Requirements
 
 | Platform | Minimum version |
