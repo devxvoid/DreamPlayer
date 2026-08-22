@@ -662,6 +662,8 @@ test/
 
 ## Workflow for the user (no Mac)
 
+- **Standing permission (2026-08-22)**: build and `flutter install --debug -d a019b7f3` directly onto the user's OnePlus CPH2573 for feature verification — no need to ask each time. Test features on-device BEFORE pushing feature commits to GitHub; small compile fixes may follow the tested code.
+
 1. Develop + test on Android phone (USB debugging, `flutter run --dart-define-from-file=.env`).
 2. Commit/push to `main`; iOS workflow in GitHub Actions builds the iPad version.
 3. Later: configure code-signing secrets + TestFlight for installing on iPad Pro M2.
