@@ -115,8 +115,9 @@ class MainActivity : FlutterActivity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == FileBrowser.REQ_PICK_FOLDER) {
-            fileBrowser?.onFolderPicked(resultCode, data)
+        when (requestCode) {
+            FileBrowser.REQ_PICK_FOLDER -> fileBrowser?.onFolderPicked(resultCode, data)
+            FileBrowser.REQ_PICK_SUBTITLE -> fileBrowser?.onSubtitlePicked(resultCode, data)
         }
     }
 

@@ -194,19 +194,8 @@ class _JellyfinScreenState extends State<JellyfinScreen> {
     final server = _browsing;
     if (server == null || !item.isPlayable) return;
     final playables = _items.where((i) => i.isPlayable).toList();
-    final playlist = [
-      for (final playable in playables)
-        VideoItem(
-          id: 'jellyfin_${server.urlHost}_${playable.id}',
-          title: playable.name,
-          uri: _client.streamUrl(server, playable),
-          resumeKey: _client.resumeKey(server, playable),
-          duration: playable.duration,
-          resolution: playable.resolution,
-          allowSelfSigned: server.allowSelfSigned,
-          jellyfinServerId: server.urlHost,
-          jellyfinItemId: playable.id,
-        ),
+    final List<VideoItem> playlist = [
+      for (final playable in playables) _client.videoItem(server, playable),
     ];
     final playIndex = playlist.indexWhere((video) => video.title == item.name);
     if (playIndex < 0 || playlist.isEmpty) return;

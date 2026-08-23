@@ -51,7 +51,7 @@ final class FileBrowser: NSObject {
 
     /// What the currently presented system picker returns.
     private enum PickerMode {
-        case folder, libraryFolder, file
+        case folder, libraryFolder, file, subtitle
     }
 
     static func register(with messenger: FlutterBinaryMessenger) {
@@ -82,6 +82,8 @@ final class FileBrowser: NSObject {
             presentFolderPicker(result)
         case "pickLibraryFolder":
             presentLibraryFolderPicker(result)
+        case "pickSubtitle":
+            presentSubtitlePicker(result)
         case "openFilesHome":
             presentFilePicker(result)
         case "resolveImportedPath":
@@ -315,6 +317,17 @@ final class FileBrowser: NSObject {
         presentPicker(result, mode: .file, contentTypes: [.movie])
     }
 
+    private func presentSubtitlePicker(_ result: @escaping FlutterResult) {
+        let subtitleTypes: [UTType] = [
+            UTType(filenameExtension: "srt") ?? .plainText,
+            UTType(filenameExtension: "ass") ?? .plainText,
+            UTType(filenameExtension: "ssa") ?? .plainText,
+            UTType(filenameExtension: "vtt") ?? .plainText,
+            .plainText,
+        ]
+        presentPicker(result, mode: .subtitle, contentTypes: subtitleTypes)
+    }
+
     private func presentPicker(_ result: @escaping FlutterResult,
                                mode: PickerMode,
                                contentTypes: [UTType]) {
@@ -450,6 +463,11 @@ extension FileBrowser: UIDocumentPickerDelegate {
             // launches and continue-watching card taps can re-grant its scope.
             importFile(url)
             completion(Self.entryMap(url, isDirectory: false))
+        case .subtitle:
+            // Return a content/file URL string for the picked subtitle.
+            // On iOS the security scope must be held for the playback session;
+            // keep it in activeSecurityScopedURLs via startAccess.
+            completion(url.absoluteString)
         }
     }
 

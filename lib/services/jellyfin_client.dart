@@ -89,6 +89,65 @@ class JellyfinServer {
   }
 }
 
+/// An external subtitle track reported by a Jellyfin media source.
+class JellyfinExternalSub {
+  const JellyfinExternalSub({
+    required this.index,
+    required this.codec,
+    required this.deliveryUrl,
+    this.language = '',
+    this.title = '',
+    this.isDefault = false,
+    this.isForced = false,
+  });
+
+  final int index;
+  final String codec;
+  final String deliveryUrl;
+  final String language;
+  final String title;
+  final bool isDefault;
+  final bool isForced;
+
+  /// MIME type for Media3 / AetherEngine.
+  String get mimeType => switch (codec.toLowerCase()) {
+        'subrip' || 'srt' => 'application/x-subrip',
+        'ass' || 'ssa' => 'text/x-ssa',
+        'vtt' => 'text/vtt',
+        'ttml' || 'dfxp' => 'application/ttml+xml',
+        'sami' || 'smi' => 'application/x-sami',
+        _ => 'application/x-subrip',
+      };
+
+  /// File extension for the delivery URL suffix.
+  String get extension => switch (codec.toLowerCase()) {
+        'ass' || 'ssa' => 'ass',
+        'vtt' => 'vtt',
+        'ttml' || 'dfxp' => 'ttml',
+        _ => 'srt',
+      };
+
+  String get displayTitle =>
+      title.isNotEmpty ? title : language.isNotEmpty ? language : 'Track $index';
+
+  factory JellyfinExternalSub.fromJson(Map<String, dynamic> json) {
+    // DeliveryUrl may be a relative path like
+    // /Videos/{id}/{msId}/Subtitles/{idx}/Stream.srt
+    // or a full URL. We store it as-is; the caller builds the full URL.
+    return JellyfinExternalSub(
+      index: (json['Index'] as num?)?.toInt() ?? 0,
+      codec: json['Codec'] as String? ?? 'subrip',
+      deliveryUrl: json['DeliveryUrl'] as String? ?? '',
+      language: json['Language'] as String? ?? '',
+      title: (json['Title'] as String?) ??
+          (json['DisplayTitle'] as String?) ??
+          '',
+      isDefault: (json['IsDefault'] as bool?) ?? false,
+      isForced: (json['IsForced'] as bool?) ?? false,
+    );
+  }
+}
+
 /// A library / folder / playable item as returned by the Jellyfin API.
 class JellyfinItem {
   const JellyfinItem({
@@ -104,6 +163,7 @@ class JellyfinItem {
     this.container,
     this.indexNumber,
     this.parentIndexNumber,
+    this.externalSubtitles = const [],
   });
 
   final String id;
@@ -128,6 +188,10 @@ class JellyfinItem {
 
   /// Season number for `Type == Episode` (`ParentIndexNumber`).
   final int? parentIndexNumber;
+
+  /// External subtitle tracks reported by the server (SRT/ASS/VTT files
+  /// sitting next to the video on the server, served via `DeliveryUrl`).
+  final List<JellyfinExternalSub> externalSubtitles;
 
   Duration get duration => Duration(microseconds: (runTimeTicks ?? 0) ~/ 10);
 
@@ -155,8 +219,19 @@ class JellyfinItem {
     final mediaSources = json['MediaSources'] as List? ?? const [];
     final firstSource = mediaSources.isNotEmpty ? mediaSources.first : null;
     String? mediaSourceId;
+    List<JellyfinExternalSub> externalSubs = const [];
     if (firstSource is Map<String, dynamic>) {
       mediaSourceId = firstSource['Id'] as String?;
+      // Parse external subtitle tracks from MediaStreams.
+      final streams = firstSource['MediaStreams'] as List? ?? const [];
+      externalSubs = streams
+          .whereType<Map<String, dynamic>>()
+          .where((s) =>
+              s['Type'] == 'Subtitle' &&
+              (s['IsExternal'] as bool?) == true &&
+              (s['SupportsExternalStream'] as bool?) != false)
+          .map((s) => JellyfinExternalSub.fromJson(s))
+          .toList();
     }
     final mediaType = json['MediaType'] as String?;
     return JellyfinItem(
@@ -172,6 +247,7 @@ class JellyfinItem {
       container: json['Container'] as String?,
       indexNumber: (json['IndexNumber'] as num?)?.toInt(),
       parentIndexNumber: (json['ParentIndexNumber'] as num?)?.toInt(),
+      externalSubtitles: externalSubs,
     );
   }
 }
@@ -635,17 +711,46 @@ class JellyfinClient {
   }
 
   /// A playable item as a [VideoItem] ready for the player/details screen.
-  VideoItem videoItem(JellyfinServer server, JellyfinItem item) => VideoItem(
-        id: 'jellyfin_${server.urlHost}_${item.id}',
-        title: item.name,
-        uri: streamUrl(server, item),
-        resumeKey: resumeKey(server, item),
-        duration: item.duration,
-        resolution: item.resolution,
-        allowSelfSigned: server.allowSelfSigned,
-        jellyfinServerId: server.urlHost,
-        jellyfinItemId: item.id,
+  VideoItem videoItem(JellyfinServer server, JellyfinItem item) {
+    // Build full delivery URLs for external subtitles. Jellyfin's
+    // DeliveryUrl is a relative path without the token — append api_key
+    // so Media3 / AetherEngine can fetch it without extra headers.
+    final externalSubs = item.externalSubtitles.map((sub) {
+      String url;
+      if (sub.deliveryUrl.isNotEmpty) {
+        url = sub.deliveryUrl.startsWith('http')
+            ? sub.deliveryUrl
+            : '${server.url}${sub.deliveryUrl}';
+        if (!url.contains('api_key=')) {
+          url += url.contains('?') ? '&' : '?';
+          url += 'api_key=${server.token ?? ''}';
+        }
+      } else {
+        url = '${server.url}/Videos/${item.id}/${item.mediaSourceId ?? item.id}'
+            '/Subtitles/${sub.index}/Stream.${sub.extension}'
+            '?api_key=${server.token ?? ''}';
+      }
+      return VideoExternalSub(
+        uri: url,
+        label: sub.displayTitle,
+        language: sub.language,
+        mimeType: sub.mimeType,
+        isDefault: sub.isDefault,
       );
+    }).toList();
+    return VideoItem(
+      id: 'jellyfin_${server.urlHost}_${item.id}',
+      title: item.name,
+      uri: streamUrl(server, item),
+      resumeKey: resumeKey(server, item),
+      duration: item.duration,
+      resolution: item.resolution,
+      allowSelfSigned: server.allowSelfSigned,
+      jellyfinServerId: server.urlHost,
+      jellyfinItemId: item.id,
+      externalSubtitles: externalSubs,
+    );
+  }
 
   /// Direct-play stream URL (token as `api_key`). Plays via the existing HTTP
   /// data sources on both platforms; [allowSelfSigned] is honored through the

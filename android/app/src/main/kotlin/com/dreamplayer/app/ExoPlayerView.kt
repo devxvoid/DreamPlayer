@@ -670,44 +670,108 @@ class ExoPlayerView(
                             }
                         }
                         .apply {
-                            // Auto-pair sibling subtitles next to the video
-                            // (Just Player's `findSubtitle` rule, keeping every
-                            // candidate so the picker can choose a language /
-                            // format). An explicitly passed subtitle is still
-                            // preferred over sibling pairing.
+                            // Subtitle candidates: explicit subtitleUri wins,
+                            // then external subtitles from the server (Jellyfin),
+                            // then auto-paired siblings next to the video file.
                             val paired: List<File> = if (subtitleUri.isNullOrEmpty() && path != null) {
                                 SubtitleFormats.findSiblingSubtitles(path)
                             } else {
                                 emptyList()
                             }
-                            val candidates = if (subtitleUri.isNullOrEmpty()) {
+                            val localCandidates = if (subtitleUri.isNullOrEmpty()) {
                                 paired
+                            } else if (subtitleUri.startsWith("smb://") ||
+                                       subtitleUri.startsWith("http://") ||
+                                       subtitleUri.startsWith("https://") ||
+                                       subtitleUri.startsWith("content://") ||
+                                       subtitleUri.startsWith("file://")) {
+                                // Remote subtitle URI (SMB, WebDAV, HTTP) — pass
+                                // as-is, not wrapped in File().
+                                emptyList()
                             } else {
                                 listOf(File(subtitleUri))
                             }
-                            if (candidates.isNotEmpty()) {
-                                currentSubtitle = candidates.first().absolutePath to
-                                    SubtitleFormats.labelFromFileName(candidates.first().name)
-                                setSubtitleConfigurations(
-                                    candidates.mapIndexed { i, sub ->
-                                        val originalUri = android.net.Uri.fromFile(sub)
-                                        // Media3's parsers decode UTF-8 only;
-                                        // re-encode CP1252/CP1251 etc. to UTF-8.
-                                        val utf8Uri = SubtitleFormats.toUtf8(activity, originalUri)
-                                        val name = sub.name
-                                        val language = SubtitleFormats.languageFromFileName(name)
-                                        MediaItem.SubtitleConfiguration.Builder(utf8Uri)
-                                            .setMimeType(SubtitleFormats.mimeTypeFor(name))
-                                            .setLanguage(language)
-                                            .setRoleFlags(C.ROLE_FLAG_SUBTITLE)
-                                            .setLabel(SubtitleFormats.labelFromFileName(name))
-                                            // First (best) match is default-selected.
-                                            .setSelectionFlags(
-                                                if (i == 0) C.SELECTION_FLAG_DEFAULT else 0,
-                                            )
-                                            .build()
-                                    },
+                            // External subtitles from the server (e.g. Jellyfin
+                            // DeliveryUrl). These are remote HTTP URLs.
+                            val rawExternalSubs =
+                                call.argument<List<Map<String, Any>>>("externalSubtitles")
+                            val externalConfigs = rawExternalSubs?.mapNotNull { entry ->
+                                val url = entry["uri"] as? String ?: return@mapNotNull null
+                                if (url.isEmpty()) return@mapNotNull null
+                                val label = entry["label"] as? String ?: "Track"
+                                val language = entry["language"] as? String ?: ""
+                                val mimeType = entry["mimeType"] as? String
+                                    ?: "application/x-subrip"
+                                val isDefault = entry["isDefault"] as? Boolean == true
+                                MediaItem.SubtitleConfiguration.Builder(
+                                    android.net.Uri.parse(url),
                                 )
+                                    .setMimeType(mimeType)
+                                    .setLanguage(language)
+                                    .setRoleFlags(C.ROLE_FLAG_SUBTITLE)
+                                    .setLabel(label)
+                                    .setSelectionFlags(
+                                        if (isDefault) C.SELECTION_FLAG_DEFAULT else 0,
+                                    )
+                                    .build()
+                            } ?: emptyList()
+                            // Local subtitles (siblings or explicit local subtitleUri).
+                            val localConfigs = localCandidates.mapIndexed { i, sub ->
+                                val originalUri = android.net.Uri.fromFile(sub)
+                                val utf8Uri = SubtitleFormats.toUtf8(activity, originalUri)
+                                val name = sub.name
+                                val language = SubtitleFormats.languageFromFileName(name)
+                                MediaItem.SubtitleConfiguration.Builder(utf8Uri)
+                                    .setMimeType(SubtitleFormats.mimeTypeFor(name))
+                                    .setLanguage(language)
+                                    .setRoleFlags(C.ROLE_FLAG_SUBTITLE)
+                                    .setLabel(SubtitleFormats.labelFromFileName(name))
+                                    .setSelectionFlags(
+                                        if (i == 0) C.SELECTION_FLAG_DEFAULT else 0,
+                                    )
+                                    .build()
+                            }
+                            // Remote explicit subtitleUri (smb://, http://, content://, file://).
+                            val remoteExplicitConfig = if (!subtitleUri.isNullOrEmpty() &&
+                                localCandidates.isEmpty()
+                            ) {
+                                val ext = subtitleUri.substringAfterLast('.', "srt")
+                                val mimeType = SubtitleFormats.mimeTypeFor("file.$ext")
+                                val rawUri = android.net.Uri.parse(subtitleUri)
+                                // content:// / file:// from CX / system picker need
+                                // to be copied to a UTF-8 cache file so Media3 can
+                                // read them reliably (CX's SMB content provider
+                                // isn't directly readable by ExoPlayer's DataSource).
+                                val finalUri = if (subtitleUri.startsWith("content://") ||
+                                    subtitleUri.startsWith("file://")) {
+                                    SubtitleFormats.toUtf8(activity, rawUri)
+                                } else {
+                                    rawUri
+                                }
+                                listOf(
+                                    MediaItem.SubtitleConfiguration.Builder(finalUri)
+                                        .setMimeType(mimeType)
+                                        .setRoleFlags(C.ROLE_FLAG_SUBTITLE)
+                                        .setLabel("Subtitle")
+                                        .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                                        .build(),
+                                )
+                            } else {
+                                emptyList()
+                            }
+                            val allConfigs = localConfigs + remoteExplicitConfig + externalConfigs
+                            if (allConfigs.isNotEmpty()) {
+                                currentSubtitle = if (localCandidates.isNotEmpty()) {
+                                    localCandidates.first().absolutePath to
+                                        SubtitleFormats.labelFromFileName(
+                                            localCandidates.first().name,
+                                        )
+                                } else {
+                                    val first = rawExternalSubs?.firstOrNull()
+                                    (first?.get("uri") as? String ?: "") to
+                                        (first?.get("label") as? String ?: "Track")
+                                }
+                                setSubtitleConfigurations(allConfigs)
                             } else {
                                 currentSubtitle = null
                             }

@@ -1,6 +1,40 @@
 import '../utils/codec_info.dart';
 import 'hdr_format.dart';
 
+/// An external subtitle track from a media server (e.g. Jellyfin).
+class VideoExternalSub {
+  const VideoExternalSub({
+    required this.uri,
+    required this.label,
+    this.language = '',
+    this.mimeType = 'application/x-subrip',
+    this.isDefault = false,
+  });
+
+  final String uri;
+  final String label;
+  final String language;
+  final String mimeType;
+  final bool isDefault;
+
+  Map<String, dynamic> toJson() => {
+        'uri': uri,
+        'label': label,
+        'language': language,
+        'mimeType': mimeType,
+        'isDefault': isDefault,
+      };
+
+  factory VideoExternalSub.fromJson(Map<String, dynamic> json) =>
+      VideoExternalSub(
+        uri: json['uri'] as String? ?? '',
+        label: json['label'] as String? ?? '',
+        language: json['language'] as String? ?? '',
+        mimeType: json['mimeType'] as String? ?? 'application/x-subrip',
+        isDefault: (json['isDefault'] as bool?) ?? false,
+      );
+}
+
 /// Where a video came from, derived from the source-specific [VideoItem]
 /// identifiers so the UI can show where playback is served from.
 enum PlaybackSource {
@@ -37,6 +71,7 @@ class VideoItem {
     this.allowSelfSigned = false,
     this.jellyfinServerId,
     this.jellyfinItemId,
+    this.externalSubtitles = const [],
   });
 
   final String id;
@@ -67,6 +102,10 @@ class VideoItem {
   /// Sideloaded subtitle source: a URI of a paired `.srt`/`.ass` file sitting
   /// next to the video in the same folder.
   final String? subtitleUri;
+
+  /// External subtitle tracks from media servers (e.g. Jellyfin SRT/ASS).
+  final List<VideoExternalSub> externalSubtitles;
+
   final Duration duration;
   final int? sizeBytes;
   final String? resolution;
@@ -135,6 +174,7 @@ class VideoItem {
       allowSelfSigned: allowSelfSigned,
       jellyfinServerId: jellyfinServerId,
       jellyfinItemId: jellyfinItemId,
+      externalSubtitles: externalSubtitles,
     );
   }
 
@@ -175,17 +215,28 @@ class VideoItem {
         'resumeKey': resumeKey,
         'durationMs': duration.inMilliseconds,
         'sizeBytes': sizeBytes,
+        if (externalSubtitles.isNotEmpty)
+          'externalSubtitles':
+              externalSubtitles.map((s) => s.toJson()).toList(),
       };
 
   factory VideoItem.fromJson(Map<String, dynamic> json) {
+    final rawSubs = json['externalSubtitles'] as List?;
     return VideoItem(
       id: json['id'] as String? ?? '',
       title: json['title'] as String? ?? '',
       path: json['path'] as String?,
       uri: json['uri'] as String?,
       resumeKey: json['resumeKey'] as String?,
-      duration: Duration(milliseconds: (json['durationMs'] as num?)?.toInt() ?? 0),
+      duration:
+          Duration(milliseconds: (json['durationMs'] as num?)?.toInt() ?? 0),
       sizeBytes: (json['sizeBytes'] as num?)?.toInt(),
+      externalSubtitles: rawSubs != null
+          ? rawSubs
+              .whereType<Map<String, dynamic>>()
+              .map(VideoExternalSub.fromJson)
+              .toList()
+          : const [],
     );
   }
 }

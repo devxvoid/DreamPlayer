@@ -411,6 +411,20 @@ class _HomeScreenState extends State<HomeScreen>
     }
     if (server == null || !server.isAuthenticated) return video;
     final item = JellyfinItem(id: itemId, name: video.title);
+    // Refresh stale api_key in persisted external subtitle URLs (token rotates).
+    final refreshedSubs = video.externalSubtitles.map((s) {
+      var u = s.uri;
+      if (u.contains('api_key=')) {
+        u = u.replaceAll(RegExp(r'api_key=[^&]*'), 'api_key=${server!.token ?? ''}');
+      }
+      return VideoExternalSub(
+        uri: u,
+        label: s.label,
+        language: s.language,
+        mimeType: s.mimeType,
+        isDefault: s.isDefault,
+      );
+    }).toList();
     return VideoItem(
       id: video.id,
       title: video.title,
@@ -421,6 +435,7 @@ class _HomeScreenState extends State<HomeScreen>
       allowSelfSigned: server.allowSelfSigned,
       jellyfinServerId: server.urlHost,
       jellyfinItemId: itemId,
+      externalSubtitles: refreshedSubs,
     );
   }
 

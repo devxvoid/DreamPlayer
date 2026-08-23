@@ -227,14 +227,36 @@ class _SmbScreenState extends State<SmbScreen> {
 
     setState(() => _opening = true);
     String? videoUrl;
+    List<VideoExternalSub> externalSubs = const [];
     String? subtitleUrl;
     try {
       videoUrl = await _smb.openShare(server.id, _share, video.path);
-      final subPath = video.subtitlePath;
-      if (subPath != null && subPath.isNotEmpty) {
-        try {
-          subtitleUrl = await _smb.openShare(server.id, _share, subPath);
-        } on PlatformException {
+      // All matching subtitles (video.srt, video.eng.srt, ...).
+      final subPaths = video.subtitlePaths ?? (video.subtitlePath != null ? [video.subtitlePath!] : const <String>[]);
+      if (subPaths.isNotEmpty) {
+        final subs = <VideoExternalSub>[];
+        for (final p in subPaths) {
+          try {
+            final u = await _smb.openShare(server.id, _share, p);
+            final ext = p.split('.').last.toLowerCase();
+            final mime = ext == 'ass' || ext == 'ssa'
+                ? 'text/x-ssa'
+                : ext == 'vtt'
+                    ? 'text/vtt'
+                    : 'application/x-subrip';
+            subs.add(VideoExternalSub(
+              uri: u,
+              label: p.split('/').last,
+              language: '',
+              mimeType: mime,
+              isDefault: subs.isEmpty,
+            ));
+          } catch (_) {}
+        }
+        if (subs.isNotEmpty) {
+          externalSubs = subs;
+          // Don't set subtitleUrl — externalSubs already carries all tracks.
+          // Setting both would duplicate the first track in CC (1 + N).
           subtitleUrl = null;
         }
       }
@@ -256,10 +278,9 @@ class _SmbScreenState extends State<SmbScreen> {
       id: 'smb:${video.path}_${DateTime.now().microsecondsSinceEpoch}',
       title: video.name,
       uri: videoUrl,
-      // Loopback proxy URLs rotate per session; key resume on the stable
-      // remote location instead.
       resumeKey: 'smb:${server.id}/$_share${video.path}',
       subtitleUri: subtitleUrl,
+      externalSubtitles: externalSubs,
       duration: Duration.zero,
       sizeBytes: video.size,
     );

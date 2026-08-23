@@ -143,4 +143,13 @@ class FileBrowserService {
       'bookmarkId': bookmarkId,
     });
   }
+
+  /// Presents the system file picker filtered to subtitle files (SRT/ASS/VTT).
+  /// Returns the picked file's URI string (content:// on Android, file:// on
+  /// iOS) or null if cancelled.
+  Future<String?> pickSubtitle() async {
+    final result = await _channel.invokeMethod<String>('pickSubtitle');
+    return result;
+  }
+
 }

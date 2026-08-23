@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/video_item.dart';
 import 'subtitle_style.dart';
 
 const String exoPlayerViewType = 'dreamplayer/exo_player';
@@ -307,6 +308,7 @@ abstract class PlaybackController {
     bool allowSelfSigned = false,
     String? resumeKey,
     String? title,
+    List<VideoExternalSub>? externalSubtitles,
   });
 
   Future<void> play();
@@ -398,6 +400,7 @@ class ExoPlayerController implements PlaybackController {
     bool allowSelfSigned = false,
     String? resumeKey,
     String? title,
+    List<VideoExternalSub>? externalSubtitles,
   }) => _send('open', {
     if (uri != null && uri.isNotEmpty) 'uri': uri else 'path': path,
     if (path.isNotEmpty) 'path': path,
@@ -409,6 +412,9 @@ class ExoPlayerController implements PlaybackController {
     if (allowSelfSigned) 'allowSelfSigned': true,
     if (resumeKey != null && resumeKey.isNotEmpty) 'resumeKey': resumeKey,
     if (title != null && title.isNotEmpty) 'title': title,
+    if (externalSubtitles != null && externalSubtitles.isNotEmpty)
+      'externalSubtitles':
+          externalSubtitles.map((s) => s.toJson()).toList(),
   });
 
   @override

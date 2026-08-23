@@ -509,8 +509,9 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         subtitleOverlay.clear()
         emit()
 
-        // Sidecar subtitles: an explicit `subtitleUri` wins; otherwise auto-pair
-        // sibling files in the video's folder (best match first, like Android).
+        // Sidecar subtitles: an explicit `subtitleUri` wins; then external
+        // subtitles from the server (e.g. Jellyfin); then auto-pair sibling
+        // files in the video's folder (best match first, like Android).
         var externals: [ExternalSubtitleTrack] = []
         if let subtitleUri, !subtitleUri.isEmpty, let sub = Self.url(for: subtitleUri) {
             externals.append(ExternalSubtitleTrack(url: sub, isDefault: true, formatHint: sub.pathExtension.lowercased()))
@@ -519,6 +520,35 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             externals = Self.siblingSubtitles(for: localURL)
             if let best = externals.firstIndex(where: { $0.isDefault }) {
                 pendingAutoSubtitleIndex = AetherEngine.externalSubtitleTrackIDBase + best
+            }
+        }
+        // External subtitles from the server (e.g. Jellyfin DeliveryUrl).
+        if let rawExternalSubs = args?["externalSubtitles"] as? [[String: Any]] {
+            for entry in rawExternalSubs {
+                guard let urlStr = entry["uri"] as? String,
+                      !urlStr.isEmpty,
+                      let url = URL(string: urlStr) else { continue }
+                let label = entry["label"] as? String ?? "Track"
+                let language = entry["language"] as? String ?? ""
+                let isDefault = entry["isDefault"] as? Bool == true
+                let mimeType = entry["mimeType"] as? String ?? "application/x-subrip"
+                let formatHint = mimeType.contains("ssa") ? "ass"
+                    : mimeType.contains("vtt") ? "vtt"
+                    : mimeType.contains("ttml") ? "ttml"
+                    : "srt"
+                let track = ExternalSubtitleTrack(
+                    url: url,
+                    name: language.isEmpty ? label : "\(language) · \(label)",
+                    language: language.isEmpty ? nil : language,
+                    isForced: false,
+                    isHearingImpaired: false,
+                    isDefault: isDefault,
+                    formatHint: formatHint,
+                )
+                externals.append(track)
+                if isDefault && pendingAutoSubtitleIndex == nil {
+                    pendingAutoSubtitleIndex = AetherEngine.externalSubtitleTrackIDBase + (externals.count - 1)
+                }
             }
         }
 

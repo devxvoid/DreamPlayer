@@ -538,8 +538,11 @@ class SMBClient(private val context: Context) {
             }
         }
         val files = videos.map { (name, entry) ->
-            val match = findMatchingSubtitle(baseName(name).lowercase(Locale.ROOT), subtitles)
-            if (match != null) entry + ("subtitlePath" to match) else entry
+            val matches = findMatchingSubtitles(baseName(name).lowercase(Locale.ROOT), subtitles)
+            if (matches.isNotEmpty()) entry + mapOf(
+                "subtitlePath" to matches.first(),
+                "subtitlePaths" to matches,
+            ) else entry
         }.toMutableList()
         dirs.sortBy { it["name"].toString().lowercase(Locale.ROOT) }
         files.sortBy { it["name"].toString().lowercase(Locale.ROOT) }
@@ -578,18 +581,23 @@ class SMBClient(private val context: Context) {
     }
 
     /// Finds the best subtitle for a video in the same folder: prefer an exact
-    /// base-name match (`Show.mkv` -> `Show.srt`), else a language-tagged match
-    /// (`Show.mkv` -> `Show.eng.srt`). Multiple matches resolve by sorted path.
+    private fun findMatchingSubtitles(
+        videoBase: String,
+        subtitles: Map<String, List<String>>,
+    ): List<String> {
+        subtitles[videoBase]?.sorted()?.let { return it }
+        val out = mutableListOf<String>()
+        for ((subBase, paths) in subtitles) {
+            if (subBase.startsWith("$videoBase.")) out.addAll(paths)
+        }
+        return out.sorted()
+    }
+
+    @Suppress("unused")
     private fun findMatchingSubtitle(
         videoBase: String,
         subtitles: Map<String, List<String>>,
-    ): String? {
-        subtitles[videoBase]?.sorted()?.firstOrNull()?.let { return it }
-        for ((subBase, paths) in subtitles) {
-            if (subBase.startsWith("$videoBase.")) return paths.sorted().first()
-        }
-        return null
-    }
+    ): String? = findMatchingSubtitles(videoBase, subtitles).firstOrNull()
 
     /// Finds SMB hosts on the local LAN: TCP-ports-445 subnet scan (capped at a
     /// /24 window so big subnets stay quick), then resolves each open host's

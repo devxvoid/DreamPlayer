@@ -24,6 +24,7 @@ class FileBrowser(private val activity: MainActivity) {
     companion object {
         const val CHANNEL = "dreamplayer/files"
         const val REQ_PICK_FOLDER = 9001
+        const val REQ_PICK_SUBTITLE = 9002
 
         private const val PREFS = "dreamplayer.folderBookmarks"
         private const val BOOKMARK_PREFIX = "bm."
@@ -37,6 +38,7 @@ class FileBrowser(private val activity: MainActivity) {
     }
 
     private var pendingFolderResult: MethodChannel.Result? = null
+    private var pendingSubtitleResult: MethodChannel.Result? = null
 
     /// True while the open picker is a library pick ("Add folder to library"),
     /// so the picked tree is stored under the library bookmark prefix and never
@@ -62,6 +64,7 @@ class FileBrowser(private val activity: MainActivity) {
                 }
                 "pickFolder" -> pickFolder(result)
                 "pickLibraryFolder" -> pickLibraryFolder(result)
+                "pickSubtitle" -> pickSubtitle(result)
                 "resolveImportedPath" -> result.success(true)
                 "resolvePath" -> result.success(true)
                 "removeBookmark" -> {
@@ -340,6 +343,91 @@ class FileBrowser(private val activity: MainActivity) {
             pendingFolderResult = null
             result.error("no_picker", "No folder picker available", null)
         }
+    }
+
+    // MARK: - Subtitle picker
+
+    private fun pickSubtitle(result: MethodChannel.Result) {
+        if (pendingSubtitleResult != null) {
+            result.error("busy", "A subtitle picker is already open", null)
+            return
+        }
+        val baseIntent = Intent(Intent.ACTION_GET_CONTENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        val pm = activity.packageManager
+        val candidates = try {
+            pm.queryIntentActivities(baseIntent, 0)
+        } catch (_: Exception) { emptyList() }
+        val openDoc = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }
+        val extraIntents = candidates.mapNotNull { info ->
+            val pkg = info.activityInfo.packageName
+            val cls = info.activityInfo.name
+            if (pkg == "com.google.android.documentsui" ||
+                pkg == "com.android.documentsui") return@mapNotNull null
+            Intent(baseIntent).apply { setClassName(pkg, cls) }
+        }.toMutableList()
+        extraIntents.add(openDoc)
+        android.util.Log.d("FileBrowser", "pickSubtitle candidates=${candidates.map { it.activityInfo.packageName }} extras=${extraIntents.map { it.`package` }}")
+        val chooser = Intent.createChooser(baseIntent, "Select subtitle file").apply {
+            if (extraIntents.isNotEmpty()) {
+                putExtra(Intent.EXTRA_INITIAL_INTENTS, extraIntents.toTypedArray())
+            }
+        }
+        pendingSubtitleResult = result
+        try {
+            activity.startActivityForResult(chooser, REQ_PICK_SUBTITLE)
+        } catch (_: Exception) {
+            pendingSubtitleResult = null
+            result.error("no_picker", "No file picker available", null)
+        }
+    }
+
+    fun onSubtitlePicked(resultCode: Int, data: Intent?) {
+        val result = pendingSubtitleResult ?: return
+        pendingSubtitleResult = null
+        if (resultCode != Activity.RESULT_OK || data?.data == null) {
+            result.success(null)
+            return
+        }
+        val uri = data.data!!
+        // Persist permission if possible; CX's SMB provider only grants
+        // temporary permission, so also copy to a cache file immediately
+        // while the grant is still valid — otherwise ExoPlayer reads it
+        // later and the provider may be dead (CX task was killed).
+        var outUri = uri.toString()
+        try {
+            activity.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION,
+            )
+        } catch (_: Exception) {
+        }
+        // For content:// from file managers (especially CX SMB), copy to
+        // cache now so playback doesn't depend on the provider staying alive.
+        if (uri.scheme == "content") {
+            try {
+                activity.contentResolver.openInputStream(uri)?.use { input ->
+                    val ext = uri.lastPathSegment?.substringAfterLast('.', "srt") ?: "srt"
+                    val tmp = java.io.File(activity.cacheDir, "picked_sub_${System.currentTimeMillis()}.$ext")
+                    tmp.outputStream().use { out -> input.copyTo(out) }
+                    if (tmp.exists() && tmp.length() > 0) {
+                        outUri = android.net.Uri.fromFile(tmp).toString()
+                        android.util.Log.d("FileBrowser", "subtitle copied to cache: $outUri (${tmp.length()} bytes)")
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("FileBrowser", "subtitle cache copy failed, using original uri: $e")
+            }
+        }
+        result.success(outUri)
     }
 
     fun onFolderPicked(resultCode: Int, data: Intent?) {

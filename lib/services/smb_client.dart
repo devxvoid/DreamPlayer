@@ -55,6 +55,7 @@ class SmbEntry {
     required this.size,
     required this.modified,
     this.subtitlePath,
+    this.subtitlePaths,
   });
 
   final String name;
@@ -67,7 +68,11 @@ class SmbEntry {
   /// (`.srt`/`.ass`/...) sitting next to the video in the same folder.
   final String? subtitlePath;
 
+  /// All matching subtitle files for this video (e.g. `.srt` + `.eng.srt`).
+  final List<String>? subtitlePaths;
+
   factory SmbEntry.fromMap(Map<dynamic, dynamic> m) {
+    final rawPaths = m['subtitlePaths'] as List?;
     return SmbEntry(
       name: (m['name'] as String?) ?? '',
       path: (m['path'] as String?) ?? '',
@@ -75,6 +80,7 @@ class SmbEntry {
       size: (m['size'] as num?)?.toInt() ?? 0,
       modified: (m['modified'] as num?)?.toInt() ?? 0,
       subtitlePath: m['subtitlePath'] as String?,
+      subtitlePaths: rawPaths?.whereType<String>().toList(),
     );
   }
 }

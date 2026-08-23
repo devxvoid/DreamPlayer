@@ -3,6 +3,15 @@
 All notable changes to DreamPlayer are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## 0.2.4
+
+### Fixed
+
+- **Jellyfin external subtitles** — parses `MediaStreams` (`IsExternal`), builds `DeliveryUrl + api_key` and exposes all `.srt`/`.ass`/`.vtt` in the CC picker (was only embedded)
+- **In-app SMB subtitles** — `subtitlePaths` now returns all matches (`video.srt`, `video.eng.ass`…) instead of just the first; CC shows each separately
+- **CX / Open-with subtitles** — generic `GET_CONTENT` + `OPEN_DOCUMENT` chooser with `queries` for any file manager (Files, CX, Solid, etc.); NAS siblings auto-discovered via saved SMB server and shown as **"Subtitles on NAS"**; `content://` (CX SMB) is cached to `file://` immediately so ExoPlayer can read it after CX is killed
+- **Manual load** — CC sheet always offers **"Load subtitle file…"** (system picker for any manager) plus direct NAS sibling selection
+
 ## 0.2.3
 
 ### Fixed

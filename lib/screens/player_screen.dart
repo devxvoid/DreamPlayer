@@ -9,7 +9,9 @@ import '../models/hdr_format.dart';
 import '../models/video_item.dart';
 import '../services/continue_watching.dart';
 import '../services/exo_player.dart';
+import '../services/file_browser.dart';
 import '../services/jellyfin_client.dart';
+import '../services/smb_client.dart';
 import '../services/resume_store.dart';
 import '../services/subtitle_style.dart';
 import '../utils/codec_info.dart';
@@ -252,6 +254,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         allowSelfSigned: video.allowSelfSigned,
         resumeKey: _resumeKey,
         title: video.title,
+        externalSubtitles: video.externalSubtitles,
       );
       // Re-apply the user's persisted fit mode to the new session.
       _exo?.setFitMode(_fitMode);
@@ -302,6 +305,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         allowSelfSigned: video.allowSelfSigned,
         resumeKey: _resumeKey,
         title: video.title,
+        externalSubtitles: video.externalSubtitles,
       );
       _exo?.setFitMode(_fitMode);
       _ioRetries = 0;
@@ -902,17 +906,14 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   /// Subtitle picker: lists every subtitle track (embedded container tracks
-  /// plus auto-paired sidecar files) plus an Off option.
+  /// plus auto-paired sidecar files) plus an Off option and a manual
+  /// "Load subtitle file..." entry (system picker for CX / any source).
   Future<void> _openSubtitleSheet() async {
     _showControls();
     final tracks = _subtitleTracks;
-    if (tracks.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No subtitles found in this video')),
-      );
-      return;
-    }
     final selected = _selectedSubtitleTrack;
+    // Sentinel for "Load subtitle file...".
+    const loadSentinel = -2;
     final choice = await showModalBottomSheet<int>(
       context: context,
       backgroundColor: const Color(0xFF1C1C1E),
@@ -936,46 +937,279 @@ class _PlayerScreenState extends State<PlayerScreen>
                   ),
                 ),
               ),
+              if (tracks.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(20, 8, 20, 8),
+                  child: Text(
+                    'No subtitles found in this video',
+                    style: TextStyle(color: Colors.white54, fontSize: 13),
+                  ),
+                )
+              else ...[
+                _tvListTile(
+                  leading: Icon(
+                    selected < 0
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_off,
+                    color: selected < 0 ? Colors.white : Colors.white54,
+                  ),
+                  title: const Text('Off', style: TextStyle(color: Colors.white)),
+                  onTap: () => Navigator.of(context).pop(-1),
+                ),
+                Flexible(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: tracks.length,
+                    itemBuilder: (context, i) {
+                      final t = tracks[i];
+                      final isSelected = t.index == selected;
+                      return _tvListTile(
+                        leading: Icon(
+                          isSelected
+                              ? Icons.radio_button_checked
+                              : Icons.radio_button_off,
+                          color: isSelected ? Colors.white : Colors.white54,
+                        ),
+                        title: Text(
+                          _subtitleTrackLabel(t),
+                          style: const TextStyle(color: Colors.white),
+                        ),
+                        onTap: () => Navigator.of(context).pop(t.index),
+                      );
+                    },
+                  ),
+                ),
+              ],
+              const Divider(color: Colors.white12, height: 1),
               _tvListTile(
-                leading: Icon(
-                  selected < 0
-                      ? Icons.radio_button_checked
-                      : Icons.radio_button_off,
-                  color: selected < 0 ? Colors.white : Colors.white54,
-                ),
-                title: const Text('Off', style: TextStyle(color: Colors.white)),
-                onTap: () => Navigator.of(context).pop(-1),
-              ),
-              Flexible(
-                child: ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: tracks.length,
-                  itemBuilder: (context, i) {
-                    final t = tracks[i];
-                    final isSelected = t.index == selected;
-                    return _tvListTile(
-                      leading: Icon(
-                        isSelected
-                            ? Icons.radio_button_checked
-                            : Icons.radio_button_off,
-                        color: isSelected ? Colors.white : Colors.white54,
-                      ),
-                      title: Text(
-                        _subtitleTrackLabel(t),
-                        style: const TextStyle(color: Colors.white),
-                      ),
-                      onTap: () => Navigator.of(context).pop(t.index),
-                    );
-                  },
-                ),
+                leading: const Icon(Icons.file_open, color: Colors.white70),
+                title: const Text('Load subtitle file…',
+                    style: TextStyle(color: Colors.white)),
+                onTap: () => Navigator.of(context).pop(loadSentinel),
               ),
             ],
           ),
         ),
       ),
     );
-    if (choice != null && choice != selected) {
+    if (choice == null) return;
+    if (choice == loadSentinel) {
+      await _pickAndLoadSubtitle();
+      return;
+    }
+    if (choice != selected) {
       _exo?.selectSubtitleTrack(choice);
+    }
+  }
+
+  Future<void> _pickAndLoadSubtitle() async {
+    // For CX / SMB videos, first try to auto-discover subtitle files sitting
+    // next to the video on the same NAS share (via saved SMB credentials).
+    // This is more reliable than the system picker, since CX doesn't expose
+    // its NAS files through SAF and won't appear in the Files chooser.
+    final smbUri = await _tryPickSmbSiblingSubtitle();
+    if (smbUri == '__CANCEL__') return;
+    if (smbUri != null) {
+      // User picked a NAS sibling — load it.
+      if (!mounted) return;
+      final pos = _position;
+      _current = VideoItem(
+        id: _current.id,
+        title: _current.title,
+        path: _current.path,
+        uri: _current.uri,
+        resumeKey: _current.resumeKey,
+        duration: _current.duration,
+        sizeBytes: _current.sizeBytes,
+        resolution: _current.resolution,
+        videoCodec: _current.videoCodec,
+        hdrHint: _current.hdrHint,
+        audioCodec: _current.audioCodec,
+        audioProfile: _current.audioProfile,
+        audioChannels: _current.audioChannels,
+        subtitleUri: smbUri,
+        httpHeaders: _current.httpHeaders,
+        allowSelfSigned: _current.allowSelfSigned,
+        jellyfinServerId: _current.jellyfinServerId,
+        jellyfinItemId: _current.jellyfinItemId,
+        externalSubtitles: _current.externalSubtitles,
+      );
+      await _reopenAt(pos, _duration);
+      return;
+    }
+    // Fallback: system file picker — shows any file manager on the device
+    // (Files, CX Explorer, Solid Explorer, etc.) via GET_CONTENT chooser.
+    String? uri;
+    try {
+      uri = await FileBrowserService.instance.pickSubtitle();
+    } on PlatformException {
+      uri = null;
+    }
+    if (uri == null || uri.isEmpty || !mounted) return;
+    final pos = _position;
+    _current = VideoItem(
+      id: _current.id,
+      title: _current.title,
+      path: _current.path,
+      uri: _current.uri,
+      resumeKey: _current.resumeKey,
+      duration: _current.duration,
+      sizeBytes: _current.sizeBytes,
+      resolution: _current.resolution,
+      videoCodec: _current.videoCodec,
+      hdrHint: _current.hdrHint,
+      audioCodec: _current.audioCodec,
+      audioProfile: _current.audioProfile,
+      audioChannels: _current.audioChannels,
+      subtitleUri: uri,
+      httpHeaders: _current.httpHeaders,
+      allowSelfSigned: _current.allowSelfSigned,
+      jellyfinServerId: _current.jellyfinServerId,
+      jellyfinItemId: _current.jellyfinItemId,
+      externalSubtitles: _current.externalSubtitles,
+    );
+    await _reopenAt(pos, _duration);
+  }
+
+  /// For CX / SMB playback, scan the video's NAS folder via the saved SMB
+  /// server for subtitle files next to the video. If siblings are found,
+  /// shows a picker; returns the chosen `smb://` URI or null to fall back
+  /// to the system file picker. Returns null immediately for non-NAS sources.
+  Future<String?> _tryPickSmbSiblingSubtitle() async {
+    try {
+      final key = _current.resumeKey ?? '';
+      String folder = '';
+      String fileName = '';
+      String? share;
+      SmbServer? server;
+      if (key.startsWith('cx:')) {
+        // cx:/SMB/host/share/dir/file.mkv
+        final raw = key.substring(3);
+        final without = raw.startsWith('/SMB/')
+            ? raw.substring(5)
+            : raw.startsWith('SMB/')
+                ? raw.substring(4)
+                : raw;
+        final parts = without.split('/');
+        if (parts.length < 3) return null;
+        final host = parts[0];
+        share = parts[1];
+        fileName = parts.last;
+        folder = parts.length > 3 ? parts.sublist(2, parts.length - 1).join('/') : '';
+        final servers = await SmbClient.instance.listServers();
+        for (final s in servers) {
+          if (s.host.toLowerCase() == host.toLowerCase()) {
+            server = s;
+            break;
+          }
+        }
+        if (server == null) return null;
+      } else if (key.startsWith('smb:')) {
+        // smb:serverId/share/dir/file.mkv
+        final raw = key.substring(4);
+        final slash = raw.indexOf('/');
+        if (slash < 0) return null;
+        final serverId = raw.substring(0, slash);
+        final rest = raw.substring(slash + 1);
+        final slash2 = rest.indexOf('/');
+        if (slash2 < 0) return null;
+        share = rest.substring(0, slash2);
+        final fullPath = rest.substring(slash2 + 1);
+        final lastSlash = fullPath.lastIndexOf('/');
+        if (lastSlash >= 0) {
+          folder = fullPath.substring(0, lastSlash);
+          fileName = fullPath.substring(lastSlash + 1);
+        } else {
+          folder = '';
+          fileName = fullPath;
+        }
+        final servers = await SmbClient.instance.listServers();
+        for (final s in servers) {
+          if (s.id == serverId) {
+            server = s;
+            break;
+          }
+        }
+        if (server == null) return null;
+      } else {
+        return null;
+      }
+      // ignore: unnecessary_non_null_assertion
+      final s = server!;
+      // ignore: unnecessary_non_null_assertion
+      final sh = share!;
+      final f = fileName;
+      final entries = await SmbClient.instance.listDirectory(s.id, sh, folder);
+      final dot = f.lastIndexOf('.');
+      final base = (dot > 0 ? f.substring(0, dot) : f).toLowerCase();
+      final subExts = {'srt', 'ass', 'ssa', 'vtt', 'sub', 'smi'};
+      final candidates = entries.where((e) => !e.isDirectory).where((e) {
+        final n = e.name.toLowerCase();
+        final d = n.lastIndexOf('.');
+        if (d < 0) return false;
+        final ext = n.substring(d + 1);
+        if (!subExts.contains(ext)) return false;
+        final bn = n.substring(0, d);
+        return bn == base || bn.startsWith('$base.');
+      }).toList();
+      if (candidates.isEmpty) return null;
+      candidates.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      if (!mounted) return null;
+      // Show sibling picker + fallback to device storage.
+      final picked = await showModalBottomSheet<String>(
+        context: context,
+        backgroundColor: const Color(0xFF1C1C1E),
+        builder: (sheetContext) => SafeArea(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.6,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(20, 16, 20, 8),
+                  child: Text('Subtitles on NAS',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600)),
+                ),
+                Flexible(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: candidates.length,
+                    itemBuilder: (context, i) {
+                      final c = candidates[i];
+                      return _tvListTile(
+                        leading:
+                            const Icon(Icons.subtitles, color: Colors.white54),
+                        title: Text(c.name,
+                            style: const TextStyle(color: Colors.white)),
+                        onTap: () => Navigator.of(context).pop(c.path),
+                      );
+                    },
+                  ),
+                ),
+                const Divider(color: Colors.white12, height: 1),
+                _tvListTile(
+                  leading:
+                      const Icon(Icons.file_open, color: Colors.white70),
+                  title: const Text('Browse device storage…',
+                      style: TextStyle(color: Colors.white)),
+                  onTap: () => Navigator.of(context).pop('__BROWSE__'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      if (picked == null) return '__CANCEL__';
+      if (picked == '__BROWSE__') return null;
+      return await SmbClient.instance.openShare(s.id, sh, picked);
+    } catch (_) {
+      return null;
     }
   }
 
