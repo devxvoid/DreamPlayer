@@ -3,6 +3,16 @@
 All notable changes to DreamPlayer are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## 0.2.5
+
+### Added
+
+- **Double-tap to seek** — double-tap the left half of the video to jump back 10 s, right half to jump forward 10 s, with a brief on-screen ripple indicator (phones/tablets; TV keeps its D-pad buttons)
+
+### Changed
+
+- **Center transport** — the ±10 s skip buttons beside play/pause are now TV-only; phones rely on the double-tap gesture. The dark pill background behind the center controls was removed — only the circular play/pause button floats on the video
+
 ## 0.2.4
 
 ### Fixed

@@ -235,6 +235,9 @@ class ExoPlayerView(
         .also { p ->
             p.repeatMode = Player.REPEAT_MODE_OFF
             p.volume = 1f
+            // No language preference: Media3's empty preferredAudioLanguages
+            // already selects the container's DEFAULT-flagged audio track
+            // (first track as last resort) — exactly the file's own default.
         }
 
     private val handler = Handler(Looper.getMainLooper())

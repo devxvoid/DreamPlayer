@@ -114,16 +114,20 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   /// Swipe gesture state (brightness / volume).
   bool _swipeEnabled = true;
+
   /// Swipe-gesture type (null = no gesture in progress).
   _SwipeType? _swipeType;
+
   /// True between drag-start and drag-end. [_swipeType] deliberately stays
   /// set during the 800ms pill fade-out (so the icon doesn't flip to the
   /// other type mid-fade); this flag gates actual gesture work instead.
   bool _swipeGestureActive = false;
   double _swipeCurrentValue = 0;
+
   /// The LIVE platform value fetched when the gesture started. Deltas apply
   /// on top of this, so a swipe always begins where the system actually is.
   double _swipeBase = 0;
+
   /// Accumulated finger movement for the current gesture. Buffered until the
   /// base value arrives so an early drag never applies a wrong absolute value.
   double _swipeDragDelta = 0;
@@ -336,7 +340,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       fallback = await JellyfinClient().transcodeFallbackFor(_current);
     } catch (_) {}
     if (!mounted) return;
-    if (fallback?.uri == null || !JellyfinClient.isTranscodeUri(fallback!.uri)) {
+    if (fallback?.uri == null ||
+        !JellyfinClient.isTranscodeUri(fallback!.uri)) {
       setState(() => _error = directError);
       return;
     }
@@ -349,8 +354,9 @@ class _PlayerScreenState extends State<PlayerScreen>
       _buffering = true;
     });
     debugPrint(
-        'jellyfin: switching to server transcode at ${pos.inMilliseconds}ms '
-        'uri=${fallback.uri}');
+      'jellyfin: switching to server transcode at ${pos.inMilliseconds}ms '
+      'uri=${fallback.uri}',
+    );
     try {
       await _exo?.open(
         '',
@@ -597,6 +603,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     WidgetsBinding.instance.removeObserver(this);
     _hideTimer?.cancel();
     _swipeOverlayTimer?.cancel();
+    _singleTapTimer?.cancel();
+    _dtSeekTimer?.cancel();
     _saveResume(_position);
     _stopTranscodeJob();
     // Restore system brightness so it doesn't stick after the player closes.
@@ -654,6 +662,35 @@ class _PlayerScreenState extends State<PlayerScreen>
     } else {
       _showControls();
     }
+  }
+
+  // ---- Double-tap seek (phones only; TV uses the D-pad buttons) ----
+
+  /// Pending single-tap, fired only if no double-tap lands within the window.
+  Timer? _singleTapTimer;
+  int? _dtSeekSide; // -1 back, +1 forward
+  Timer? _dtSeekTimer;
+
+  void _onTapUp(TapUpDetails details) {
+    if (_isTv) {
+      _onScreenTap();
+      return;
+    }
+    _singleTapTimer?.cancel();
+    _singleTapTimer = Timer(const Duration(milliseconds: 260), _onScreenTap);
+  }
+
+  void _onDoubleTapDown(TapDownDetails details) {
+    if (_isTv || !_backendReady) return;
+    _singleTapTimer?.cancel();
+    final w = MediaQuery.of(context).size.width;
+    final forward = details.globalPosition.dx >= w / 2;
+    _seekBy(Duration(seconds: forward ? 10 : -10));
+    _dtSeekTimer?.cancel();
+    _dtSeekTimer = Timer(const Duration(milliseconds: 700), () {
+      if (mounted) setState(() => _dtSeekSide = null);
+    });
+    setState(() => _dtSeekSide = forward ? 1 : -1);
   }
 
   // ---- Swipe gesture (brightness / volume) ----
@@ -736,8 +773,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _seekDragPx += details.primaryDelta!;
     final seconds = (_seekDragPx / w) * _seekDragSpanSeconds;
     setState(() {
-      _seekTargetMs =
-          (_seekBaseMs + seconds * 1000).round().clamp(0, dur);
+      _seekTargetMs = (_seekBaseMs + seconds * 1000).round().clamp(0, dur);
     });
   }
 
@@ -953,7 +989,10 @@ class _PlayerScreenState extends State<PlayerScreen>
                         : Icons.radio_button_off,
                     color: selected < 0 ? Colors.white : Colors.white54,
                   ),
-                  title: const Text('Off', style: TextStyle(color: Colors.white)),
+                  title: const Text(
+                    'Off',
+                    style: TextStyle(color: Colors.white),
+                  ),
                   onTap: () => Navigator.of(context).pop(-1),
                 ),
                 Flexible(
@@ -983,8 +1022,10 @@ class _PlayerScreenState extends State<PlayerScreen>
               const Divider(color: Colors.white12, height: 1),
               _tvListTile(
                 leading: const Icon(Icons.file_open, color: Colors.white70),
-                title: const Text('Load subtitle file…',
-                    style: TextStyle(color: Colors.white)),
+                title: const Text(
+                  'Load subtitle file…',
+                  style: TextStyle(color: Colors.white),
+                ),
                 onTap: () => Navigator.of(context).pop(loadSentinel),
               ),
             ],
@@ -1088,14 +1129,16 @@ class _PlayerScreenState extends State<PlayerScreen>
         final without = raw.startsWith('/SMB/')
             ? raw.substring(5)
             : raw.startsWith('SMB/')
-                ? raw.substring(4)
-                : raw;
+            ? raw.substring(4)
+            : raw;
         final parts = without.split('/');
         if (parts.length < 3) return null;
         final host = parts[0];
         share = parts[1];
         fileName = parts.last;
-        folder = parts.length > 3 ? parts.sublist(2, parts.length - 1).join('/') : '';
+        folder = parts.length > 3
+            ? parts.sublist(2, parts.length - 1).join('/')
+            : '';
         final servers = await SmbClient.instance.listServers();
         for (final s in servers) {
           if (s.host.toLowerCase() == host.toLowerCase()) {
@@ -1153,7 +1196,9 @@ class _PlayerScreenState extends State<PlayerScreen>
         return bn == base || bn.startsWith('$base.');
       }).toList();
       if (candidates.isEmpty) return null;
-      candidates.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      candidates.sort(
+        (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+      );
       if (!mounted) return null;
       // Show sibling picker + fallback to device storage.
       final picked = await showModalBottomSheet<String>(
@@ -1170,11 +1215,14 @@ class _PlayerScreenState extends State<PlayerScreen>
               children: [
                 const Padding(
                   padding: EdgeInsets.fromLTRB(20, 16, 20, 8),
-                  child: Text('Subtitles on NAS',
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600)),
+                  child: Text(
+                    'Subtitles on NAS',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                 ),
                 Flexible(
                   child: ListView.builder(
@@ -1183,10 +1231,14 @@ class _PlayerScreenState extends State<PlayerScreen>
                     itemBuilder: (context, i) {
                       final c = candidates[i];
                       return _tvListTile(
-                        leading:
-                            const Icon(Icons.subtitles, color: Colors.white54),
-                        title: Text(c.name,
-                            style: const TextStyle(color: Colors.white)),
+                        leading: const Icon(
+                          Icons.subtitles,
+                          color: Colors.white54,
+                        ),
+                        title: Text(
+                          c.name,
+                          style: const TextStyle(color: Colors.white),
+                        ),
                         onTap: () => Navigator.of(context).pop(c.path),
                       );
                     },
@@ -1194,10 +1246,11 @@ class _PlayerScreenState extends State<PlayerScreen>
                 ),
                 const Divider(color: Colors.white12, height: 1),
                 _tvListTile(
-                  leading:
-                      const Icon(Icons.file_open, color: Colors.white70),
-                  title: const Text('Browse device storage…',
-                      style: TextStyle(color: Colors.white)),
+                  leading: const Icon(Icons.file_open, color: Colors.white70),
+                  title: const Text(
+                    'Browse device storage…',
+                    style: TextStyle(color: Colors.white),
+                  ),
                   onTap: () => Navigator.of(context).pop('__BROWSE__'),
                 ),
               ],
@@ -1357,7 +1410,9 @@ class _PlayerScreenState extends State<PlayerScreen>
           Text(
             '$sign${_formatDuration(delta)}',
             style: TextStyle(
-              color: deltaMs >= 0 ? Colors.lightGreenAccent : Colors.orangeAccent,
+              color: deltaMs >= 0
+                  ? Colors.lightGreenAccent
+                  : Colors.orangeAccent,
               fontSize: 13,
               fontWeight: FontWeight.w600,
             ),
@@ -1617,7 +1672,9 @@ class _PlayerScreenState extends State<PlayerScreen>
             Positioned.fill(
               child: GestureDetector(
                 behavior: HitTestBehavior.translucent,
-                onTap: _onScreenTap,
+                onTapUp: _onTapUp,
+                onDoubleTapDown: _onDoubleTapDown,
+                onDoubleTap: () {},
                 onVerticalDragStart: _onSwipeDragStart,
                 onVerticalDragUpdate: _onSwipeDragUpdate,
                 onVerticalDragEnd: _onSwipeDragEnd,
@@ -1627,6 +1684,37 @@ class _PlayerScreenState extends State<PlayerScreen>
                 child: const SizedBox.expand(),
               ),
             ),
+            // Double-tap seek ripple (±10 s on the tapped half).
+            if (_dtSeekSide != null)
+              Positioned(
+                top: 0,
+                bottom: 0,
+                left: _dtSeekSide == -1 ? 0 : null,
+                right: _dtSeekSide == 1 ? 0 : null,
+                width: MediaQuery.sizeOf(context).width / 2,
+                child: IgnorePointer(
+                  child: Center(
+                    child: AnimatedOpacity(
+                      opacity: 0.85,
+                      duration: const Duration(milliseconds: 120),
+                      child: Container(
+                        padding: const EdgeInsets.all(18),
+                        decoration: const BoxDecoration(
+                          color: Colors.black54,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          _dtSeekSide == -1
+                              ? Icons.replay_10
+                              : Icons.forward_10,
+                          color: Colors.white,
+                          size: 42,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             // Horizontal-swipe seek preview (timestamp + frame thumbnail).
             if (_seekPreviewActive)
               Positioned(
@@ -1767,18 +1855,12 @@ class _PlayerScreenState extends State<PlayerScreen>
               child: IgnorePointer(
                 ignoring: !_controlsVisible,
                 child: Center(
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.4),
-                      borderRadius: BorderRadius.circular(36),
-                    ),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 6,
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // ±10 s buttons are TV-only (D-pad has no double-tap
+                      // gesture); phones use the double-tap-to-seek gesture.
+                      if (_isTv) ...[
                         _TvControlButton(
                           onPressed: !_backendReady
                               ? null
@@ -1789,22 +1871,24 @@ class _PlayerScreenState extends State<PlayerScreen>
                           onFocusChange: (_) => _showControls(),
                         ),
                         const SizedBox(width: 8),
-                        _TvControlButton(
-                          focusNode: _playPauseFocusNode,
-                          onPressed: !_backendReady ? null : _togglePlayPause,
-                          iconSize: 72,
-                          autofocus: true,
-                          alwaysShowRing: !_isTv,
-                          icon: Icon(
-                            _completed
-                                ? Icons.replay
-                                : _playing
-                                ? Icons.pause_circle_filled
-                                : Icons.play_circle_fill,
-                          ),
-                          color: Colors.white,
-                          onFocusChange: (_) => _showControls(),
+                      ],
+                      _TvControlButton(
+                        focusNode: _playPauseFocusNode,
+                        onPressed: !_backendReady ? null : _togglePlayPause,
+                        iconSize: 72,
+                        autofocus: true,
+                        alwaysShowRing: !_isTv,
+                        icon: Icon(
+                          _completed
+                              ? Icons.replay
+                              : _playing
+                              ? Icons.pause_circle_filled
+                              : Icons.play_circle_fill,
                         ),
+                        color: Colors.white,
+                        onFocusChange: (_) => _showControls(),
+                      ),
+                      if (_isTv) ...[
                         const SizedBox(width: 8),
                         _TvControlButton(
                           onPressed: !_backendReady
@@ -1816,7 +1900,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                           onFocusChange: (_) => _showControls(),
                         ),
                       ],
-                    ),
+                    ],
                   ),
                 ),
               ),
