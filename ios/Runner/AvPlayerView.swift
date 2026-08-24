@@ -668,8 +668,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                 // mounts SMB at a local path, so a FileHandle read suffices
                 // (HTTP/WebDAV MKVs don't need this — they have no browsable
                 // container on iOS either way). MKV via `MkvChapters`; MP4/MOV
-                // (`moov/udta/chpl` Nero) via AVFoundation first, then raw box
-                // scan (`Mp4Chapters`) as fallback.
+                // (`moov/udta/chpl` Nero) via the raw box scan (`Mp4Chapters`).
                 if let fileURL = localURL, fileURL.isFileURL {
                     let ext = fileURL.pathExtension.lowercased()
                     if ["mkv", "mka", "mks", "webm", "mk3d"].contains(ext) {
@@ -684,72 +683,20 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                             }
                         }
                     }
-                    if ["mp4", "mov", "m4v", "m4a", "m4b", "3gp"].contains(ext) {
+                    if ["mp4", "mov", "m4v", "m4b", "3gp"].contains(ext) {
                         let path = fileURL.path
-                        let urlForAsset = fileURL
                         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                            Task {
-                                var maps: [[String: Any]] = []
-                                // Try AVFoundation chapterMetadataGroups first
-                                // (covers both Nero chpl and QuickTime chap).
-                                do {
-                                    let asset = AVURLAsset(url: urlForAsset)
-                                    let groups: [AVTimedMetadataGroup]
-                                    if #available(iOS 16.0, *) {
-                                        groups = try await asset.load(.chapterMetadataGroups)
-                                    } else {
-                                        // Deployment is 16.0, but keep fallback
-                                        groups = asset.chapterMetadataGroups
-                                    }
-                                    if !groups.isEmpty {
-                                        maps = groups.enumerated().compactMap { idx, group in
-                                            let startSec = CMTimeGetSeconds(group.timeRange.start)
-                                            let endSec: Double
-                                            if group.timeRange.duration.isValid && !group.timeRange.duration.isIndefinite {
-                                                endSec = CMTimeGetSeconds(group.timeRange.end)
-                                            } else if idx + 1 < groups.count {
-                                                endSec = CMTimeGetSeconds(groups[idx + 1].timeRange.start)
-                                            } else {
-                                                endSec = Double.nan
-                                            }
-                                            // Skip invalid start
-                                            if startSec.isNaN || startSec.isInfinite { return nil }
-                                            let startMs = Int64((startSec * 1000).rounded())
-                                            var title: String? = nil
-                                            for item in group.items {
-                                                if item.commonKey == .commonKeyTitle, let v = item.stringValue, !v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                                    title = v; break
-                                                }
-                                            }
-                                            if title == nil {
-                                                for item in group.items {
-                                                    if let v = item.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines), !v.isEmpty {
-                                                        title = v; break
-                                                    }
-                                                }
-                                            }
-                                            let raw = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                                            let finalTitle = raw.isEmpty ? "Chapter \(idx + 1)" : raw
-                                            var m: [String: Any] = ["title": finalTitle, "startMs": startMs]
-                                            if !endSec.isNaN, !endSec.isInfinite {
-                                                let endMs = Int64((endSec * 1000).rounded())
-                                                if endMs > startMs { m["endMs"] = endMs }
-                                            }
-                                            return m
-                                        }
-                                    }
-                                } catch {
-                                    // Fall through to raw box scan
-                                }
-                                if maps.isEmpty {
-                                    maps = Mp4Chapters.parseMaps(path: path)
-                                }
-                                if maps.isEmpty { return }
-                                DispatchQueue.main.async { [weak self] in
-                                    guard let self else { return }
-                                    self.chapters = maps
-                                    self.emit()
-                                }
+                            // Nero `chpl` box scan (Mp4Chapters) — the same
+                            // parser as Android (`Mp4Chapters.kt`). HandBrake /
+                            // FFmpeg write chpl; AVFoundation's chapter API has
+                            // no stable async property key, so the raw parser
+                            // is used directly.
+                            let maps = Mp4Chapters.parseMaps(path: path)
+                            if maps.isEmpty { return }
+                            DispatchQueue.main.async { [weak self] in
+                                guard let self else { return }
+                                self.chapters = maps
+                                self.emit()
                             }
                         }
                     }
