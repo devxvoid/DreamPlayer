@@ -517,10 +517,26 @@ phases start only after the previous phase is verified on-device.
   `restoreRefreshRate()` puts back the mode captured at attach (flutter_displaymode's
   high-refresh pick) on dispose.
 
-**Phase 2 — chapters + watched state (pending)**: MKV/MP4 chapters need our own
-container parser (Media3 does not surface chapter atoms/editions) feeding a
-chapter skip button + list; watched/unwatched marks persisted per resume key,
-then group folder episodes into series pages (feeds Continue watching too).
+**Phase 2 — chapters + watched state (chapters + watched DONE 2026-08-24, on-device
+verify pending; series pages pending)**:
+- **Chapters** (`MkvChapters.kt`): Media3 has no chapters API, so the player
+  parses MKV `Chapters` itself from local files — EBML walk: Segment →
+  SeekHead (`SeekID=0x1043A770`, position relative to segment data start,
+  verified by re-reading the ID at the target) with a bounded top-level
+  fallback walk; `EditionEntry`→`ChapterAtom` (nested atoms flatten) collecting
+  `ChapterTimeStart`/`End` (ns→ms) + first `ChapterDisplay`/`ChapString`
+  (fallback "Chapter N"); ends backfilled from the next start. Parsed on a
+  daemon thread after open, pushed as `chapters` in the event map once ready.
+  Player screen: a numbered-list button appears in the bottom bar when the file
+  has chapters; the sheet highlights the current chapter and taps seek.
+  **Network sources (SMB/WebDAV/Jellyfin) have no chapters** (local files
+  only); MP4 chapter tracks not parsed yet.
+- **Watched marks** (`lib/services/watched_store.dart`, prefs key
+  `dreamplayer.watched`, StringList of resume keys): auto-marked when a video
+  plays to STATE_ENDED (`_markedWatched` latch reset per open), manual toggle
+  via the check icon on every folder-screen row (files + Jellyfin playables;
+  same stable resume keys). Green check = watched. Series-page grouping is the
+  remaining piece of this phase.
 
 **Phase 3 — parity + binge (pending)**: Android subtitle delay (cue-pipeline
 offset), optional auto-play-next-episode within the same folder.

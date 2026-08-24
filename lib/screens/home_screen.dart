@@ -713,9 +713,13 @@ class _HomeScreenState extends State<HomeScreen>
       path.split('/').map(Uri.encodeComponent).join('/');
 
   static String _positionLabel(Duration position) {
-    final minutes = position.inMinutes;
-    final seconds = position.inSeconds.remainder(60);
-    return '$minutes:${seconds.toString().padLeft(2, '0')}';
+    final h = position.inHours;
+    final m = position.inMinutes.remainder(60);
+    final s = position.inSeconds.remainder(60);
+    if (h > 0) {
+      return '$h:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
+    }
+    return '$m:${s.toString().padLeft(2, '0')}';
   }
 
   static const double _textBlockHeight = 84;

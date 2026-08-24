@@ -350,6 +350,10 @@ class ExoPlayerView(
     /// and engages the OPLUS EDR headroom path.
     @Volatile private var hdr10Content = false
 
+    /// MKV chapters parsed from the local container on open (Media3 has no
+    /// chapters API). Empty for network sources or files without chapters.
+    @Volatile private var chapters: List<MkvChapters.Chapter> = emptyList()
+
     /// Scans the first video samples for an HDR10+ SEI (ITU-T T.35 user data,
     /// country 0xB5 / provider 0x003C = ST 2094-40) on a background thread and
     /// flips [hdr10PlusContent], re-emitting the event map so the UI upgrades
@@ -626,6 +630,42 @@ class ExoPlayerView(
         }.apply { isDaemon = true }.start()
     }
 
+    /// Parses MKV chapters off the main thread and re-emits so the Dart side
+    /// gains the chapters list once available. Local files via
+    /// [MkvChapters.parse]; SMB via [MkvChapters.parseSmb]; WebDAV/generic
+    /// HTTP MKVs via [MkvChapters.parseHttp] (Range: bytes=0-8M).
+    private fun probeChapters(
+        path: String?,
+        uri: String?,
+        headers: Map<String, String> = emptyMap(),
+        allowSelfSigned: Boolean = false,
+    ) {
+        val isLocal = !path.isNullOrEmpty()
+        val isSmb = !uri.isNullOrEmpty() && uri!!.startsWith("smb://", ignoreCase = true)
+        val base = uri?.substringBefore('?')?.lowercase() ?: ""
+        val isHttpMkv = !isLocal && !isSmb && uri != null &&
+            (uri.startsWith("http://", ignoreCase = true) ||
+                uri.startsWith("https://", ignoreCase = true)) &&
+            (base.endsWith(".mkv") || base.endsWith(".mka") ||
+                base.endsWith(".mk3d") || base.endsWith(".webm"))
+        if (!isLocal && !isSmb && !isHttpMkv) return
+        Thread {
+            try {
+                val parsed = when {
+                    isLocal -> MkvChapters.parse(path!!)
+                    isSmb -> MkvChapters.parseSmb(uri!!, activity)
+                    else -> MkvChapters.parseHttp(uri!!, headers, allowSelfSigned)
+                }
+                if (parsed.isNotEmpty()) {
+                    chapters = parsed
+                    handler.post { emit() }
+                }
+            } catch (_: Throwable) {
+                // Best-effort; never let it affect playback.
+            }
+        }.apply { isDaemon = true }.start()
+    }
+
     init {
         playerView.player = player
         player.addListener(listener)
@@ -662,14 +702,14 @@ class ExoPlayerView(
                         call.argument<Map<String, String>>("headers") ?: emptyMap()
                     httpDataSourceFactory.setDefaultRequestProperties(headers)
                     // Self-signed WebDAV servers: swap in the trust-all client.
-                    httpDataSourceFactory.setPermissive(
-                        call.argument<Boolean>("allowSelfSigned") ?: false,
-                    )
+                    val allowSelfSigned = call.argument<Boolean>("allowSelfSigned") ?: false
+                    httpDataSourceFactory.setPermissive(allowSelfSigned)
                     // A new media item: allow DV P5 rejection to fire again if
                     // this one is also Profile 5 on a DV-less device.
                     dvRejectionShown = false
                     hdr10PlusContent = false
                     hdr10Content = false
+                    chapters = emptyList()
                     val mediaItem = MediaItem.Builder()
                         .apply {
                             when {
@@ -796,6 +836,7 @@ class ExoPlayerView(
                     subtitleOn = currentSubtitle != null
                     probeHdr10Plus(path, uri, headers)
                     probeHdr10(path, uri, headers)
+                    probeChapters(path, uri, headers, allowSelfSigned)
                     result.success(null)
                 }
                 "play" -> {
@@ -1270,6 +1311,15 @@ class ExoPlayerView(
         map["errorMessage"] = errorMessage
         map["errorCause"] = errorCause
         map["audioPassthrough"] = passthroughEnabled
+        if (chapters.isNotEmpty()) {
+            map["chapters"] = chapters.map {
+                mapOf(
+                    "title" to it.title,
+                    "startMs" to it.startMs,
+                    "endMs" to (it.endMs ?: -1L),
+                )
+            }
+        }
         return map
     }
 

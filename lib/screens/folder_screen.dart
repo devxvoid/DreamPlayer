@@ -6,6 +6,7 @@ import '../services/file_browser.dart';
 import '../services/jellyfin_client.dart';
 import '../services/library_folders.dart';
 import '../services/tmdb_client.dart';
+import '../services/watched_store.dart';
 import '../widgets/tv_overscan.dart';
 import '../widgets/tv_tile.dart';
 import 'tmd_details_screen.dart';
@@ -37,6 +38,10 @@ class _FolderScreenState extends State<FolderScreen> {
   List<FileEntry> _entries = const [];
   bool _loading = true;
   String? _error;
+
+  /// Watched marks for the current list, keyed by each row's stable resume
+  /// key (same keys the player auto-marks on completion).
+  Set<String> _watchedKeys = {};
 
   /// Jellyfin mode: the folder crumbs (name + item id) below the root, the
   /// resolved server, and the current level's children.
@@ -94,6 +99,7 @@ class _FolderScreenState extends State<FolderScreen> {
         _entries = entries;
         _loading = false;
       });
+      _refreshWatched();
       _prefetchMeta(entries);
     } on PlatformException catch (e) {
       if (!mounted) return;
@@ -128,6 +134,7 @@ class _FolderScreenState extends State<FolderScreen> {
         _jellyfinEntries = [...folders, ...playables];
         _loading = false;
       });
+      _refreshWatched();
       _prefetchJellyfinMeta(server);
     } on Exception catch (e) {
       if (!mounted) return;
@@ -219,6 +226,37 @@ class _FolderScreenState extends State<FolderScreen> {
     );
   }
 
+  /// Reloads the watched-mark set for the current list.
+  Future<void> _refreshWatched() async {
+    try {
+      final watched = await WatchedStore.load();
+      if (mounted) setState(() => _watchedKeys = watched);
+    } catch (_) {}
+  }
+
+  String? _watchedKeyForEntry(Object entry) {
+    if (_isJellyfin) {
+      final item = entry as JellyfinItem;
+      final server = _jellyfinServer;
+      if (server == null || item.isFolder) return null;
+      return _jellyfin.videoItem(server, item).resumeKey;
+    }
+    return (entry as FileEntry).isDirectory ? null : entry.resumeKey;
+  }
+
+  Future<void> _toggleWatched(Object entry) async {
+    final key = _watchedKeyForEntry(entry);
+    if (key == null || key.isEmpty) return;
+    final now = !_watchedKeys.contains(key);
+    setState(() {
+      _watchedKeys = {..._watchedKeys};
+      now ? _watchedKeys.add(key) : _watchedKeys.remove(key);
+    });
+    try {
+      await WatchedStore.set(key, now);
+    } catch (_) {}
+  }
+
   Future<void> _goUp() async {
     if (_isJellyfin) {
       if (_jellyfinCrumbs.isEmpty) {
@@ -301,6 +339,9 @@ class _FolderScreenState extends State<FolderScreen> {
                         tmdbMeta: item.isFolder
                             ? null
                             : _tmdbForJellyfin(item),
+                        watched:
+                            _watchedKeys.contains(_watchedKeyForEntry(item)),
+                        onToggleWatched: () => _toggleWatched(item),
                         onTap: () => _openJellyfinItem(item),
                       );
                     }
@@ -310,6 +351,9 @@ class _FolderScreenState extends State<FolderScreen> {
                       tmdbMeta: fileEntry.isDirectory
                           ? null
                           : _tmdbFor(fileEntry),
+                      watched:
+                          _watchedKeys.contains(_watchedKeyForEntry(fileEntry)),
+                      onToggleWatched: () => _toggleWatched(fileEntry),
                       onTap: () => _openEntry(fileEntry),
                     );
                   },
@@ -430,11 +474,15 @@ class _JellyfinFolderTile extends StatelessWidget {
     required this.item,
     required this.tmdbMeta,
     required this.onTap,
+    this.watched = false,
+    this.onToggleWatched,
   });
 
   final JellyfinItem item;
   final TmdMeta? tmdbMeta;
   final VoidCallback onTap;
+  final bool watched;
+  final VoidCallback? onToggleWatched;
 
   @override
   Widget build(BuildContext context) {
@@ -466,6 +514,21 @@ class _JellyfinFolderTile extends StatelessWidget {
             ),
       title: Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: subtitle.isEmpty ? null : Text(subtitle),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            tooltip: watched ? 'Mark as unwatched' : 'Mark as watched',
+            icon: Icon(
+              watched ? Icons.check_circle : Icons.check_circle_outline,
+              color:
+                  watched ? Colors.green.shade400 : colorScheme.onSurfaceVariant,
+            ),
+            onPressed: onToggleWatched,
+          ),
+          const Icon(Icons.chevron_right),
+        ],
+      ),
       onTap: onTap,
     );
   }
@@ -476,11 +539,15 @@ class _FolderTile extends StatelessWidget {
     required this.entry,
     required this.tmdbMeta,
     required this.onTap,
+    this.watched = false,
+    this.onToggleWatched,
   });
 
   final FileEntry entry;
   final TmdMeta? tmdbMeta;
   final VoidCallback onTap;
+  final bool watched;
+  final VoidCallback? onToggleWatched;
 
   static String _sizeLabel(int bytes) {
     if (bytes <= 0) return '';
@@ -524,6 +591,20 @@ class _FolderTile extends StatelessWidget {
             ),
       title: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: subtitle.isEmpty ? null : Text(subtitle),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            tooltip: watched ? 'Mark as unwatched' : 'Mark as watched',
+            icon: Icon(
+              watched ? Icons.check_circle : Icons.check_circle_outline,
+              color:
+                  watched ? Colors.green.shade400 : colorScheme.onSurfaceVariant,
+            ),
+            onPressed: onToggleWatched,
+          ),
+        ],
+      ),
       onTap: onTap,
     );
   }

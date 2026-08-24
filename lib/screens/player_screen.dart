@@ -13,6 +13,7 @@ import '../services/file_browser.dart';
 import '../services/jellyfin_client.dart';
 import '../services/smb_client.dart';
 import '../services/resume_store.dart';
+import '../services/watched_store.dart';
 import '../services/subtitle_style.dart';
 import '../utils/codec_info.dart';
 import '../utils/tv_helper.dart';
@@ -105,6 +106,13 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   bool _subtitleOn = false;
   List<ExoSubtitleTrack> _subtitleTracks = const [];
+
+  /// Container chapters (MKV, local files) — populated from the native event
+  /// once parsed. Empty hides the chapters button.
+  List<ExoChapter> _chapters = const [];
+
+  /// Guard so an ended video is marked watched exactly once per session.
+  bool _markedWatched = false;
   int _selectedSubtitleTrack = -1;
 
   VideoFitMode _fitMode = VideoFitMode.fit;
@@ -223,6 +231,13 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   Future<void> _openCurrent() async {
     final video = _current;
+    _markedWatched = false;
+    // Seed chapters from the VideoItem (e.g. Jellyfin `MediaSources[].Chapters`);
+    // native MKV parsing (`e.chapters`) will override once available.
+    _chapters = video.chapters
+        .map((c) => ExoChapter(title: c.title, startMs: c.startMs, endMs: c.endMs))
+        .toList();
+    if (_chapters.isNotEmpty && mounted) setState(() {});
     debugPrint(
       'DREAM_OPEN title="${video.title}" path=${video.path} uri=${video.uri} '
       'headers=${video.httpHeaders.keys.toList()}',
@@ -505,6 +520,15 @@ class _PlayerScreenState extends State<PlayerScreen>
     _liveAudioPassthrough = e.audioPassthrough;
     _audioTracks = e.audioTracks;
     _selectedAudioTrackIndex = e.selectedAudioTrack;
+    if (e.chapters.isNotEmpty) _chapters = e.chapters;
+
+    // Watched state: a video that played to the end is marked watched so
+    // library lists can show it (Phase 2). Once per session per video.
+    if (e.ended && !_markedWatched) {
+      _markedWatched = true;
+      final key = _resumeKey;
+      if (!_inTests && key.isNotEmpty) WatchedStore.set(key, true);
+    }
 
     // Resume bookmark: persist every ~5s while playing, and immediately when
     // playback pauses/stops. A finished video clears its bookmark (it ended,
@@ -1276,6 +1300,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// fixed ratios (16:9, 4:3). The list is scrollable and height-capped so the
   /// sheet never overflows in landscape. Choice is applied to the native
   /// surface and persisted for future sessions.
+  // ignore: unused_element
   Future<void> _openFitModeSheet() async {
     _showControls();
     const order = VideoFitMode.values;
@@ -1347,6 +1372,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   static String speedLabel(double speed) =>
       speed == speed.roundToDouble() ? '${speed.toInt()}×' : '$speed×';
 
+  // ignore: unused_element
   Future<void> _openSpeedSheet() async {
     _showControls();
     const speeds = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
@@ -1406,6 +1432,234 @@ class _PlayerScreenState extends State<PlayerScreen>
       _exo?.setSpeed(choice);
       if (!_inTests) PlaybackSpeedStore.save(choice);
     }
+  }
+
+  /// Chapter list sheet. Tap a row to seek to the chapter start; the current
+  /// chapter (position within [start, end)) is highlighted.
+  // ignore: unused_element
+  Future<void> _openChaptersSheet() async {
+    _showControls();
+    final choice = await showModalBottomSheet<int>(
+      context: context,
+      backgroundColor: const Color(0xFF1C1C1E),
+      builder: (sheetContext) => SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.6,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
+                child: Text(
+                  'Chapters (${_chapters.length})',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: _chapters.length,
+                  itemBuilder: (context, i) {
+                    final chapter = _chapters[i];
+                    final next = i + 1 < _chapters.length
+                        ? _chapters[i + 1].startMs
+                        : chapter.endMs;
+                    final posMs = _position.inMilliseconds;
+                    final isCurrent = posMs >= chapter.startMs &&
+                        (next == null || posMs < next);
+                    return _tvListTile(
+                      leading: Icon(
+                        isCurrent
+                            ? Icons.play_arrow
+                            : Icons.history_edu_outlined,
+                        color:
+                            isCurrent ? Theme.of(context).colorScheme.primary : Colors.white54,
+                      ),
+                      title: Text(
+                        chapter.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color:
+                              isCurrent ? Colors.white : Colors.white70,
+                          fontWeight: isCurrent
+                              ? FontWeight.w600
+                              : FontWeight.w400,
+                        ),
+                      ),
+                      subtitle: Text(
+                        _formatDuration(
+                          Duration(milliseconds: chapter.startMs),
+                        ),
+                        style: const TextStyle(color: Colors.white38, fontSize: 12),
+                      ),
+                      onTap: () => Navigator.of(sheetContext).pop(chapter.startMs),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (choice != null) {
+      _exo?.seekTo(Duration(milliseconds: choice));
+      if (!_playing && !_completed) _exo?.play();
+    }
+  }
+
+  /// Unified overflow sheet for the bottom bar (aspect + speed + chapters in
+  /// one place to keep the bar uncluttered). Aspect/speed taps apply
+  /// immediately and stay in the sheet; chapter taps seek and close.
+  Future<void> _openMoreSheet() async {
+    _showControls();
+    const speeds = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
+    const fitOrder = VideoFitMode.values;
+    bool expandAspect = false;
+    bool expandSpeed = false;
+    bool expandChapters = false;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF1C1C1E),
+      isScrollControlled: true,
+      builder: (sheetContext) => SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.75,
+          ),
+          child: StatefulBuilder(
+            builder: (ctx, setSheet) => SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(20, 16, 20, 8),
+                    child: Text(
+                      'Playback settings',
+                      style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  // Aspect ratio dropdown
+                  _tvListTile(
+                    leading: const Icon(Icons.aspect_ratio, color: Colors.white70),
+                    title: const Text('Aspect ratio', style: TextStyle(color: Colors.white)),
+                    subtitle: Text(_fitMode.label, style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                    trailing: Icon(expandAspect ? Icons.expand_less : Icons.expand_more, color: Colors.white54),
+                    onTap: () => setSheet(() => expandAspect = !expandAspect),
+                  ),
+                  if (expandAspect)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 12),
+                      child: Column(
+                        children: [
+                          for (final mode in fitOrder)
+                            _tvListTile(
+                              leading: Icon(
+                                _fitMode == mode ? Icons.radio_button_checked : Icons.radio_button_off,
+                                color: _fitMode == mode ? Colors.white : Colors.white54,
+                              ),
+                              title: Text(mode.label, style: const TextStyle(color: Colors.white)),
+                              onTap: () {
+                                if (_fitMode != mode) {
+                                  setState(() => _fitMode = mode);
+                                  _exo?.setFitMode(mode);
+                                  if (!_inTests) FitModeStore.save(mode);
+                                }
+                                setSheet(() {});
+                              },
+                            ),
+                        ],
+                      ),
+                    ),
+                  const Divider(color: Colors.white12, height: 1),
+                  // Playback speed dropdown
+                  _tvListTile(
+                    leading: const Icon(Icons.speed, color: Colors.white70),
+                    title: const Text('Playback speed', style: TextStyle(color: Colors.white)),
+                    subtitle: Text(speedLabel(_playbackSpeed), style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                    trailing: Icon(expandSpeed ? Icons.expand_less : Icons.expand_more, color: Colors.white54),
+                    onTap: () => setSheet(() => expandSpeed = !expandSpeed),
+                  ),
+                  if (expandSpeed)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 12),
+                      child: Column(
+                        children: [
+                          for (final s in speeds)
+                            _tvListTile(
+                              leading: Icon(
+                                _playbackSpeed == s ? Icons.radio_button_checked : Icons.radio_button_off,
+                                color: _playbackSpeed == s ? Colors.white : Colors.white54,
+                              ),
+                              title: Text(speedLabel(s), style: const TextStyle(color: Colors.white)),
+                              onTap: () {
+                                if (_playbackSpeed != s) {
+                                  setState(() => _playbackSpeed = s);
+                                  _exo?.setSpeed(s);
+                                  if (!_inTests) PlaybackSpeedStore.save(s);
+                                }
+                                setSheet(() {});
+                              },
+                            ),
+                        ],
+                      ),
+                    ),
+                  if (_chapters.isNotEmpty) ...[
+                    const Divider(color: Colors.white12, height: 1),
+                    _tvListTile(
+                      leading: const Icon(Icons.format_list_numbered, color: Colors.white70),
+                      title: const Text('Chapters', style: TextStyle(color: Colors.white)),
+                      subtitle: Text('${_chapters.length} chapters', style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                      trailing: Icon(expandChapters ? Icons.expand_less : Icons.expand_more, color: Colors.white54),
+                      onTap: () => setSheet(() => expandChapters = !expandChapters),
+                    ),
+                    if (expandChapters)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 12),
+                        child: Column(
+                          children: [
+                            for (int i = 0; i < _chapters.length; i++)
+                              Builder(builder: (context) {
+                                final ch = _chapters[i];
+                                final next = i + 1 < _chapters.length ? _chapters[i + 1].startMs : ch.endMs;
+                                final posMs = _position.inMilliseconds;
+                                final isCurrent = posMs >= ch.startMs && (next == null || posMs < next);
+                                return _tvListTile(
+                                  leading: Icon(
+                                    isCurrent ? Icons.play_arrow : Icons.history_edu_outlined,
+                                    color: isCurrent ? Theme.of(context).colorScheme.primary : Colors.white54,
+                                  ),
+                                  title: Text(ch.title, maxLines: 1, overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(color: isCurrent ? Colors.white : Colors.white70, fontWeight: isCurrent ? FontWeight.w600 : FontWeight.w400)),
+                                  subtitle: Text(_formatDuration(Duration(milliseconds: ch.startMs)), style: const TextStyle(color: Colors.white38, fontSize: 12)),
+                                  onTap: () {
+                                    Navigator.of(sheetContext).pop();
+                                    _exo?.seekTo(Duration(milliseconds: ch.startMs));
+                                    if (!_playing && !_completed) _exo?.play();
+                                  },
+                                );
+                              }),
+                          ],
+                        ),
+                      ),
+                  ],
+                  const SizedBox(height: 8),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   void _seekBy(Duration delta) {
@@ -2064,21 +2318,8 @@ class _PlayerScreenState extends State<PlayerScreen>
                                     onFocusChange: (_) => _showControls(),
                                   ),
                                   _TvControlButton(
-                                    onPressed: _openFitModeSheet,
-                                    icon: const Icon(Icons.tune),
-                                    color: Colors.white,
-                                    onFocusChange: (_) => _showControls(),
-                                  ),
-                                  _TvControlButton(
-                                    onPressed: _openSpeedSheet,
-                                    iconSize: 15,
-                                    icon: Text(
-                                      speedLabel(_playbackSpeed),
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
+                                    onPressed: _openMoreSheet,
+                                    icon: const Icon(Icons.more_vert),
                                     color: Colors.white,
                                     onFocusChange: (_) => _showControls(),
                                   ),
@@ -2333,6 +2574,7 @@ Widget _tvListTile({
   required Widget title,
   Widget? leading,
   Widget? subtitle,
+  Widget? trailing,
   required VoidCallback onTap,
 }) {
   return Focus(
@@ -2383,6 +2625,7 @@ Widget _tvListTile({
               leading: leading,
               title: title,
               subtitle: subtitle,
+              trailing: trailing,
               onTap: onTap,
             ),
           ),

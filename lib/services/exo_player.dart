@@ -178,6 +178,26 @@ class ExoSubtitleTrack {
 
 /// Snapshot of playback state pushed from the native ExoPlayer platform view.
 @immutable
+/// A container chapter (MKV `Chapters`), parsed natively on open.
+@immutable
+class ExoChapter {
+  const ExoChapter({
+    required this.title,
+    required this.startMs,
+    this.endMs,
+  });
+
+  final String title;
+  final int startMs;
+  final int? endMs;
+
+  static ExoChapter fromMap(Map<dynamic, dynamic> m) => ExoChapter(
+        title: m['title'] as String? ?? 'Chapter',
+        startMs: m['startMs'] is num ? (m['startMs'] as num).toInt() : 0,
+        endMs: m['endMs'] is num ? (m['endMs'] as num).toInt() : null,
+      );
+}
+
 class ExoPlayerEvent {
   const ExoPlayerEvent({
     required this.state,
@@ -208,6 +228,7 @@ class ExoPlayerEvent {
     this.errorMessage,
     this.errorCause,
     this.audioPassthrough = false,
+    this.chapters = const [],
   });
 
   final int state;
@@ -263,6 +284,10 @@ class ExoPlayerEvent {
   /// HDMI output via AudioTrack passthrough mode).
   final bool audioPassthrough;
 
+  /// Container chapters (MKV only, local files). Empty when the file has
+  /// none or the source is a network stream.
+  final List<ExoChapter> chapters;
+
   Duration get position => Duration(milliseconds: positionMs);
   Duration get duration => Duration(milliseconds: durationMs);
   Duration get buffered => Duration(milliseconds: bufferedMs);
@@ -304,6 +329,9 @@ class ExoPlayerEvent {
       errorMessage: m['errorMessage'] as String?,
       errorCause: m['errorCause'] as String?,
       audioPassthrough: m['audioPassthrough'] == true,
+      chapters: (m['chapters'] as List? ?? const [])
+          .map((e) => ExoChapter.fromMap(e as Map<dynamic, dynamic>))
+          .toList(),
     );
   }
 }

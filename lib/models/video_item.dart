@@ -1,6 +1,32 @@
 import '../utils/codec_info.dart';
 import 'hdr_format.dart';
 
+/// A chapter from the container or the media server (MKV `Chapters`,
+/// Jellyfin `MediaSources[].Chapters`).
+class VideoChapter {
+  const VideoChapter({
+    required this.title,
+    required this.startMs,
+    this.endMs,
+  });
+
+  final String title;
+  final int startMs;
+  final int? endMs;
+
+  Map<String, dynamic> toJson() => {
+        'title': title,
+        'startMs': startMs,
+        if (endMs != null) 'endMs': endMs,
+      };
+
+  factory VideoChapter.fromJson(Map<String, dynamic> json) => VideoChapter(
+        title: json['title'] as String? ?? 'Chapter',
+        startMs: (json['startMs'] as num?)?.toInt() ?? 0,
+        endMs: (json['endMs'] as num?)?.toInt(),
+      );
+}
+
 /// An external subtitle track from a media server (e.g. Jellyfin).
 class VideoExternalSub {
   const VideoExternalSub({
@@ -72,6 +98,7 @@ class VideoItem {
     this.jellyfinServerId,
     this.jellyfinItemId,
     this.externalSubtitles = const [],
+    this.chapters = const [],
   });
 
   final String id;
@@ -105,6 +132,10 @@ class VideoItem {
 
   /// External subtitle tracks from media servers (e.g. Jellyfin SRT/ASS).
   final List<VideoExternalSub> externalSubtitles;
+
+  /// Chapters from the container (MKV) or the server (Jellyfin). Empty when
+  /// the source has none. Fertilized on next open for resume keys etc.
+  final List<VideoChapter> chapters;
 
   final Duration duration;
   final int? sizeBytes;
@@ -175,6 +206,7 @@ class VideoItem {
       jellyfinServerId: jellyfinServerId,
       jellyfinItemId: jellyfinItemId,
       externalSubtitles: externalSubtitles,
+      chapters: chapters,
     );
   }
 
@@ -218,10 +250,13 @@ class VideoItem {
         if (externalSubtitles.isNotEmpty)
           'externalSubtitles':
               externalSubtitles.map((s) => s.toJson()).toList(),
+        if (chapters.isNotEmpty)
+          'chapters': chapters.map((c) => c.toJson()).toList(),
       };
 
   factory VideoItem.fromJson(Map<String, dynamic> json) {
     final rawSubs = json['externalSubtitles'] as List?;
+    final rawChapters = json['chapters'] as List?;
     return VideoItem(
       id: json['id'] as String? ?? '',
       title: json['title'] as String? ?? '',
@@ -235,6 +270,12 @@ class VideoItem {
           ? rawSubs
               .whereType<Map<String, dynamic>>()
               .map(VideoExternalSub.fromJson)
+              .toList()
+          : const [],
+      chapters: rawChapters != null
+          ? rawChapters
+              .whereType<Map<String, dynamic>>()
+              .map(VideoChapter.fromJson)
               .toList()
           : const [],
     );

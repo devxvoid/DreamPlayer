@@ -164,6 +164,7 @@ class JellyfinItem {
     this.indexNumber,
     this.parentIndexNumber,
     this.externalSubtitles = const [],
+    this.chapters = const [],
   });
 
   final String id;
@@ -193,6 +194,10 @@ class JellyfinItem {
   /// sitting next to the video on the server, served via `DeliveryUrl`).
   final List<JellyfinExternalSub> externalSubtitles;
 
+  /// Chapters from `MediaSources[0].Chapters` (Jellyfin parses MKV `Chapters`).
+  /// Each entry has `Name` + `StartPositionTicks` (100 ns units).
+  final List<VideoChapter> chapters;
+
   Duration get duration => Duration(microseconds: (runTimeTicks ?? 0) ~/ 10);
 
   bool get isPlayable => !isFolder && (mediaType == 'Video' || mediaType == 'Audio');
@@ -220,8 +225,9 @@ class JellyfinItem {
     final firstSource = mediaSources.isNotEmpty ? mediaSources.first : null;
     String? mediaSourceId;
     List<JellyfinExternalSub> externalSubs = const [];
+    List<VideoChapter> chapters = const [];
     if (firstSource is Map<String, dynamic>) {
-      mediaSourceId = firstSource['Id'] as String?;
+      mediaSourceId = firstSource['Id'] as String?; // ignore: unnecessary_null_comparison
       // Parse external subtitle tracks from MediaStreams.
       final streams = firstSource['MediaStreams'] as List? ?? const [];
       externalSubs = streams
@@ -232,6 +238,39 @@ class JellyfinItem {
               (s['SupportsExternalStream'] as bool?) != false)
           .map((s) => JellyfinExternalSub.fromJson(s))
           .toList();
+      // Parse chapters that Jellyfin extracted from the container.
+      // Jellyfin puts them at `Item.Chapters` when `Fields=Chapters` is
+      // requested (top-level), not always inside `MediaSources[0].Chapters`
+      // — check both. Each entry: {Name, StartPositionTicks} (100 ns units).
+      // Chapters live at Item.Chapters when Fields=Chapters is requested.
+      final topChapters = json['Chapters'] as List?;
+      List<dynamic> rawChapters = const [];
+      if (topChapters != null && topChapters.isNotEmpty) {
+        rawChapters = topChapters;
+      } else if (firstSource is Map<String, dynamic>) { // ignore: unnecessary_type_check
+        rawChapters = (firstSource['Chapters'] as List?) ?? const [];
+      }
+      if (rawChapters.isNotEmpty) {
+        final parsed = rawChapters
+            .whereType<Map<String, dynamic>>()
+            .map((c) {
+              final name = (c['Name'] as String?)?.trim();
+              final ticks = (c['StartPositionTicks'] as num?)?.toInt() ?? 0;
+              return VideoChapter(
+                title: name != null && name.isNotEmpty ? name : 'Chapter',
+                startMs: ticks ~/ 10000,
+              );
+            })
+            .toList()
+          ..sort((a, b) => a.startMs.compareTo(b.startMs));
+        // Backfill endMs from the next chapter's start (and de-dupe fallback titles).
+        chapters = List.generate(parsed.length, (i) {
+          final c = parsed[i];
+          final end = i + 1 < parsed.length ? parsed[i + 1].startMs : null;
+          final title = c.title == 'Chapter' ? 'Chapter ${i + 1}' : c.title;
+          return VideoChapter(title: title, startMs: c.startMs, endMs: end);
+        });
+      }
     }
     final mediaType = json['MediaType'] as String?;
     return JellyfinItem(
@@ -248,6 +287,7 @@ class JellyfinItem {
       indexNumber: (json['IndexNumber'] as num?)?.toInt(),
       parentIndexNumber: (json['ParentIndexNumber'] as num?)?.toInt(),
       externalSubtitles: externalSubs,
+      chapters: chapters,
     );
   }
 }
@@ -597,7 +637,8 @@ class JellyfinClient {
         'api_key': server.token ?? '',
         'ParentId': parentId,
         'Recursive': 'false',
-        'Fields': 'MediaSources,Width,Height,IndexNumber,ParentIndexNumber',
+        'Fields':
+            'MediaSources,Width,Height,IndexNumber,ParentIndexNumber,Chapters',
       },
     );
     final json = await _getJson(uri.toString(), allowSelfSigned: server.allowSelfSigned);
@@ -749,6 +790,7 @@ class JellyfinClient {
       jellyfinServerId: server.urlHost,
       jellyfinItemId: item.id,
       externalSubtitles: externalSubs,
+      chapters: item.chapters,
     );
   }
 
