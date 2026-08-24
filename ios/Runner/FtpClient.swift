@@ -1,3 +1,4 @@
+import AetherEngineSMB
 import Citadel
 import Flutter
 import Foundation
@@ -265,7 +266,9 @@ final class FtpClient: NSObject {
             defer { conn.quit() }
             try await conn.setTypeI()
             let lines = try await conn.list(effective)
-            raw = parseListing(lines).map { ($0.name, $0) }
+            raw = parseListing(lines).map { line in
+                (line.name, Entry(name: line.name, isDir: line.isDir, size: line.size))
+            }
         }
 
         return raw
@@ -311,8 +314,8 @@ final class FtpClient: NSObject {
         let conn = FtpControlConnection(host: server.host, port: server.port)
         try await conn.connectAndLogin(username: server.username, password: server.password)
         try await conn.setTypeI()
-        let source = FtpByteRangeSource(ftp: conn, path: remotePath)
-        source.byteSize = try await conn.fileSize(path: remotePath)
+        let totalSize = try await conn.fileSize(path: remotePath)
+        let source = FtpByteRangeSource(ftp: conn, path: remotePath, size: totalSize)
         return BufferedSMBReader(source: source, ownsSource: true)
     }
 
@@ -342,7 +345,7 @@ final class FtpClient: NSObject {
     }
 
     private static func ext(_ name: String) -> String {
-        guard let dot = name.lastIndex(of: "."), dot.index(after: dot) != name.endIndex else { return "" }
+        guard let dot = name.lastIndex(of: "."), name.index(after: dot) != name.endIndex else { return "" }
         return String(name[name.index(after: dot)...]).lowercased()
     }
 
@@ -619,10 +622,6 @@ final class TcpConnection: @unchecked Sendable {
     private var connectedContinuation: CheckedContinuation<Void, Error>?
 
     init(host: String, port: UInt16) {
-        let tcp = NWProtocolTCP.Options()
-        tcp.connectionTimeoutSeconds = 12
-        let params = NWParameters()
-        params.defaultProtocolStack.transportProtocols.use(tcp)
         connection = NWConnection(
             host: NWEndpoint.Host(host),
             port: NWEndpoint.Port(rawValue: port) ?? 21,
@@ -874,8 +873,7 @@ final class FtpByteRangeSource: ByteRangeSource, @unchecked Sendable {
     private var ftpConn: FtpControlConnection?
     private let ftpPath: String?
 
-    let size: Int64
-    var byteSize: Int64 { size }
+    private(set) var byteSize: Int64
 
     init(sftp: SftpSession, path: String) async throws {
         sftpSession = sftp
@@ -883,15 +881,15 @@ final class FtpByteRangeSource: ByteRangeSource, @unchecked Sendable {
         ftpConn = nil
         ftpPath = nil
         let attrs = try await sftp.attributes(path: path)
-        size = attrs.size ?? -1
+        byteSize = attrs.size ?? -1
     }
 
-    init(ftp: FtpControlConnection, path: String) {
+    init(ftp: FtpControlConnection, path: String, size: Int64) {
         sftpSession = nil
         sftpFile = nil
         ftpConn = ftp
         ftpPath = path
-        size = -1 // caller sets via fileSize() right after init
+        byteSize = size
     }
 
     func read(at offset: Int64, length: Int) async throws -> Data {
@@ -908,11 +906,10 @@ final class FtpByteRangeSource: ByteRangeSource, @unchecked Sendable {
     }
 
     func close() {
-        if let sftpFile {
-            let f = sftpFile
-            Task { try? await f.close() }
-            sftpFile = nil
+        if let file = sftpFile {
+            Task { try? await file.close() }
         }
+        sftpFile = nil
         sftpSession?.close()
         sftpSession = nil
         ftpConn?.quit()
