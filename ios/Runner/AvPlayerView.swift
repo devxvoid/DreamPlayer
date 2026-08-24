@@ -246,6 +246,10 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     /// Positive = cues appear LATER than authored.
     private var subtitleDelaySeconds: Double = 0
 
+    /// MKV chapters parsed from the file (local + Files-app SMB). Empty when
+    /// the container has none or the source is not a seekable file.
+    private var chapters: [[String: Any]] = []
+
     
 
     init(messenger: FlutterBinaryMessenger, viewId: Int64, frame: CGRect) {
@@ -510,6 +514,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         isDolbyVision = false
         dvProfile = nil
         lastWebDAVInfo = nil
+        chapters = []
         subtitleOverlay.clear()
         emit()
 
@@ -611,6 +616,25 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                 // Fresh AVPlayer instance after load — re-apply the saved rate.
                 self.applySpeed(self.pendingSpeed)
                 self.emit()
+                // Probe MKV chapters for local / Files-app SMB files. The
+                // provider mounts SMB at a local path, so a FileHandle read
+                // suffices (HTTP/WebDAV MKVs don't need this — they have no
+                // browsable container on iOS either way).
+                if let fileURL = localURL, fileURL.isFileURL {
+                    let ext = fileURL.pathExtension.lowercased()
+                    if ["mkv", "mka", "mks", "webm", "mk3d"].contains(ext) {
+                        let path = fileURL.path
+                        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                            let maps = MkvChapters.parseMaps(path: path)
+                            if maps.isEmpty { return }
+                            DispatchQueue.main.async { [weak self] in
+                                guard let self else { return }
+                                self.chapters = maps
+                                self.emit()
+                            }
+                        }
+                    }
+                }
             } catch {
                 self.lastError = String(describing: error)
                 self.emit()
@@ -832,6 +856,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             "subtitleOn": subtitleOn,
             "subtitleTracks": subtitleTracks,
             "selectedSubtitleTrack": selectedSubtitle,
+            "chapters": chapters,
             "error": lastError ?? "",
         ]
         return map
