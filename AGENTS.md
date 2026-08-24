@@ -497,10 +497,10 @@ Run DreamPlayer on an Android TV box/panel as a real 10-foot app. **Status: Phas
 Gap analysis vs Infuse / Just Player / Nova / VLC produced a phased plan. Later
 phases start only after the previous phase is verified on-device.
 
-**Phase 1 — speed + cadence (DONE 2026-08-23, on-device verify pending)**:
-- **Playback speed**: bottom-bar button shows the live rate (`1×`, `1.5×`); the
-  sheet offers 0.25×–2× (`_openSpeedSheet`, same `_tvListTile` pattern as the
-  aspect sheet). Persisted as `dreamplayer.playbackSpeed`
+**Phase 1 — speed + cadence (DONE 2026-08-23, on-device verified)**:
+- **Playback speed**: bottom-bar overflow now holds the rate (`1×`, `1.5×`);
+  the speed dropdown offers 0.25×–2× (`_openMoreSheet` collapsible sections,
+  same `_tvListTile` pattern). Persisted as `dreamplayer.playbackSpeed`
   (`PlaybackSpeedStore`), re-applied after every `open()`/`_reopenAt()`.
   Android: Media3 `player.setPlaybackSpeed`. iOS: `AvPlayerView.applySpeed`
   finds the engine's `AVPlayerLayer` (recursive layer walk) and sets
@@ -516,27 +516,43 @@ phases start only after the previous phase is verified on-device.
   (±0.5 Hz covers 59.94-vs-60). Sets `preferredDisplayModeId` on the window;
   `restoreRefreshRate()` puts back the mode captured at attach (flutter_displaymode's
   high-refresh pick) on dispose.
+- **OOM fix (2026-08-24, debug heap)**: `MediaCodec_loop` abort
+  (`could not create MediaCodec.BufferInfo` + `growth limit 256 MB`) was a
+  Java-heap OOM — `media3TargetBytes` 96 MiB + debug JIT filled the heap.
+  Fix: `android:largeHeap="true"` (manifest) + `BufferTuning` 96→64 MiB on
+  large-RAM devices (still ~50 s of 10 Mb/s, Fire TV 192 MB heap stays 24 MiB).
 
 **Phase 2 — chapters + watched state (chapters + watched DONE 2026-08-24, on-device
-verify pending; series pages pending)**:
-- **Chapters** (`MkvChapters.kt`): Media3 has no chapters API, so the player
-  parses MKV `Chapters` itself from local files — EBML walk: Segment →
+verified for local/SMB/Jellyfin/WebDAV)**:
+- **Chapters** (`MkvChapters.kt`, `SeekableReader` abstraction): Media3 has no
+  chapters API, so the player parses MKV `Chapters` itself — EBML walk: Segment →
   SeekHead (`SeekID=0x1043A770`, position relative to segment data start,
   verified by re-reading the ID at the target) with a bounded top-level
   fallback walk; `EditionEntry`→`ChapterAtom` (nested atoms flatten) collecting
   `ChapterTimeStart`/`End` (ns→ms) + first `ChapterDisplay`/`ChapString`
-  (fallback "Chapter N"); ends backfilled from the next start. Parsed on a
-  daemon thread after open, pushed as `chapters` in the event map once ready.
-  Player screen: a numbered-list button appears in the bottom bar when the file
-  has chapters; the sheet highlights the current chapter and taps seek.
-  **Network sources (SMB/WebDAV/Jellyfin) have no chapters** (local files
-  only); MP4 chapter tracks not parsed yet.
+  (fallback "Chapter N"); ends backfilled from the next start. `RafReader`
+  (local `RandomAccessFile`), `SmbReader` (`SmbRandomAccessFile` via saved share
+  credentials), and `ByteArrayReader` (HTTP `Range: 0-8M` via OkHttp, standard +
+  permissive clients for self-signed WebDAV) share the same `SeekableReader`
+  parser. Jellyfin also provides `Item.Chapters` (`Fields=Chapters` in
+  `getItems`; top-level `json['Chapters']` with fallback to
+  `MediaSources[0].Chapters` → `VideoChapter` ticks/10000 ms). Parsed on a
+  daemon thread after open, pushed as `chapters` in the event map (native) or
+  seeded from `VideoItem.chapters` (Jellyfin). Player: the bottom bar's overflow
+  `⋮` holds Aspect/Speed/Chapters as collapsible dropdowns — chapters section
+  appears only when the file has them, highlights the current chapter and taps
+  seek. MP4 chapter tracks not parsed yet.
 - **Watched marks** (`lib/services/watched_store.dart`, prefs key
   `dreamplayer.watched`, StringList of resume keys): auto-marked when a video
   plays to STATE_ENDED (`_markedWatched` latch reset per open), manual toggle
   via the check icon on every folder-screen row (files + Jellyfin playables;
-  same stable resume keys). Green check = watched. Series-page grouping is the
-  remaining piece of this phase.
+  same stable resume keys). Green check = watched. Resume labels now show
+  `h:mm:ss` for ≥1h (was `m:ss`) in both the details `Resume from` button
+  (`tmd_details_screen.dart:_formatClock`) and home `Continue from`
+  (`home_screen.dart:_positionLabel`). Series-page grouping is the remaining
+  piece of this phase. The overflow sheet change also declutters the bottom bar
+  from 6 → 4 buttons (`audio · CC · ⋮ · fullscreen`; `tune`/`1×`/`chapters`
+  now live inside `⋮`).
 
 **Phase 3 — parity + binge (pending)**: Android subtitle delay (cue-pipeline
 offset), optional auto-play-next-episode within the same folder.
@@ -608,9 +624,10 @@ lib/
   utils/codec_info.dart         # HDR detection + codec -> label mapping + live label merge
   utils/tv_helper.dart          # TV detection (isTvMode, isTvBox), swipe gesture prefs
   services/display_refresh_rate.dart  # high refresh rate selection (Android)
-  services/exo_player.dart        # ExoPlayerController + ExoPlayerView platform view (hybrid composition on Android) + PlaybackController interface (brightness/volume)
+  services/exo_player.dart        # ExoPlayerController + ExoPlayerView platform view (hybrid composition on Android) + PlaybackController interface (brightness/volume) + VideoFitMode/FitModeStore + PlaybackSpeedStore
   services/continue_watching.dart # continue-watching list (shared_preferences JSON)
-  services/jellyfin_client.dart     # Jellyfin/Emby REST + mDNS discovery + JellyfinServer/JellyfinItem/JellyfinItemInfo models + videoItem/serverForUrl/getItemInfo helpers + folder-meta cache
+  services/watched_store.dart     # watched marks (prefs dreamplayer.watched, StringList of resume keys, auto on ended + manual toggle)
+  services/jellyfin_client.dart     # Jellyfin/Emby REST + mDNS discovery + JellyfinServer/JellyfinItem/JellyfinItemInfo models + videoItem/serverForUrl/getItemInfo helpers + folder-meta cache + VideoChapter from Item.Chapters
   services/tmdb_client.dart        # TMDB: filename parser (ParsedFileName), TmdApi (search/details/bestForQuery), TmdStore cache, TmdService facade
   services/library_folders.dart    # user-added library folders (LibraryFolder model + LibraryFoldersStore, prefs dreamplayer.libraryFolders; LibraryFolderSource.files|jellyfin)
   services/webdav_client.dart     # WebDAV channel wrapper + WebDavServer model (channel dreamplayer/webdav)
