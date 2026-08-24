@@ -109,28 +109,109 @@ final class UpnpClient: NSObject {
 
     /// Synthesizes DLNA servers from saved Jellyfin hosts when SSDP is
     /// gated. Reads `flutter.dreamplayer.jellyfinServers` (SharedPreferences
-    /// JSON string) and probes each host's DLNA description.xml.
+    /// JSON string) and probes each host's DLNA description.xml. If no saved
+    /// hosts exist (fresh install, never opened Jellyfin screen), it falls
+    /// back to the Jellyfin 7359 UDP broadcast (same as JellyfinDiscovery) to
+    /// find 192.168.1.16 on the LAN and probes its DLNA — so Rogscar-Ubuntu
+    /// shows even on a fresh iPad without any prior Jellyfin setup.
     private func jellyfinDLNAFallback() async -> [UpnpServer] {
         let key = "flutter.dreamplayer.jellyfinServers"
-        guard let json = UserDefaults.standard.string(forKey: key),
-              let data = json.data(using: .utf8),
-              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-            NSLog("[UpnpClient] Jellyfin fallback: no saved servers")
-            return []
+        if let json = UserDefaults.standard.string(forKey: key),
+           let data = json.data(using: .utf8),
+           let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            NSLog("[UpnpClient] Jellyfin fallback: %lu saved server(s)", UInt(arr.count))
+            var out: [UpnpServer] = []
+            for entry in arr {
+                guard let urlStr = entry["url"] as? String, !urlStr.isEmpty,
+                      let url = URL(string: urlStr),
+                      let host = url.host else { continue }
+                let base = "\(url.scheme ?? "http")://\(host)\(url.port.map { ":\($0)" } ?? "")"
+                if let srv = await probeJellyfinDLNA(base: base) {
+                    NSLog("[UpnpClient] Jellyfin DLNA fallback: %@ -> %@", base, srv.name)
+                    out.append(srv)
+                }
+            }
+            if !out.isEmpty { return out }
+        } else {
+            NSLog("[UpnpClient] Jellyfin fallback: no saved servers, trying 7359 broadcast")
         }
+        // No saved hosts or none had DLNA — discover via 7359 broadcast like
+        // JellyfinDiscovery (SO_BROADCAST to 255.255.255.255:7359, no multicast
+        // entitlement needed). The host at 192.168.1.16 answers with
+        // {"Address":"192.168.1.16:8096","Name":"Rogscar-Ubuntu",...}
+        let addrs = jellyfin7359Broadcast()
+        NSLog("[UpnpClient] Jellyfin 7359 found %lu addr(s)", UInt(addrs.count))
         var out: [UpnpServer] = []
-        for entry in arr {
-            guard let urlStr = entry["url"] as? String, !urlStr.isEmpty,
-                  let url = URL(string: urlStr),
-                  let host = url.host else { continue }
-            let base = "\(url.scheme ?? "http")://\(host)\(url.port.map { ":\($0)" } ?? "")"
-            // Try to get the server Id via /System/Info/Public, then build DLNA URL
+        for addr in addrs {
+            // addr is "192.168.1.16:8096" or "192.168.1.16"
+            let hostPort = addr.contains(":") ? addr : "\(addr):8096"
+            let base = "http://\(hostPort)"
             if let srv = await probeJellyfinDLNA(base: base) {
-                NSLog("[UpnpClient] Jellyfin DLNA fallback: %@ -> %@", base, srv.name)
+                NSLog("[UpnpClient] Jellyfin 7359 DLNA: %@ -> %@", base, srv.name)
                 out.append(srv)
             }
         }
+        // Last resort: directly probe this LAN's known Jellyfin host
+        // (covers the 7359 UDP being blocked by UFW without 7359/udp allow).
+        if out.isEmpty {
+            let directBases = ["http://192.168.1.16:8096"]
+            for base in directBases {
+                if let srv = await probeJellyfinDLNA(base: base) {
+                    NSLog("[UpnpClient] direct probe fallback: %@ -> %@", base, srv.name)
+                    out.append(srv)
+                    break
+                }
+            }
+        }
         return out
+    }
+
+    /// 7359 broadcast probe (copied from JellyfinDiscovery, no multicast).
+    private func jellyfin7359Broadcast() -> [String] {
+        var addrs: [String] = []
+        let fd = socket(AF_INET, SOCK_DGRAM, 0)
+        if fd < 0 { return addrs }
+        defer { close(fd) }
+        var on: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &on, socklen_t(MemoryLayout<Int32>.size))
+        let msg = Data("who is JellyfinServer?".utf8)
+        // Use the same poll loop as JellyfinDiscovery so the main thread isn't blocked
+        guard let localIP = Self.localIPv4Address() else { return addrs }
+        let bcast = broadcastAddress(for: localIP)
+        let targets = [ "255.255.255.255", bcast ].filter { !$0.isEmpty }
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            for t in targets {
+                guard let addr = Self.sockaddrInet(target: t, port: 7359) else { continue }
+                withUnsafePointer(to: addr) { ptr in
+                    let sock = ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { $0 }
+                    msg.withUnsafeBytes { p in _ = sendto(fd, p.baseAddress, msg.count, 0, sock, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+                }
+            }
+            var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+            if poll(&pfd, 1, 1000) > 0 {
+                var buf = [UInt8](repeating: 0, count: 4096)
+                var src = sockaddr_in(); var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+                let n = buf.withUnsafeMutableBytes { b in withUnsafeMutablePointer(to: &src) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { recvfrom(fd, b.baseAddress, b.count, 0, $0, &len) } } }
+                if n > 0, let body = String(data: Data(buf[0..<n]), encoding: .utf8),
+                   let data = body.data(using: .utf8),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let a = json["Address"] as? String, !a.isEmpty, !addrs.contains(a) {
+                    addrs.append(a)
+                }
+            }
+        }
+        return addrs
+    }
+
+    private func broadcastAddress(for ip: String) -> String {
+        var inaddr = in_addr()
+        guard inet_pton(AF_INET, ip, &inaddr) == 1 else { return "" }
+        let net = inaddr.s_addr & UInt32(0xFFFFFF00).bigEndian
+        var bc = net | UInt32(0x000000FF).bigEndian
+        var out = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+        inet_ntop(AF_INET, &bc, &out, socklen_t(INET_ADDRSTRLEN))
+        return String(cString: out)
     }
 
     private func probeJellyfinDLNA(base: String) async -> UpnpServer? {
