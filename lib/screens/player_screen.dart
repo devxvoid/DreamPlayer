@@ -1784,19 +1784,25 @@ class _PlayerScreenState extends State<PlayerScreen>
                                 onTap: () async {
                                   if (m != _decoderMode) {
                                     setState(() => _decoderMode = m);
+                                    _liveDecoderName = null;
+                                    _isHwDecoder = null;
                                     setSheet(() {});
                                     await DecoderModeStore.save(m);
-                                    if (mounted && context.mounted) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        const SnackBar(content: Text('Takes effect on next video')),
-                                      );
+                                    // Live: reopen at same position so the
+                                    // fresh MediaCodecSelector query picks the
+                                    // new decoder (HW vs SW) immediately.
+                                    if (!sheetContext.mounted) {
+                                      if (mounted) await _reopenAt(_position, _duration);
+                                      return;
                                     }
+                                    Navigator.of(sheetContext).pop();
+                                    if (mounted) await _reopenAt(_position, _duration);
                                   }
                                 },
                               ),
                             const Padding(
                               padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
-                              child: Text('Change applies to the next video you open.', style: TextStyle(color: Colors.white38, fontSize: 11)),
+                              child: Text('Reopens at same position to switch decoder.', style: TextStyle(color: Colors.white38, fontSize: 11)),
                             ),
                           ],
                         ),

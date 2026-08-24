@@ -87,12 +87,14 @@ object PlayerCodecs {
     }
 
     fun mediaCodecSelector(context: Context): MediaCodecSelector {
-        val passthrough = passthroughEnabled(context)
-        val mode = decoderMode(context)
         return MediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
-            // HW/SW filter applies to video decoders only (audio passthrough/FLAC/Dolby logic is independent).
+            // Read prefs LIVE on every query so a mode toggle takes effect on
+            // the next `open()` without recreating the whole player view. Same
+            // for passthrough (HDMI may be plugged/unplugged between files).
+            val modeLive = decoderMode(context)
+            val passthroughLive = passthroughEnabled(context)
             val isVideo = mimeType?.startsWith("video/") == true
-            fun filterByMode(list: List<androidx.media3.exoplayer.mediacodec.MediaCodecInfo>): List<androidx.media3.exoplayer.mediacodec.MediaCodecInfo> = when (mode) {
+            fun filterByMode(list: List<androidx.media3.exoplayer.mediacodec.MediaCodecInfo>): List<androidx.media3.exoplayer.mediacodec.MediaCodecInfo> = when (modeLive) {
                 "hw" -> list.filterNot { isSoftwareVideoDecoder(it.name) }
                 "sw" -> {
                     val sw = list.filter { isSoftwareVideoDecoder(it.name) }
@@ -104,7 +106,7 @@ object PlayerCodecs {
                 mimeType == MimeTypes.AUDIO_FLAC -> emptyList()
                 // Passthrough: return empty for compressed surround formats so
                 // DefaultAudioSink routes them to AudioTrack passthrough mode.
-                passthrough && isPassthroughFormat(mimeType) -> emptyList()
+                passthroughLive && isPassthroughFormat(mimeType) -> emptyList()
                 mimeType == MimeTypes.AUDIO_E_AC3 || mimeType == MimeTypes.AUDIO_E_AC3_JOC ->
                     MediaCodecSelector.DEFAULT.getDecoderInfos(
                         mimeType,
