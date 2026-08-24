@@ -105,55 +105,78 @@ final class UpnpClient: NSObject {
                 setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
                 var broadcast: Int32 = 1
                 setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &broadcast, socklen_t(MemoryLayout<Int32>.size))
-                var tv = timeval(tv_sec: 3, tv_usec: 500000)
-                setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
 
-                let msg = "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 3\r\nST: urn:schemas-upnp-org:device:MediaServer:1\r\nUSER-AGENT: DreamPlayer/1.0 UPnP/1.0\r\n\r\n"
-                guard let data = msg.data(using: .utf8) else { cont.resume(returning: locations); return }
-
-                var dest = sockaddr_in()
-                dest.sin_family = sa_family_t(AF_INET)
-                dest.sin_port = UInt16(1900).bigEndian
-                dest.sin_addr.s_addr = inet_addr("239.255.255.250")
-
-                data.withUnsafeBytes { ptr in
-                    _ = withUnsafePointer(to: &dest) { destPtr in
-                        destPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
-                            sendto(fd, ptr.baseAddress, data.count, 0, sockPtr, socklen_t(MemoryLayout<sockaddr_in>.size))
-                        }
-                    }
-                }
-                // Second send for lossy Wi-Fi
-                data.withUnsafeBytes { ptr in
-                    _ = withUnsafePointer(to: &dest) { destPtr in
-                        destPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
-                            sendto(fd, ptr.baseAddress, data.count, 0, sockPtr, socklen_t(MemoryLayout<sockaddr_in>.size))
-                        }
-                    }
+                let msg = Data("M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 3\r\nST: urn:schemas-upnp-org:device:MediaServer:1\r\nUSER-AGENT: DreamPlayer/1.0 UPnP/1.0\r\n\r\n".utf8)
+                guard let dest = Self.sockaddrInet(target: "239.255.255.250", port: 1900) else {
+                    cont.resume(returning: locations); return
                 }
 
                 let deadline = Date().addingTimeInterval(4.0)
-                var buf = [UInt8](repeating: 0, count: 8192)
+                // Send inside the deadline loop (like JellyfinDiscovery) so
+                // lossy Wi-Fi still gets a probe each second, and use poll()
+                // with 1 s timeout instead of blocking SO_RCVTIMEO.
                 while Date() < deadline {
-                    var src = sockaddr_in()
-                    var srcLen = socklen_t(MemoryLayout<sockaddr_in>.size)
-                    let n = buf.withUnsafeMutableBytes { bufPtr in
-                        withUnsafeMutablePointer(to: &src) { srcPtr in
-                            srcPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
-                                recvfrom(fd, bufPtr.baseAddress, bufPtr.count, 0, sockPtr, &srcLen)
-                            }
+                    // (Re)send M-SEARCH each second
+                    withUnsafePointer(to: dest) { addrPtr in
+                        let sockAddr = addrPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { $0 }
+                        msg.withUnsafeBytes { msgPtr in
+                            _ = sendto(fd, msgPtr.baseAddress, msg.count, 0, sockAddr, socklen_t(MemoryLayout<sockaddr_in>.size))
                         }
                     }
-                    if n <= 0 { break }
-                    let resp = String(bytes: buf[0..<n], encoding: .utf8) ?? ""
-                    if let loc = Self.headerValue(resp, name: "LOCATION") ?? Self.headerValue(resp, name: "Location") {
-                        let trimmed = loc.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !trimmed.isEmpty { locations.insert(trimmed) }
+                    var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+                    // 1 s poll so we stay responsive to deadline and can resend
+                    if poll(&pfd, 1, 1000) > 0 {
+                        var buf = [UInt8](repeating: 0, count: 8192)
+                        var src = sockaddr_in()
+                        var srcLen = socklen_t(MemoryLayout<sockaddr_in>.size)
+                        let n = buf.withUnsafeMutableBytes { bufPtr in
+                            withUnsafeMutablePointer(to: &src) { srcPtr in
+                                srcPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
+                                    recvfrom(fd, bufPtr.baseAddress, bufPtr.count, 0, sockPtr, &srcLen)
+                                }
+                            }
+                        }
+                        if n > 0 {
+                            let resp = String(bytes: buf[0..<n], encoding: .utf8) ?? ""
+                            if let loc = Self.headerValue(resp, name: "LOCATION") ?? Self.headerValue(resp, name: "Location") {
+                                let trimmed = loc.trimmingCharacters(in: .whitespacesAndNewlines)
+                                if !trimmed.isEmpty { locations.insert(trimmed) }
+                            }
+                            // Drain any additional waiting packets without extra poll
+                            while true {
+                                var peek = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+                                if poll(&peek, 1, 0) <= 0 { break }
+                                var buf2 = [UInt8](repeating: 0, count: 8192)
+                                var src2 = sockaddr_in()
+                                var srcLen2 = socklen_t(MemoryLayout<sockaddr_in>.size)
+                                let n2 = buf2.withUnsafeMutableBytes { b in
+                                    withUnsafeMutablePointer(to: &src2) { s in
+                                        s.withMemoryRebound(to: sockaddr.self, capacity: 1) { sock in
+                                            recvfrom(fd, b.baseAddress, b.count, 0, sock, &srcLen2)
+                                        }
+                                    }
+                                }
+                                if n2 <= 0 { break }
+                                let resp2 = String(bytes: buf2[0..<n2], encoding: .utf8) ?? ""
+                                if let loc2 = Self.headerValue(resp2, name: "LOCATION") ?? Self.headerValue(resp2, name: "Location") {
+                                    let t2 = loc2.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    if !t2.isEmpty { locations.insert(t2) }
+                                }
+                            }
+                        }
                     }
                 }
                 cont.resume(returning: locations)
             }
         }
+    }
+
+    private static func sockaddrInet(target: String, port: Int) -> sockaddr_in? {
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = in_port_t(port).bigEndian
+        guard inet_pton(AF_INET, target, &addr.sin_addr) == 1 else { return nil }
+        return addr
     }
 
     private static func headerValue(_ resp: String, name: String) -> String? {
