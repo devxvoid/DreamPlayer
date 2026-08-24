@@ -98,13 +98,28 @@ final class UpnpClient: NSObject {
             DispatchQueue.global(qos: .userInitiated).async {
                 var locations = Set<String>()
                 let fd = socket(AF_INET, SOCK_DGRAM, 0)
-                if fd < 0 { cont.resume(returning: locations); return }
+                if fd < 0 {
+                    NSLog("[UpnpClient] socket() failed errno=%d", errno)
+                    cont.resume(returning: locations); return
+                }
                 defer { close(fd) }
 
                 var reuse: Int32 = 1
                 setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
                 var broadcast: Int32 = 1
                 setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &broadcast, socklen_t(MemoryLayout<Int32>.size))
+                // Multicast TTL 2 so SSDP reaches the LAN, and bind the
+                // multicast egress to the Wi-Fi interface (needed on iOS
+                // when the device has multiple interfaces; without it the
+                // kernel may send via the wrong interface and get no reply).
+                var ttl: Int32 = 2
+                setsockopt(fd, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, socklen_t(MemoryLayout<Int32>.size))
+                if let localIP = Self.localIPv4Address() {
+                    var mif = in_addr()
+                    inet_pton(AF_INET, localIP, &mif)
+                    setsockopt(fd, IPPROTO_IP, IP_MULTICAST_IF, &mif, socklen_t(MemoryLayout<in_addr>.size))
+                    NSLog("[UpnpClient] local IP %@, multicast IF set", localIP)
+                }
 
                 let msg = Data("M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 3\r\nST: urn:schemas-upnp-org:device:MediaServer:1\r\nUSER-AGENT: DreamPlayer/1.0 UPnP/1.0\r\n\r\n".utf8)
                 guard let dest = Self.sockaddrInet(target: "239.255.255.250", port: 1900) else {
@@ -112,6 +127,7 @@ final class UpnpClient: NSObject {
                 }
 
                 let deadline = Date().addingTimeInterval(4.0)
+                NSLog("[UpnpClient] SSDP M-SEARCH to 239.255.255.250:1900 (ST MediaServer:1)")
                 // Send inside the deadline loop (like JellyfinDiscovery) so
                 // lossy Wi-Fi still gets a probe each second, and use poll()
                 // with 1 s timeout instead of blocking SO_RCVTIMEO.
@@ -140,7 +156,10 @@ final class UpnpClient: NSObject {
                             let resp = String(bytes: buf[0..<n], encoding: .utf8) ?? ""
                             if let loc = Self.headerValue(resp, name: "LOCATION") ?? Self.headerValue(resp, name: "Location") {
                                 let trimmed = loc.trimmingCharacters(in: .whitespacesAndNewlines)
-                                if !trimmed.isEmpty { locations.insert(trimmed) }
+                                if !trimmed.isEmpty {
+                                    locations.insert(trimmed)
+                                    NSLog("[UpnpClient] LOCATION %@", trimmed)
+                                }
                             }
                             // Drain any additional waiting packets without extra poll
                             while true {
@@ -160,12 +179,16 @@ final class UpnpClient: NSObject {
                                 let resp2 = String(bytes: buf2[0..<n2], encoding: .utf8) ?? ""
                                 if let loc2 = Self.headerValue(resp2, name: "LOCATION") ?? Self.headerValue(resp2, name: "Location") {
                                     let t2 = loc2.trimmingCharacters(in: .whitespacesAndNewlines)
-                                    if !t2.isEmpty { locations.insert(t2) }
+                                    if !t2.isEmpty {
+                                        locations.insert(t2)
+                                        NSLog("[UpnpClient] LOCATION %@", t2)
+                                    }
                                 }
                             }
                         }
                     }
                 }
+                NSLog("[UpnpClient] SSDP done %lu location(s)", UInt(locations.count))
                 cont.resume(returning: locations)
             }
         }
@@ -186,6 +209,29 @@ final class UpnpClient: NSObject {
             if k.caseInsensitiveCompare(name) == .orderedSame {
                 return String(line[line.index(after: idx)...]).trimmingCharacters(in: .whitespaces)
             }
+        }
+        return nil
+    }
+
+    /// First `en*` interface IPv4 (Wi-Fi / Ethernet), copied from
+    /// `JellyfinDiscovery.swift` so SSDP egress uses the right interface.
+    private static func localIPv4Address() -> String? {
+        var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddrPtr) == 0, let first = ifaddrPtr else { return nil }
+        defer { freeifaddrs(first) }
+        var ptr: UnsafeMutablePointer<ifaddrs>? = first
+        while let current = ptr {
+            let addr = current.pointee.ifa_addr.pointee
+            if addr.sa_family == UInt8(AF_INET) {
+                let name = String(cString: current.pointee.ifa_name)
+                if name.hasPrefix("en") {
+                    var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                    getnameinfo(current.pointee.ifa_addr, socklen_t(current.pointee.ifa_addr.pointee.sa_len),
+                                &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
+                    return String(cString: host)
+                }
+            }
+            ptr = current.pointee.ifa_next
         }
         return nil
     }
