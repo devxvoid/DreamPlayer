@@ -250,6 +250,11 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     /// the container has none or the source is not a seekable file.
     private var chapters: [[String: Any]] = []
 
+    /// Bitstream HDR probe results (ST 2094-40 dynamic metadata for HDR10+,
+    /// static mastering/light-level for HDR10 without MKV Colour).
+    private var isHdr10PlusContent = false
+    private var isHdr10Content = false
+
     
 
     init(messenger: FlutterBinaryMessenger, viewId: Int64, frame: CGRect) {
@@ -515,6 +520,8 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         dvProfile = nil
         lastWebDAVInfo = nil
         chapters = []
+        isHdr10PlusContent = false
+        isHdr10Content = false
         subtitleOverlay.clear()
         emit()
 
@@ -630,6 +637,28 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                             DispatchQueue.main.async { [weak self] in
                                 guard let self else { return }
                                 self.chapters = maps
+                                self.emit()
+                            }
+                        }
+                    }
+                    // Bitstream HDR probes (best-effort, like Android).
+                    // Engine may already report .hdr10Plus, but plain HDR10 MKVs
+                    // that omit the Matroska Colour element report .sdr — the
+                    // SEI 137/144 scan upgrades them to HDR10. Scan the first
+                    // ~8 MiB for HEVC SEI NALs (prefix 39 / suffix 40, ITU-T T.35
+                    // B5 00 3C for HDR10+, 137/144 for static HDR10).
+                    let hdrPath = localURL.path
+                    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                        let res = Self.scanHdrProbe(path: hdrPath)
+                        if res.hdr10Plus || res.hdr10 {
+                            DispatchQueue.main.async { [weak self] in
+                                guard let self else { return }
+                                if res.hdr10Plus, !self.isHdr10PlusContent {
+                                    self.isHdr10PlusContent = true
+                                }
+                                if res.hdr10, !self.isHdr10Content {
+                                    self.isHdr10Content = true
+                                }
                                 self.emit()
                             }
                         }
@@ -822,6 +851,8 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
 
         let videoCodec = Self.displayVideoCodec(base: videoCodecName, isDV: isDolbyVision, profile: dvProfile)
         let colorTransfer = Self.colorTransfer(for: engine.videoFormat)
+        let hdrPlus = isHdr10PlusContent || engine.videoFormat == .hdr10Plus
+        let hdr10 = isHdr10Content || engine.videoFormat == .hdr10 || engine.videoFormat == .hdr10Plus
 
         let audioTracks = audioTrackMaps()
         let activeAudio = engine.audioTracks.first(where: { $0.id == engine.activeAudioTrackIndex })
@@ -846,6 +877,8 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             "videoWidth": videoWidth,
             "videoHeight": videoHeight,
             "colorTransfer": colorTransfer as Any,
+            "isHdr10Plus": hdrPlus,
+            "isHdr10": hdr10,
             "audioCodecs": activeAudio?.codec ?? "",
             "audioMime": "",
             "audioChannels": activeAudio?.channels ?? 0,
@@ -1066,6 +1099,63 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             if let slider = findVolumeSlider(in: sub) { return slider }
         }
         return nil
+    }
+
+    // MARK: - HDR bitstream probe (mirrors Android ExoPlayerView.kt SEI scans)
+
+    /// Scans the first ~8 MiB of `path` for HEVC SEI NALs. Best-effort: any
+    /// I/O error or unknown container returns `(false,false)`.
+    private static func scanHdrProbe(path: String) -> (hdr10Plus: Bool, hdr10: Bool) {
+        guard let fh = FileHandle(forReadingAtPath: path) else { return (false, false) }
+        defer { try? fh.close() }
+        // 8 MiB covers the SEI without pulling a whole 80 GB remux.
+        let data = (try? fh.read(upToCount: 8 * 1024 * 1024)) ?? Data()
+        if data.isEmpty { return (false, false) }
+        let bytes = [UInt8](data)
+        var foundPlus = false
+        var found10 = false
+        // Linear scan for HEVC SEI NAL headers (39 prefix / 40 suffix). Each
+        // NAL header is 2 bytes: ((nalType <<1) & 0x7E) in the first byte.
+        for i in 0..<(bytes.count - 6) {
+            let nalType = (Int(bytes[i]) >> 1) & 0x3F
+            if nalType != 39 && nalType != 40 { continue }
+            // Parse SEI payloads starting after the 2-byte header.
+            let end = bytes.count
+            var pos = i + 2
+            while pos + 1 < end {
+                var payloadType = 0
+                while pos < end && bytes[pos] == 0xFF { payloadType += 255; pos += 1 }
+                if pos >= end { break }
+                payloadType += Int(bytes[pos]); pos += 1
+                var payloadSize = 0
+                while pos < end && bytes[pos] == 0xFF { payloadSize += 255; pos += 1 }
+                if pos >= end { break }
+                payloadSize += Int(bytes[pos]); pos += 1
+                // T.35 HDR10+ → payloadType 4, then 0xB5 0x00 0x3C.
+                if payloadType == 4, payloadSize >= 3, pos + 3 <= end,
+                   bytes[pos] == 0xB5, bytes[pos + 1] == 0x00, bytes[pos + 2] == 0x3C {
+                    foundPlus = true
+                }
+                // Static HDR10 → payloadType 137 or 144.
+                if payloadType == 137 || payloadType == 144 { found10 = true }
+                if foundPlus && found10 { return (true, true) }
+                pos += payloadSize
+                // Stay within this NAL; next SEI NAL will be found by outer scan.
+                // Heuristic: if we consumed past the next NAL header guard, break.
+                if pos + 2 >= end { break }
+                // Peek if next byte looks like start of another NAL header inside
+                // the same buffer isn't reliable — just continue parsing this SEI.
+                if pos > i + 512 { break } // cap per-NAL parse length
+            }
+            if foundPlus && found10 { break }
+        }
+        // Fallback: raw signature search for files where NAL alignment slipped.
+        if !foundPlus, bytes.count >= 3 {
+            for i in 0..<(bytes.count - 3) where !foundPlus {
+                if bytes[i] == 0xB5, bytes[i+1] == 0x00, bytes[i+2] == 0x3C { foundPlus = true }
+            }
+        }
+        return (foundPlus, found10)
     }
 
     // MARK: - Teardown
