@@ -680,36 +680,59 @@ class JellyfinClient {
   }) async {
     final m = _dlnaStreamUrl.firstMatch(url);
     if (m == null) return null;
-    final origin = Uri.parse(m.group(1)!).toString();
     final itemId = m.group(2)!;
-    // Match against saved servers by origin (scheme://host:port), tolerant of
-    // a trailing slash on either side.
+    // Match against saved servers by scheme+host+port (never by raw string —
+    // trailing slashes / default ports must not break the match).
+    String originOf(String raw) {
+      final u = Uri.parse(raw);
+      final hasPort = u.hasPort;
+      final port = hasPort
+          ? u.port
+          : (u.scheme == 'https' ? 443 : 80);
+      return '${u.scheme}://${u.host}:$port';
+    }
+
+    final origin = originOf(m.group(1)!);
     JellyfinServer? server;
     for (final s in await loadServers()) {
-      final norm = Uri.parse(s.url).toString();
-      if (norm == origin || '$norm/' == '$origin/') {
-        server = s;
-        break;
-      }
+      try {
+        if (originOf(s.url) == origin) {
+          server = s;
+          break;
+        }
+      } catch (_) {}
     }
-    if (server == null) return null;
-    final item = await getItem(server, itemId);
-    if (item == null || !item.isPlayable) return null;
-    final video = videoItem(server, item);
-    return VideoItem(
-      id: video.id,
-      title: title.isNotEmpty ? title : video.title,
-      uri: video.uri,
-      resumeKey: video.resumeKey,
-      duration: video.duration,
-      resolution: video.resolution,
-      sizeBytes: sizeBytes ?? video.sizeBytes,
-      allowSelfSigned: video.allowSelfSigned,
-      jellyfinServerId: video.jellyfinServerId,
-      jellyfinItemId: video.jellyfinItemId,
-      externalSubtitles: video.externalSubtitles,
-      chapters: video.chapters,
-    );
+    if (server == null) {
+      debugPrint('dlna-upgrade: no saved server for origin $origin');
+      return null;
+    }
+    // Metadata must never block playback: any failure falls back to the raw
+    // DLNA URL (same principle as the TMDB resolver).
+    try {
+      final item = await getItem(server, itemId);
+      if (item == null || !item.isPlayable) {
+        debugPrint('dlna-upgrade: item $itemId not playable/found');
+        return null;
+      }
+      final video = videoItem(server, item);
+      return VideoItem(
+        id: video.id,
+        title: title.isNotEmpty ? title : video.title,
+        uri: video.uri,
+        resumeKey: video.resumeKey,
+        duration: video.duration,
+        resolution: video.resolution,
+        sizeBytes: sizeBytes ?? video.sizeBytes,
+        allowSelfSigned: video.allowSelfSigned,
+        jellyfinServerId: video.jellyfinServerId,
+        jellyfinItemId: video.jellyfinItemId,
+        externalSubtitles: video.externalSubtitles,
+        chapters: video.chapters,
+      );
+    } catch (e) {
+      debugPrint('dlna-upgrade: fetch failed ($e) — falling back to DLNA URL');
+      return null;
+    }
   }
 
   /// Fetches the full metadata (overview, year, genres, rating, artwork URLs)

@@ -154,6 +154,17 @@ class _UpnpScreenState extends State<UpnpScreen> {
       sizeBytes: entry.size,
       // Server declared DLNA.ORG_CI=1 — this URL is a live transcode.
       isTranscoded: entry.transcoded,
+      // Server-advertised subtitle resources (Jellyfin DeliveryUrls) become
+      // selectable tracks even on the raw DLNA path.
+      externalSubtitles: entry.externalSubs
+          .asMap()
+          .entries
+          .map((e) => VideoExternalSub(
+                uri: e.value.url,
+                label: 'Subtitle ${e.key + 1} · ${e.value.extension.toUpperCase()}',
+                mimeType: e.value.mimeType,
+              ))
+          .toList(),
     );
     if (!mounted) return;
     Navigator.of(context).push(

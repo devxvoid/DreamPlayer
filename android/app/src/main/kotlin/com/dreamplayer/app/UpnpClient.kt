@@ -312,7 +312,11 @@ class UpnpClient(private val context: Context) {
             var currentResSize = 0L
             var currentResDuration: String? = null
             var currentProtocolInfo: String? = null
+            var currentResIsVideo = false
             var currentClass: String? = null
+            // Non-video res entries advertised alongside the video (Jellyfin
+            // lists one per external subtitle: text/srt, text/ass DeliveryUrls).
+            val currentExtraSubs = ArrayList<Map<String, String>>()
             var inContainer = false
             var inItem = false
 
@@ -339,6 +343,8 @@ class UpnpClient(private val context: Context) {
                             // on demand (e.g. Jellyfin downgrades items with
                             // external subtitles to a lossy H.264 TS stream).
                             "transcoded" to (currentProtocolInfo?.contains("DLNA.ORG_CI=1", ignoreCase = true) == true),
+                            // Server-advertised external subtitles → attachable tracks.
+                            "externalSubs" to currentExtraSubs.filter { it["url"] != url },
                         ),
                     )
                 }
@@ -362,6 +368,8 @@ class UpnpClient(private val context: Context) {
                                 currentIsContainer = false
                                 currentId = parser.getAttributeValue(null, "id") ?: parser.getAttributeValue("", "id")
                                 currentTitle = null; currentRes = null; currentClass = null; currentResSize = 0L
+                                currentResIsVideo = false
+                                currentExtraSubs.clear()
                             }
                             "title" -> {
                                 // dc:title
@@ -372,12 +380,30 @@ class UpnpClient(private val context: Context) {
                                 currentClass = parser.nextText().trim()
                             }
                             "res" -> {
-                                currentProtocolInfo = parser.getAttributeValue(null, "protocolInfo")
+                                val protoInfo = parser.getAttributeValue(null, "protocolInfo")
                                 val sz = parser.getAttributeValue(null, "size")?.toLongOrNull()
-                                if (sz != null) currentResSize = sz
-                                currentResDuration = parser.getAttributeValue(null, "duration")
+                                val dur = parser.getAttributeValue(null, "duration")
                                 val url = parser.nextText().trim()
-                                if (url.isNotEmpty()) currentRes = url
+                                if (url.isNotEmpty()) {
+                                    // Servers like Jellyfin advertise MULTIPLE res elements per
+                                    // item — one for the video plus one per external subtitle
+                                    // (DeliveryUrl …/Subtitles/N/0/Stream.srt). Taking the last
+                                    // one handed the player an .srt as the main media. Keep the
+                                    // VIDEO res; fall back to the first-seen res otherwise.
+                                    val isVideoRes = protoInfo?.lowercase()?.contains("video/") == true
+                                    if (currentRes == null || (isVideoRes && !currentResIsVideo)) {
+                                        currentRes = url
+                                        currentProtocolInfo = protoInfo
+                                        if (sz != null) currentResSize = sz
+                                        currentResDuration = dur
+                                        currentResIsVideo = isVideoRes
+                                    } else if (!isVideoRes) {
+                                        // A text/* subtitle advertised next to the video —
+                                        // collect it as an attachable track.
+                                        val mime = protoInfo?.split(":")?.getOrNull(2)?.takeIf { it.isNotEmpty() && it != "*" }
+                                        currentExtraSubs.add(mapOf("url" to url, "mime" to (mime ?: "application/x-subrip")))
+                                    }
+                                }
                             }
                         }
                     }
@@ -387,6 +413,7 @@ class UpnpClient(private val context: Context) {
                             flushCurrent()
                             inContainer = false; inItem = false
                             currentId = null; currentTitle = null; currentRes = null; currentClass = null
+                            currentExtraSubs.clear()
                         }
                     }
                 }

@@ -588,6 +588,20 @@ states) via `getDiagnostics`.
   (origin match) and rebuilds the `VideoItem` through `getItem`+`videoItem` —
   original-bytes direct play + sidecar subs as tracks + chapters + stable
   resume key. Non-Jellyfin DLNA URLs play raw as before.
+- **Multi-res DIDL trap (2026-08, found via live repro)**: Jellyfin's DIDL
+  advertises ONE `<res>` PER EXTERNAL SUBTITLE alongside the video res
+  (`text/srt` DeliveryUrls like `/Videos/{id}/{msId}/Subtitles/N/0/Stream.srt`).
+  Both native parsers took the LAST res — so any items with sidecars handed the
+  player an `.srt` AS THE MAIN MEDIA (`parsing_container_unsupported` /
+  "source has no audio stream"). Fix in `UpnpClient.kt` + `UpnpClient.swift`:
+  prefer the res whose `protocolInfo` contains `video/`, fall back to
+  first-seen; every non-video res is collected into `externalSubs`
+  (`UpnpExternalSub` in Dart) and attached as selectable subtitle tracks on
+  the raw DLNA path too. NOTE: Jellyfin's DLNA DIDL is INCONSISTENT per
+  session — the same item alternates between a `CI=1 stream.ts` transcode
+  offer (+ srt res entries) and a clean `stream.mkv?Static=true&VideoCodec=
+  hevc` direct offer; both paths are handled (transcode → red badge; direct →
+  HEVC chip, no badge). Verified on-device both ways.
 - **Transcode badge**: red "Transcoding" chip in the player top bar whenever
   playback is server-transcoded — Jellyfin HLS fallback engaged
   (`_transcodeActive`, which also now actually gets SET, fixing the leak where

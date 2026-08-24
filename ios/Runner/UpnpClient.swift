@@ -617,7 +617,15 @@ private final class DidlParser: NSObject, XMLParserDelegate {
     private var currentRes: String?
     private var currentResSize: Int64 = 0
     private var currentProtocolInfo: String?
+    private var currentResIsVideo = false
+    // Attributes of the <res> currently being parsed (committed only if this
+    // res wins the video-preference selection below).
+    private var pendingProtoInfo: String?
+    private var pendingResSize: Int64 = 0
     private var currentClass: String?
+    // Non-video res entries advertised alongside the video (Jellyfin lists
+    // one per external subtitle: text/srt, text/ass DeliveryUrls).
+    private var currentExtraSubs: [[String: String]] = []
     private var inContainer = false
     private var inItem = false
     private var text = ""
@@ -635,9 +643,11 @@ private final class DidlParser: NSObject, XMLParserDelegate {
             currentIsContainer = false
             currentId = attributeDict["id"]
             currentTitle = nil; currentRes = nil; currentClass = nil; currentResSize = 0
+            currentResIsVideo = false
+            currentExtraSubs = []
         } else if Self.matches(elementName, "res") {
-            currentProtocolInfo = attributeDict["protocolInfo"]
-            if let sz = attributeDict["size"], let v = Int64(sz) { currentResSize = v }
+            pendingProtoInfo = attributeDict["protocolInfo"]
+            if let sz = attributeDict["size"], let v = Int64(sz) { pendingResSize = v }
         }
         text = ""
     }
@@ -651,11 +661,31 @@ private final class DidlParser: NSObject, XMLParserDelegate {
         } else if Self.matches(elementName, "class") {
             currentClass = value
         } else if Self.matches(elementName, "res") {
-            if !value.isEmpty { currentRes = value }
+            if !value.isEmpty {
+                // Servers like Jellyfin advertise MULTIPLE res elements per
+                // item — video plus one per external subtitle (DeliveryUrl
+                // …/Subtitles/N/0/Stream.srt). Keep the VIDEO res; fall back
+                // to the first-seen res otherwise.
+                let isVideoRes = pendingProtoInfo?.lowercased().contains("video/") == true
+                if currentRes == nil || (isVideoRes && !currentResIsVideo) {
+                    currentRes = value
+                    currentProtocolInfo = pendingProtoInfo
+                    currentResSize = pendingResSize
+                    currentResIsVideo = isVideoRes
+                } else if !isVideoRes {
+                    // A text/* subtitle advertised next to the video —
+                    // collect it as an attachable track.
+                    let parts = pendingProtoInfo?.split(separator: ":") ?? []
+                    var mime = parts.count > 2 ? String(parts[2]).lowercased() : ""
+                    if mime.isEmpty || mime == "*" { mime = "application/x-subrip" }
+                    currentExtraSubs.append(["url": value, "mime": mime])
+                }
+            }
         } else if Self.matches(elementName, "container") || Self.matches(elementName, "item") {
             flushEntry()
             inContainer = false; inItem = false
             currentId = nil; currentTitle = nil; currentRes = nil; currentClass = nil
+            currentExtraSubs = []
         }
         text = ""
     }
@@ -679,7 +709,11 @@ private final class DidlParser: NSObject, XMLParserDelegate {
             // DLNA.ORG_CI=1 → server-side transcode on demand (Jellyfin does
             // this for items with external subtitles → lossy H.264 TS).
             let transcoded = currentProtocolInfo?.range(of: "DLNA.ORG_CI=1", options: .caseInsensitive) != nil
-            entries.append(["name": name, "id": id, "isDirectory": false, "url": url, "size": currentResSize, "transcoded": transcoded])
+            entries.append([
+                "name": name, "id": id, "isDirectory": false, "url": url,
+                "size": currentResSize, "transcoded": transcoded,
+                "externalSubs": currentExtraSubs.filter { $0["url"] != url },
+            ])
         }
     }
 

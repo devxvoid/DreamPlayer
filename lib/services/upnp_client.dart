@@ -35,6 +35,7 @@ class UpnpEntry {
     this.size = 0,
     this.duration,
     this.transcoded = false,
+    this.externalSubs = const [],
   });
 
   final String name;
@@ -49,6 +50,10 @@ class UpnpEntry {
   /// subtitles: lossy HEVC→H.264 TS, unseekable, HDR stripped).
   final bool transcoded;
 
+  /// Subtitle resources the server advertised alongside the video
+  /// (Jellyfin: one `<res>` per external subtitle DeliveryUrl).
+  final List<UpnpExternalSub> externalSubs;
+
   factory UpnpEntry.fromMap(Map<dynamic, dynamic> m) => UpnpEntry(
         name: m['name'] as String? ?? '',
         id: m['id'] as String? ?? '',
@@ -57,9 +62,33 @@ class UpnpEntry {
         size: m['size'] is num ? (m['size'] as num).toInt() : 0,
         duration: m['duration'] as String?,
         transcoded: m['transcoded'] == true,
+        externalSubs: ((m['externalSubs'] as List?) ?? const [])
+            .whereType<Map<dynamic, dynamic>>()
+            .map(UpnpExternalSub.fromMap)
+            .toList(),
       );
 
   bool get isVideo => !isDirectory && url != null && url!.isNotEmpty;
+}
+
+class UpnpExternalSub {
+  const UpnpExternalSub({required this.url, required this.mimeType});
+
+  final String url;
+  final String mimeType;
+
+  factory UpnpExternalSub.fromMap(Map<dynamic, dynamic> m) =>
+      UpnpExternalSub(
+        url: m['url'] as String? ?? '',
+        mimeType: m['mime'] as String? ?? 'application/x-subrip',
+      );
+
+  /// File extension from the MIME type (srt / ass / vtt …), for labels.
+  String get extension => switch (mimeType) {
+        'text/x-ssa' || 'text/ass' => 'ass',
+        'text/vtt' => 'vtt',
+        _ => 'srt',
+      };
 }
 
 class UpnpClient {

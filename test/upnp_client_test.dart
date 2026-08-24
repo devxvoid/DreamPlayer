@@ -26,6 +26,29 @@ void main() {
       });
       expect(e.transcoded, isFalse);
     });
+
+    test('parses advertised external subtitle resources', () {
+      final e = UpnpEntry.fromMap({
+        'name': 'House.S02E04.mkv',
+        'id': 'abc',
+        'isDirectory': false,
+        'url': 'http://host/stream.mkv',
+        'externalSubs': [
+          {
+            'url': 'http://host/Subtitles/1/0/Stream.srt',
+            'mime': 'text/srt',
+          },
+          {
+            'url': 'http://host/Subtitles/2/0/Stream.ass',
+            'mime': 'text/ass',
+          },
+        ],
+      });
+      expect(e.externalSubs.length, 2);
+      expect(e.externalSubs[0].extension, 'srt');
+      expect(e.externalSubs[1].extension, 'ass');
+      expect(e.externalSubs[1].mimeType, 'text/ass');
+    });
   });
 
   group('VideoItem.isTranscoded', () {
