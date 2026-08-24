@@ -12,6 +12,7 @@ import '../services/library_folders.dart';
 import '../services/tmdb_client.dart';
 import '../services/webdav_client.dart';
 import '../widgets/folder_card.dart';
+import 'ftp_screen.dart';
 import '../widgets/tv_overscan.dart';
 import '../widgets/video_card.dart';
 import '../utils/tv_helper.dart';
@@ -628,6 +629,12 @@ class _HomeScreenState extends State<HomeScreen>
               onTap: () => Navigator.of(context).pop('webdav'),
             ),
             ListTile(
+              leading: const Icon(Icons.folder_outlined),
+              title: const Text('FTP / SFTP'),
+              subtitle: const Text('FTP or SFTP file server'),
+              onTap: () => Navigator.of(context).pop('ftp'),
+            ),
+            ListTile(
               leading: const Icon(Icons.live_tv_outlined),
               title: const Text('Jellyfin'),
               subtitle: const Text('Jellyfin / Emby media server'),
@@ -681,6 +688,10 @@ class _HomeScreenState extends State<HomeScreen>
       case 'webdav':
         await Navigator.of(context).push(
           MaterialPageRoute<void>(builder: (_) => const WebDavScreen()),
+        );
+      case 'ftp':
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => const FtpScreen()),
         );
       case 'jellyfin':
         await Navigator.of(context).push(

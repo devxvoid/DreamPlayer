@@ -7,7 +7,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/auto_play_store.dart';
 import '../services/cache_cleaner.dart';
 import '../services/decoder_mode.dart';
+import '../services/exo_player.dart';
 import '../services/support_links.dart';
+import '../services/trakt_client.dart';
+import '../services/tmdb_client.dart';
+import '../services/watched_store.dart';
 import '../utils/tv_helper.dart';
 import '../widgets/tv_overscan.dart';
 import '../widgets/tv_tile.dart';
@@ -28,6 +32,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _swipeGestures = true;
   bool _autoPlayNext = false;
   DecoderMode _decoderMode = DecoderMode.auto;
+  double _audioBoost = 1.0;
+  bool _nightMode = false;
+  bool _traktConnected = false;
+  DateTime? _traktLastSync;
 
   @override
   void initState() {
@@ -37,6 +45,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _loadSwipeGestures();
     _loadAutoPlayNext();
     _loadDecoderMode();
+    _loadAudioFilters();
+    _loadTrakt();
+  }
+
+  Future<void> _loadTrakt() async {
+    final client = TraktClient();
+    if (!client.isConfigured) return;
+    try {
+      final connected = await client.isAuthenticated();
+      final lastSync = await client.lastSyncAt();
+      if (mounted) {
+        setState(() {
+          _traktConnected = connected;
+          _traktLastSync = lastSync;
+        });
+      }
+    } catch (_) {}
   }
 
   Future<void> _loadPassthrough() async {
@@ -62,6 +87,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       final mode = await DecoderModeStore.load();
       if (mounted) setState(() => _decoderMode = mode);
+    } catch (_) {}
+  }
+
+  Future<void> _loadAudioFilters() async {
+    try {
+      final boost = await PlaybackBoostStore.load();
+      final night = await NightModeStore.load();
+      if (mounted) {
+        setState(() {
+          _audioBoost = boost;
+          _nightMode = night;
+        });
+      }
     } catch (_) {}
   }
 
@@ -242,6 +280,54 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   );
                 },
               ),
+              TvTile(
+                leading: const Icon(Icons.volume_up),
+                title: const Text('Volume Boost'),
+                subtitle: Text(_audioBoost > 1.01 ? '${_audioBoost.toStringAsFixed(1)}× (LoudnessEnhancer)' : 'Off — 1.0×'),
+                onTap: () async {
+                  double temp = _audioBoost;
+                  final picked = await showDialog<double>(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: const Text('Volume Boost'),
+                      content: StatefulBuilder(
+                        builder: (context, setD) => Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Slider(
+                              value: temp.clamp(1.0, 3.0),
+                              min: 1.0,
+                              max: 3.0,
+                              divisions: 20,
+                              label: '${temp.toStringAsFixed(1)}×',
+                              onChanged: (v) => setD(() => temp = double.parse(v.toStringAsFixed(1))),
+                            ),
+                            Text('${temp.toStringAsFixed(1)}×', style: Theme.of(context).textTheme.bodySmall),
+                          ],
+                        ),
+                      ),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+                        TextButton(onPressed: () => Navigator.pop(context, temp), child: const Text('Save')),
+                      ],
+                    ),
+                  );
+                  if (picked != null) {
+                    await PlaybackBoostStore.save(picked);
+                    if (mounted) setState(() => _audioBoost = picked);
+                  }
+                },
+              ),
+              SwitchListTile(
+                secondary: const Icon(Icons.nights_stay),
+                title: const Text('Night Mode'),
+                subtitle: const Text('Compress dynamic range for quiet listening'),
+                value: _nightMode,
+                onChanged: (value) async {
+                  await NightModeStore.save(value);
+                  if (mounted) setState(() => _nightMode = value);
+                },
+              ),
               if (defaultTargetPlatform == TargetPlatform.android)
                 TvTile(
                   leading: const Icon(Icons.memory),
@@ -290,6 +376,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       );
                     }
                   },
+                ),
+            ],
+            if (TraktClient().isConfigured) ...[
+              const Divider(),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Text(
+                  'Trakt',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    color: theme.colorScheme.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              if (_traktConnected) ...[
+                TvTile(
+                  leading: const Icon(Icons.sync),
+                  title: const Text('Sync now'),
+                  subtitle: Text(
+                    _traktLastSync == null
+                        ? 'Push watched + resume to Trakt'
+                        : 'Last synced ${_formatWhen(_traktLastSync!)}',
+                  ),
+                  onTap: _syncTrakt,
+                ),
+                TvTile(
+                  leading: const Icon(Icons.link_off),
+                  title: const Text('Disconnect Trakt'),
+                  subtitle: const Text('Sign out and stop syncing'),
+                  onTap: () async {
+                    await TraktClient().signOut();
+                    if (mounted) {
+                      setState(() {
+                        _traktConnected = false;
+                        _traktLastSync = null;
+                      });
+                    }
+                  },
+                ),
+              ] else
+                TvTile(
+                  leading: const Icon(Icons.link),
+                  title: const Text('Connect Trakt'),
+                  subtitle: const Text('Sync watched history with trakt.tv'),
+                  onTap: _connectTrakt,
                 ),
             ],
             const Divider(),
@@ -367,5 +498,167 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } on Exception {
       return '0.0.7';
     }
+  }
+
+  String _formatWhen(DateTime t) {
+    final now = DateTime.now();
+    final diff = now.difference(t);
+    if (diff.inMinutes < 1) return 'just now';
+    if (diff.inHours < 1) return '${diff.inMinutes}m ago';
+    if (diff.inDays < 1) return '${diff.inHours}h ago';
+    return '${diff.inDays}d ago';
+  }
+
+  Future<void> _connectTrakt() async {
+    final client = TraktClient();
+    try {
+      final code = await client.requestDeviceCode();
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => _TraktConnectDialog(client: client, code: code),
+      );
+      await _loadTrakt();
+    } on TraktException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.message)));
+      }
+    }
+  }
+
+  Future<void> _syncTrakt() async {
+    final client = TraktClient();
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final items = await _collectTraktItems();
+      await client.syncWatched(items);
+      if (mounted) {
+        setState(() => _traktLastSync = DateTime.now());
+        messenger.showSnackBar(
+          SnackBar(content: Text('Synced ${items.length} item(s) to Trakt')),
+        );
+      }
+    } on TraktException catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    }
+  }
+
+  /// Builds the list of watched items to push to Trakt from the local
+  /// [WatchedStore] marks, resolving each to a TMDB id via [TmdService].
+  Future<List<TraktWatchItem>> _collectTraktItems() async {
+    final keys = await WatchedStore.load();
+    final items = <TraktWatchItem>[];
+    for (final key in keys) {
+      final meta = TmdService.instance.metaFor(key);
+      if (meta == null) continue;
+      final movie = meta.movie;
+      if (movie.id == 0) continue;
+      final parsed = ParsedFileName.parse(key);
+      items.add(
+        TraktWatchItem(
+          tmdbId: movie.id,
+          isTv: movie.kind == TmdKind.tv,
+          season: parsed.isEpisode ? parsed.season : null,
+          episode: parsed.isEpisode ? parsed.episode : null,
+        ),
+      );
+    }
+    return items;
+  }
+}
+
+/// Device-flow dialog: shows the user code + activation URL and polls in the
+/// background until the user authorizes (or the code expires).
+class _TraktConnectDialog extends StatefulWidget {
+  const _TraktConnectDialog({required this.client, required this.code});
+
+  final TraktClient client;
+  final TraktDeviceCode code;
+
+  @override
+  State<_TraktConnectDialog> createState() => _TraktConnectDialogState();
+}
+
+class _TraktConnectDialogState extends State<_TraktConnectDialog> {
+  String _status = 'Waiting for authorization…';
+
+  @override
+  void initState() {
+    super.initState();
+    _poll();
+  }
+
+  Future<void> _poll() async {
+    try {
+      final ok = await widget.client.pollForToken(widget.code);
+      if (!mounted) return;
+      setState(() {
+        _status = ok ? 'Connected!' : 'Timed out — try again.';
+      });
+      if (ok) {
+        await Future<void>.delayed(const Duration(milliseconds: 800));
+        if (mounted) Navigator.of(context).pop();
+      }
+    } on TraktException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _status = e.message;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AlertDialog(
+      title: const Text('Connect Trakt'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Go to the address below and enter this code:'),
+          const SizedBox(height: 12),
+          Center(
+            child: Text(
+              widget.code.userCode,
+              style: theme.textTheme.headlineMedium?.copyWith(
+                letterSpacing: 4,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Center(
+            child: Text(
+              widget.code.verificationUrl,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.primary,
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              const SizedBox(width: 12),
+              Expanded(child: Text(_status)),
+            ],
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+      ],
+    );
   }
 }

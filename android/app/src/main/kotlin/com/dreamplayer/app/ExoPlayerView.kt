@@ -8,6 +8,7 @@ import android.media.MediaCodecList
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.graphics.Color
+import android.media.audiofx.LoudnessEnhancer
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
@@ -112,6 +113,45 @@ class ExoPlayerView(
     private val mediaCodecSelector: MediaCodecSelector =
         PlayerCodecs.mediaCodecSelector(activity)
 
+    // ---- Volume Boost + Night Mode (LoudnessEnhancer on AudioTrack session) ----
+    private var loudnessEnhancer: LoudnessEnhancer? = null
+    private var audioBoost: Float = run {
+        val p = activity.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+        val raw = p.all["flutter.dreamplayer.audioBoost"]
+        when (raw) {
+            is Float -> raw
+            is Double -> raw.toFloat()
+            is Number -> raw.toFloat()
+            is String -> raw.toFloatOrNull() ?: 1.0f
+            else -> 1.0f
+        }.coerceIn(1.0f, 3.0f)
+    }
+    private var nightModeEnabled: Boolean = run {
+        val p = activity.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+        p.getBoolean("flutter.dreamplayer.nightMode", false)
+    }
+
+    private fun applyAudioEffects() {
+        try { loudnessEnhancer?.release() } catch (_: Exception) {}
+        loudnessEnhancer = null
+        if (audioBoost <= 1.0f && !nightModeEnabled) return
+        val sessionId = player.audioSessionId
+        if (sessionId == 0 || sessionId == C.AUDIO_SESSION_ID_UNSET) return
+        try {
+            val enhancer = LoudnessEnhancer(sessionId)
+            val gainMb = when {
+                nightModeEnabled && audioBoost <= 1.0f -> 400
+                nightModeEnabled -> (((audioBoost - 1f) * 750).toInt() + 300).coerceIn(0, 1500)
+                else -> (((audioBoost - 1f) * 750).toInt()).coerceIn(0, 1500)
+            }
+            enhancer.setTargetGain(gainMb)
+            enhancer.enabled = true
+            loudnessEnhancer = enhancer
+        } catch (e: Exception) {
+            Log.w("ExoPlayerView", "LoudnessEnhancer failed", e)
+        }
+    }
+
     /// Base source for non-file/content schemes. `DefaultDataSource` handles
     /// file/content/asset itself and delegates everything else (http, https,
     /// rtsp, ...) here — e.g. file managers that stream SMB files to players
@@ -169,7 +209,8 @@ class ExoPlayerView(
     }
 
     /// A [DataSource] that inspects the URI scheme on [open] and delegates to
-    /// [SmbDataSource] for `smb://` or to [local] for everything else.
+    /// [SmbDataSource] for `smb://`, [FtpDataSource] for `ftp://`/`sftp://`,
+    /// or to [local] for everything else.
     private class MultiplexDataSource(
         private val local: DefaultDataSource.Factory,
         private val context: Context,
@@ -177,10 +218,10 @@ class ExoPlayerView(
         private var delegate: DataSource? = null
 
         override fun open(dataSpec: DataSpec): Long {
-            delegate = if (dataSpec.uri.scheme == "smb") {
-                SmbDataSource(context)
-            } else {
-                local.createDataSource()
+            delegate = when (dataSpec.uri.scheme?.lowercase()) {
+                "smb" -> SmbDataSource(context)
+                "ftp", "sftp" -> FtpDataSource(context)
+                else -> local.createDataSource()
             }
             return delegate!!.open(dataSpec)
         }
@@ -317,6 +358,10 @@ class ExoPlayerView(
                 errorMessage = error.message,
                 errorCause = error.cause?.message,
             )
+        }
+
+        override fun onAudioSessionIdChanged(audioSessionId: Int) {
+            handler.post { applyAudioEffects(); emit() }
         }
     }
 
@@ -653,10 +698,13 @@ class ExoPlayerView(
         }.apply { isDaemon = true }.start()
     }
 
-    /// Parses MKV chapters off the main thread and re-emits so the Dart side
-    /// gains the chapters list once available. Local files via
-    /// [MkvChapters.parse]; SMB via [MkvChapters.parseSmb]; WebDAV/generic
-    /// HTTP MKVs via [MkvChapters.parseHttp] (Range: bytes=0-8M).
+    /// Parses chapters off the main thread and re-emits so the Dart side
+    /// gains the chapters list once available. MKV via [MkvChapters], MP4
+    /// (`moov/udta/chpl` Nero) via [Mp4Chapters]. Local files via
+    /// `parse(path)`, SMB via `parseSmb`, WebDAV/generic HTTP via
+    /// `parseHttp` (Range: bytes=0-8M). Best-effort: tries the format matching
+    /// the file extension first, then falls back to the other container so
+    /// extension-less or mislabelled files still surface chapters.
     private fun probeChapters(
         path: String?,
         uri: String?,
@@ -666,18 +714,80 @@ class ExoPlayerView(
         val isLocal = !path.isNullOrEmpty()
         val isSmb = !uri.isNullOrEmpty() && uri!!.startsWith("smb://", ignoreCase = true)
         val base = uri?.substringBefore('?')?.lowercase() ?: ""
-        val isHttpMkv = !isLocal && !isSmb && uri != null &&
+        val isHttp = !isLocal && !isSmb && uri != null &&
             (uri.startsWith("http://", ignoreCase = true) ||
-                uri.startsWith("https://", ignoreCase = true)) &&
-            (base.endsWith(".mkv") || base.endsWith(".mka") ||
-                base.endsWith(".mk3d") || base.endsWith(".webm"))
-        if (!isLocal && !isSmb && !isHttpMkv) return
+                uri.startsWith("https://", ignoreCase = true))
+        val isHttpMkv = isHttp && (base.endsWith(".mkv") || base.endsWith(".mka") ||
+            base.endsWith(".mk3d") || base.endsWith(".webm"))
+        val isHttpMp4 = isHttp && (base.endsWith(".mp4") || base.endsWith(".mov") ||
+            base.endsWith(".m4v") || base.endsWith(".m4a") || base.endsWith(".m4b") ||
+            base.endsWith(".3gp"))
+        val pathExt = path?.substringAfterLast('.', "")?.lowercase() ?: ""
+        val isLocalMkv = isLocal && (pathExt == "mkv" || pathExt == "mka" || pathExt == "mk3d" || pathExt == "webm")
+        val isLocalMp4 = isLocal && (pathExt == "mp4" || pathExt == "mov" || pathExt == "m4v" ||
+            pathExt == "m4a" || pathExt == "m4b" || pathExt == "3gp")
+        val smbExt = uri?.substringBefore('?')?.substringAfterLast('.', "")?.lowercase() ?: ""
+        val isSmbMkv = isSmb && (smbExt == "mkv" || smbExt == "mka" || smbExt == "mk3d" || smbExt == "webm")
+        val isSmbMp4 = isSmb && (smbExt == "mp4" || smbExt == "mov" || smbExt == "m4v" ||
+            smbExt == "m4a" || smbExt == "m4b" || smbExt == "3gp")
+        if (!isLocal && !isSmb && !isHttpMkv && !isHttpMp4) {
+            // Unknown remote scheme (e.g. content://) — still probe local-like files
+            // when a path is available, otherwise nothing to read.
+            if (!isLocalMkv && !isLocalMp4 && isLocal) {
+                // Fall through: extension-less local file — try both.
+            } else if (!isLocal) return
+        }
         Thread {
             try {
-                val parsed = when {
-                    isLocal -> MkvChapters.parse(path!!)
-                    isSmb -> MkvChapters.parseSmb(uri!!, activity)
-                    else -> MkvChapters.parseHttp(uri!!, headers, allowSelfSigned)
+                val parsed: List<MkvChapters.Chapter> = when {
+                    isLocalMp4 || isSmbMp4 || isHttpMp4 -> {
+                        val mp4: List<Mp4Chapters.Chapter> = when {
+                            isLocal -> Mp4Chapters.parse(path!!)
+                            isSmb -> Mp4Chapters.parseSmb(uri!!, activity)
+                            else -> Mp4Chapters.parseHttp(uri!!, headers, allowSelfSigned)
+                        }
+                        if (mp4.isNotEmpty()) mp4.map { MkvChapters.Chapter(it.title, it.startMs, it.endMs) }
+                        else {
+                            // Fallback to MKV parser for mislabelled files.
+                            when {
+                                isLocal -> MkvChapters.parse(path!!)
+                                isSmb -> MkvChapters.parseSmb(uri!!, activity)
+                                else -> MkvChapters.parseHttp(uri!!, headers, allowSelfSigned)
+                            }
+                        }
+                    }
+                    isLocalMkv || isSmbMkv || isHttpMkv -> {
+                        val mkv = when {
+                            isLocal -> MkvChapters.parse(path!!)
+                            isSmb -> MkvChapters.parseSmb(uri!!, activity)
+                            else -> MkvChapters.parseHttp(uri!!, headers, allowSelfSigned)
+                        }
+                        if (mkv.isNotEmpty()) mkv
+                        else {
+                            val mp4: List<Mp4Chapters.Chapter> = when {
+                                isLocal -> Mp4Chapters.parse(path!!)
+                                isSmb -> Mp4Chapters.parseSmb(uri!!, activity)
+                                else -> Mp4Chapters.parseHttp(uri!!, headers, allowSelfSigned)
+                            }
+                            mp4.map { MkvChapters.Chapter(it.title, it.startMs, it.endMs) }
+                        }
+                    }
+                    isLocal -> {
+                        // Extension-less or unknown local file — try MKV then MP4.
+                        val mkv = MkvChapters.parse(path!!)
+                        if (mkv.isNotEmpty()) mkv
+                        else Mp4Chapters.parse(path).map { MkvChapters.Chapter(it.title, it.startMs, it.endMs) }
+                    }
+                    isSmb -> {
+                        val mkv = MkvChapters.parseSmb(uri!!, activity)
+                        if (mkv.isNotEmpty()) mkv
+                        else Mp4Chapters.parseSmb(uri, activity).map { MkvChapters.Chapter(it.title, it.startMs, it.endMs) }
+                    }
+                    else -> {
+                        val mkv = MkvChapters.parseHttp(uri!!, headers, allowSelfSigned)
+                        if (mkv.isNotEmpty()) mkv
+                        else Mp4Chapters.parseHttp(uri, headers, allowSelfSigned).map { MkvChapters.Chapter(it.title, it.startMs, it.endMs) }
+                    }
                 }
                 if (parsed.isNotEmpty()) {
                     chapters = parsed
@@ -727,6 +837,9 @@ class ExoPlayerView(
                     hdr10Content = false
                     chapters = emptyList()
                     currentVideoDecoderName = null
+                    // Reset any pinch-zoom from a previous session.
+                    playerView.zoomScale = 1f
+                    playerView.applyForced()
                     val mediaItem = MediaItem.Builder()
                         .apply {
                             when {
@@ -960,6 +1073,32 @@ class ExoPlayerView(
                     val maxVol = am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
                     val target = Math.round(volume.coerceIn(0f, 1f) * maxVol).toInt()
                     am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, target, 0)
+                    result.success(null)
+                }
+                "setAudioBoost" -> {
+                    val boost = call.argument<Number>("boost")?.toFloat() ?: 1.0f
+                    audioBoost = boost.coerceIn(1.0f, 3.0f)
+                    activity.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+                        .edit().putFloat("flutter.dreamplayer.audioBoost", audioBoost).apply()
+                    applyAudioEffects()
+                    emit()
+                    result.success(null)
+                }
+                "setNightMode" -> {
+                    val enabled = call.argument<Boolean>("enabled") ?: false
+                    nightModeEnabled = enabled
+                    activity.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+                        .edit().putBoolean("flutter.dreamplayer.nightMode", enabled).apply()
+                    applyAudioEffects()
+                    emit()
+                    result.success(null)
+                }
+                "setZoom" -> {
+                    val scale = (call.argument<Number>("scale")?.toDouble() ?: 1.0)
+                        .toFloat()
+                        .coerceIn(1.0f, 3.0f)
+                    playerView.zoomScale = scale
+                    playerView.applyForced()
                     result.success(null)
                 }
                 "dispose" -> {
@@ -1325,6 +1464,8 @@ class ExoPlayerView(
         map["errorMessage"] = errorMessage
         map["errorCause"] = errorCause
         map["audioPassthrough"] = passthroughEnabled
+        map["audioBoost"] = audioBoost
+        map["nightMode"] = nightModeEnabled
         if (chapters.isNotEmpty()) {
             map["chapters"] = chapters.map {
                 mapOf(
@@ -1465,6 +1606,8 @@ class ExoPlayerView(
     override fun dispose() {
         restoreRefreshRate()
         stopPositionTicker()
+        try { loudnessEnhancer?.release() } catch (_: Exception) {}
+        loudnessEnhancer = null
         player.removeListener(listener)
         methodChannel.setMethodCallHandler(null)
         eventChannel.setStreamHandler(null)
@@ -1489,6 +1632,10 @@ private class ForcedAspectPlayerView(context: Context) : PlayerView(context) {
     /// typically pairs it with `RESIZE_MODE_ZOOM` so overflow is cropped).
     var forcedAspect: Float? = null
 
+    /// Pinch-to-zoom crop scale (1.0 = fit, up to 3.0). Applied as a scale
+    /// transform on the content frame so the video zooms around its center.
+    var zoomScale: Float = 1f
+
     private var contentFrame: AspectRatioFrameLayout? = null
     private var contentAspect: Float = 1f
 
@@ -1508,5 +1655,7 @@ private class ForcedAspectPlayerView(context: Context) : PlayerView(context) {
     fun applyForced() {
         val frame = contentFrame ?: return
         frame.setAspectRatio(forcedAspect ?: contentAspect)
+        frame.scaleX = zoomScale
+        frame.scaleY = zoomScale
     }
 }

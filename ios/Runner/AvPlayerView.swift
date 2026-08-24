@@ -255,6 +255,29 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     private var isHdr10PlusContent = false
     private var isHdr10Content = false
 
+    /// Volume Boost (1.0 – 3.0) and Night Mode (DRC) — persisted in UserDefaults
+    /// under FlutterSharedPreferences keys so Dart and native stay in sync.
+    private var audioBoost: Float = {
+        let obj = UserDefaults.standard.object(forKey: "flutter.dreamplayer.audioBoost")
+        let v: Double
+        if let d = obj as? Double { v = d }
+        else if let f = obj as? Float { v = Double(f) }
+        else if let n = obj as? NSNumber { v = n.doubleValue }
+        else { v = 1.0 }
+        return Float(max(1.0, min(v, 3.0)))
+    }()
+    private var nightModeEnabled: Bool =
+        UserDefaults.standard.bool(forKey: "flutter.dreamplayer.nightMode")
+
+    private func applyAudioBoost() {
+        // AVPlayer volume is capped at 1.0; boost >1 is clamped and night mode
+        // is a flag only for UI / future DRC tap. Store and emit so chips update.
+        let effective: Float = min(audioBoost, 1.0)
+        if !isMuted { engine?.volume = effective }
+        savedVolume = effective
+        emit()
+    }
+
     
 
     init(messenger: FlutterBinaryMessenger, viewId: Int64, frame: CGRect) {
@@ -389,6 +412,22 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                 case "setSystemVolume":
                     let volume = min(max(((args?["volume"] as? NSNumber)?.floatValue ?? 1), 0), 1)
                     self.setSystemVolume(volume)
+                    result(nil)
+                case "setAudioBoost":
+                    let boost = Float((args?["boost"] as? NSNumber)?.doubleValue ?? 1.0)
+                    self.audioBoost = min(max(boost, 1), 3)
+                    UserDefaults.standard.set(Double(self.audioBoost), forKey: "flutter.dreamplayer.audioBoost")
+                    self.applyAudioBoost()
+                    result(nil)
+                case "setNightMode":
+                    let enabled = (args?["enabled"] as? Bool) ?? false
+                    self.nightModeEnabled = enabled
+                    UserDefaults.standard.set(enabled, forKey: "flutter.dreamplayer.nightMode")
+                    self.applyAudioBoost()
+                    result(nil)
+                case "setZoom":
+                    let scale = CGFloat((args?["scale"] as? NSNumber)?.doubleValue ?? 1.0)
+                    self.setZoom(min(max(scale, 1.0), 3.0))
                     result(nil)
                 case "dispose":
                     self.teardownAll()
@@ -622,11 +661,15 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                 self.pendingAutoSubtitleIndex = nil
                 // Fresh AVPlayer instance after load — re-apply the saved rate.
                 self.applySpeed(self.pendingSpeed)
+                // Reset any pinch-zoom from a previous session.
+                self.setZoom(1.0)
                 self.emit()
-                // Probe MKV chapters for local / Files-app SMB files. The
-                // provider mounts SMB at a local path, so a FileHandle read
-                // suffices (HTTP/WebDAV MKVs don't need this — they have no
-                // browsable container on iOS either way).
+                // Probe chapters for local / Files-app SMB files. The provider
+                // mounts SMB at a local path, so a FileHandle read suffices
+                // (HTTP/WebDAV MKVs don't need this — they have no browsable
+                // container on iOS either way). MKV via `MkvChapters`; MP4/MOV
+                // (`moov/udta/chpl` Nero) via AVFoundation first, then raw box
+                // scan (`Mp4Chapters`) as fallback.
                 if let fileURL = localURL, fileURL.isFileURL {
                     let ext = fileURL.pathExtension.lowercased()
                     if ["mkv", "mka", "mks", "webm", "mk3d"].contains(ext) {
@@ -638,6 +681,75 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                                 guard let self else { return }
                                 self.chapters = maps
                                 self.emit()
+                            }
+                        }
+                    }
+                    if ["mp4", "mov", "m4v", "m4a", "m4b", "3gp"].contains(ext) {
+                        let path = fileURL.path
+                        let urlForAsset = fileURL
+                        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                            Task {
+                                var maps: [[String: Any]] = []
+                                // Try AVFoundation chapterMetadataGroups first
+                                // (covers both Nero chpl and QuickTime chap).
+                                do {
+                                    let asset = AVURLAsset(url: urlForAsset)
+                                    let groups: [AVTimedMetadataGroup]
+                                    if #available(iOS 16.0, *) {
+                                        groups = try await asset.load(.chapterMetadataGroups)
+                                    } else {
+                                        // Deployment is 16.0, but keep fallback
+                                        groups = asset.chapterMetadataGroups
+                                    }
+                                    if !groups.isEmpty {
+                                        maps = groups.enumerated().compactMap { idx, group in
+                                            let startSec = CMTimeGetSeconds(group.timeRange.start)
+                                            let endSec: Double
+                                            if group.timeRange.duration.isValid && !group.timeRange.duration.isIndefinite {
+                                                endSec = CMTimeGetSeconds(group.timeRange.end)
+                                            } else if idx + 1 < groups.count {
+                                                endSec = CMTimeGetSeconds(groups[idx + 1].timeRange.start)
+                                            } else {
+                                                endSec = Double.nan
+                                            }
+                                            // Skip invalid start
+                                            if startSec.isNaN || startSec.isInfinite { return nil }
+                                            let startMs = Int64((startSec * 1000).rounded())
+                                            var title: String? = nil
+                                            for item in group.items {
+                                                if item.commonKey == .commonKeyTitle, let v = item.stringValue, !v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                                    title = v; break
+                                                }
+                                            }
+                                            if title == nil {
+                                                for item in group.items {
+                                                    if let v = item.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines), !v.isEmpty {
+                                                        title = v; break
+                                                    }
+                                                }
+                                            }
+                                            let raw = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                                            let finalTitle = raw.isEmpty ? "Chapter \(idx + 1)" : raw
+                                            var m: [String: Any] = ["title": finalTitle, "startMs": startMs]
+                                            if !endSec.isNaN, !endSec.isInfinite {
+                                                let endMs = Int64((endSec * 1000).rounded())
+                                                if endMs > startMs { m["endMs"] = endMs }
+                                            }
+                                            return m
+                                        }
+                                    }
+                                } catch {
+                                    // Fall through to raw box scan
+                                }
+                                if maps.isEmpty {
+                                    maps = Mp4Chapters.parseMaps(path: path)
+                                }
+                                if maps.isEmpty { return }
+                                DispatchQueue.main.async { [weak self] in
+                                    guard let self else { return }
+                                    self.chapters = maps
+                                    self.emit()
+                                }
                             }
                         }
                     }
@@ -746,6 +858,14 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     private func findPlayerLayer() -> AVPlayerLayer? {
         if let layer = container.layer as? AVPlayerLayer { return layer }
         return container.layer.sublayers?.lazy.compactMap { $0 as? AVPlayerLayer }.first
+    }
+
+    /// Pinch-to-zoom crop: scales the video layer around its center. The
+    /// `AVPlayerLayer` lives inside AetherEngine's `AetherPlayerView`; we scale
+    /// the container's layer so the video zooms without disturbing the engine's
+    /// own layout. Transient per session (reset to 1.0 on next open).
+    private func setZoom(_ scale: CGFloat) {
+        container.layer.setAffineTransform(CGAffineTransform(scaleX: scale, y: scale))
     }
 
     // MARK: - Playback speed
@@ -890,6 +1010,8 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             "subtitleTracks": subtitleTracks,
             "selectedSubtitleTrack": selectedSubtitle,
             "chapters": chapters,
+            "audioBoost": audioBoost,
+            "nightMode": nightModeEnabled,
             "error": lastError ?? "",
         ]
         return map

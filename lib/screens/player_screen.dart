@@ -19,6 +19,7 @@ import '../services/resume_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/tmdb_client.dart';
+import '../services/trakt_client.dart';
 import '../services/watched_store.dart';
 import '../services/subtitle_style.dart';
 import '../utils/codec_info.dart';
@@ -29,6 +30,8 @@ import '../widgets/format_chip.dart';
 const bool _inTests = bool.fromEnvironment('FLUTTER_TEST');
 
 enum _SwipeType { brightness, volume }
+
+enum _PanAxis { horizontal, vertical }
 
 class PlayerScreen extends StatefulWidget {
   const PlayerScreen({super.key, required this.video});
@@ -129,6 +132,10 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// Persisted playback speed, re-applied on every (re)open.
   double _playbackSpeed = 1.0;
 
+  /// Volume boost (1.0–3.0) and Night Mode — persisted and re-applied on open.
+  double _audioBoost = 1.0;
+  bool _nightMode = false;
+
   int _subtitleDelayMs = 0;
   bool _autoPlayNext = false;
   DecoderMode _decoderMode = DecoderMode.auto;
@@ -163,6 +170,16 @@ class _PlayerScreenState extends State<PlayerScreen>
   int _seekBaseMs = 0;
   double _seekDragPx = 0;
   int _seekTargetMs = 0;
+
+  /// Pinch-to-zoom crop scale (1.0 = fit, up to 3.0). Transient per session.
+  double _zoomScale = 1.0;
+
+  /// Base scale at the start of the current pinch gesture.
+  double _pinchBaseScale = 1.0;
+
+  /// Touch lock: when on, taps/swipes/pinch are ignored (accidental-touch
+  /// guard). Toggled from the bottom bar; auto-cleared on player close.
+  bool _touchLocked = false;
 
   /// Seconds covered by a full-screen-width horizontal drag.
   static const double _seekDragSpanSeconds = 90;
@@ -215,6 +232,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       try {
         _fitMode = await FitModeStore.load();
         _playbackSpeed = await PlaybackSpeedStore.load();
+        _audioBoost = await PlaybackBoostStore.load();
+        _nightMode = await NightModeStore.load();
         _swipeEnabled = await areSwipeGesturesEnabled();
         _subtitleDelayMs = (await SubtitleStyle.load()).delayMs;
         _autoPlayNext = await isAutoPlayNextEnabled();
@@ -226,6 +245,10 @@ class _PlayerScreenState extends State<PlayerScreen>
       // cue delay) so native rendering matches Settings from frame one.
       try {
         await exo.setSubtitleStyle(await SubtitleStyle.load());
+      } catch (_) {}
+      try {
+        await exo.setAudioBoost(_audioBoost);
+        await exo.setNightMode(_nightMode);
       } catch (_) {}
       if (mounted) setState(() {});
       await _openCurrent();
@@ -292,9 +315,11 @@ class _PlayerScreenState extends State<PlayerScreen>
         title: video.title,
         externalSubtitles: video.externalSubtitles,
       );
-      // Re-apply the user's persisted fit mode + speed to the new session.
+      // Re-apply the user's persisted fit mode + speed + audio filters.
       _exo?.setFitMode(_fitMode);
       _exo?.setSpeed(_playbackSpeed);
+      _exo?.setAudioBoost(_audioBoost);
+      _exo?.setNightMode(_nightMode);
     } catch (e) {
       if (mounted) {
         setState(() => _error = 'Playback unavailable: $e');
@@ -346,6 +371,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       );
       _exo?.setFitMode(_fitMode);
       _exo?.setSpeed(_playbackSpeed);
+      _exo?.setAudioBoost(_audioBoost);
+      _exo?.setNightMode(_nightMode);
       _ioRetries = 0;
     } catch (_) {
       // Reopen itself failed — the error surface will show it.
@@ -358,6 +385,23 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (key.isEmpty) return;
     await ResumeStore.clear(key);
     await ContinueWatchingStore.remove(key);
+  }
+
+  /// Fire-and-forget: push a finished video to Trakt history if its TMDB
+  /// metadata is resolved. Best-effort — never blocks or surfaces errors.
+  void _pushTraktHistory(String key) {
+    final client = TraktClient();
+    if (!client.isConfigured) return;
+    final meta = TmdService.instance.metaFor(key);
+    if (meta == null || meta.movie.id == 0) return;
+    final parsed = ParsedFileName.parse(_current.title);
+    final item = TraktWatchItem(
+      tmdbId: meta.movie.id,
+      isTv: meta.movie.kind == TmdKind.tv,
+      season: parsed.isEpisode ? parsed.season : null,
+      episode: parsed.isEpisode ? parsed.episode : null,
+    );
+    unawaited(client.addToHistoryOne(item).catchError((_) {}));
   }
 
   /// Reopens the current Jellyfin video through the server's transcoder
@@ -400,6 +444,8 @@ class _PlayerScreenState extends State<PlayerScreen>
         title: fallback.title,
       );
       _exo?.setFitMode(_fitMode);
+      _exo?.setAudioBoost(_audioBoost);
+      _exo?.setNightMode(_nightMode);
     } catch (_) {
       if (mounted) setState(() => _error = directError);
     }
@@ -540,6 +586,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       _markedWatched = true;
       final key = _resumeKey;
       if (!_inTests && key.isNotEmpty) WatchedStore.set(key, true);
+      if (!_inTests) _pushTraktHistory(key);
     }
     // Auto-play next episode (Settings → Player). Once per ended session.
     if (e.ended && !_autoPlayFired && !_inTests) {
@@ -828,12 +875,13 @@ class _PlayerScreenState extends State<PlayerScreen>
       _onScreenTap();
       return;
     }
+    if (_touchLocked) return;
     _singleTapTimer?.cancel();
     _singleTapTimer = Timer(const Duration(milliseconds: 260), _onScreenTap);
   }
 
   void _onDoubleTapDown(TapDownDetails details) {
-    if (_isTv || !_backendReady) return;
+    if (_isTv || !_backendReady || _touchLocked) return;
     _singleTapTimer?.cancel();
     final w = MediaQuery.of(context).size.width;
     final forward = details.globalPosition.dx >= w / 2;
@@ -845,13 +893,82 @@ class _PlayerScreenState extends State<PlayerScreen>
     setState(() => _dtSeekSide = forward ? 1 : -1);
   }
 
+  // ---- Unified gesture handling (single-finger pan + two-finger pinch) ----
+  //
+  // A single GestureDetector can't own vertical + horizontal + scale
+  // recognizers at once (the scale recognizer would be starved), so all
+  // pointer movement flows through the scale recognizer and is routed by
+  // pointer count: one finger = pan (vertical → brightness/volume, horizontal
+  // → seek), two fingers = pinch-to-zoom.
+
+  bool _panActive = false;
+  _PanAxis? _panAxis;
+
+  void _onScaleStart(ScaleStartDetails details) {
+    if (_isTv || _touchLocked) return;
+    if (details.pointerCount >= 2) {
+      _pinchBaseScale = _zoomScale;
+      _hideTimer?.cancel();
+      return;
+    }
+    _panActive = true;
+    _panAxis = null;
+    _hideTimer?.cancel();
+  }
+
+  void _onScaleUpdate(ScaleUpdateDetails details) {
+    if (_isTv || _touchLocked) return;
+    if (details.pointerCount >= 2) {
+      if (!_backendReady) return;
+      final next = (_pinchBaseScale * details.scale).clamp(1.0, 3.0);
+      if ((next - _zoomScale).abs() < 0.01) return;
+      setState(() => _zoomScale = next);
+      _exo?.setZoom(next);
+      return;
+    }
+    if (!_panActive) return;
+    final delta = details.focalPointDelta;
+    if (_panAxis == null) {
+      if (delta.dx.abs() < 4 && delta.dy.abs() < 4) return;
+      _panAxis = delta.dx.abs() > delta.dy.abs()
+          ? _PanAxis.horizontal
+          : _PanAxis.vertical;
+      if (_panAxis == _PanAxis.vertical) {
+        _startSwipe(details.focalPoint);
+      } else {
+        _startSeek();
+      }
+      return;
+    }
+    if (_panAxis == _PanAxis.vertical) {
+      _updateSwipe(delta.dy);
+    } else {
+      _updateSeek(delta.dx);
+    }
+  }
+
+  void _onScaleEnd(ScaleEndDetails details) {
+    if (_isTv || _touchLocked) return;
+    if (details.pointerCount >= 2) {
+      _restartHideTimer();
+      return;
+    }
+    if (_panAxis == _PanAxis.vertical) {
+      _endSwipe();
+    } else if (_panAxis == _PanAxis.horizontal) {
+      _endSeek();
+    }
+    _panActive = false;
+    _panAxis = null;
+    _restartHideTimer();
+  }
+
   // ---- Swipe gesture (brightness / volume) ----
 
-  void _onSwipeDragStart(DragStartDetails details) {
-    if (!_swipeEnabled || _isTv) return;
+  void _startSwipe(Offset focal) {
+    if (!_swipeEnabled) return;
     final w = MediaQuery.of(context).size.width;
-    final x = details.globalPosition.dx;
-    _swipeType = x < w / 2 ? _SwipeType.brightness : _SwipeType.volume;
+    _swipeType = focal.dx < w / 2 ? _SwipeType.brightness : _SwipeType.volume;
     _swipeGestureActive = true;
     _swipeBase = 0;
     _swipeDragDelta = 0;
@@ -895,17 +1012,28 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
-  void _onSwipeDragUpdate(DragUpdateDetails details) {
+  void _updateSwipe(double dy) {
     if (_swipeType == null || !_swipeGestureActive) return;
-    _swipeDragDelta +=
-        -details.primaryDelta! / (MediaQuery.of(context).size.height * 0.7);
+    _swipeDragDelta += -dy / (MediaQuery.of(context).size.height * 0.7);
     setState(_applySwipeValue);
+  }
+
+  void _endSwipe() {
+    if (_swipeType == null) return;
+    // active flag stops further updates/platform pushes.
+    _swipeGestureActive = false;
+    _swipeOverlayTimer?.cancel();
+    _swipeOverlayTimer = Timer(const Duration(milliseconds: 800), () {
+      if (mounted && !_swipeGestureActive) {
+        setState(() => _swipeType = null);
+      }
+    });
   }
 
   // MARK: Horizontal-swipe seek with frame preview
 
-  void _onSeekDragStart(DragStartDetails details) {
-    if (!_swipeEnabled || _isTv) return;
+  void _startSeek() {
+    if (!_swipeEnabled) return;
     final dur = _duration.inMilliseconds;
     if (dur <= 0) return;
     setState(() {
@@ -917,40 +1045,25 @@ class _PlayerScreenState extends State<PlayerScreen>
     _hideTimer?.cancel();
   }
 
-  void _onSeekDragUpdate(DragUpdateDetails details) {
+  void _updateSeek(double dx) {
     if (!_seekPreviewActive) return;
     final w = MediaQuery.of(context).size.width;
     final dur = _duration.inMilliseconds;
     if (dur <= 0 || w <= 0) return;
-    _seekDragPx += details.primaryDelta!;
+    _seekDragPx += dx;
     final seconds = (_seekDragPx / w) * _seekDragSpanSeconds;
     setState(() {
       _seekTargetMs = (_seekBaseMs + seconds * 1000).round().clamp(0, dur);
     });
   }
 
-  void _onSeekDragEnd(DragEndDetails details) {
+  void _endSeek() {
     if (!_seekPreviewActive) return;
     final targetMs = _seekTargetMs;
     setState(() => _seekPreviewActive = false);
     if ((targetMs - _position.inMilliseconds).abs() >= 500) {
       _exo?.seekTo(Duration(milliseconds: targetMs));
     }
-    _restartHideTimer();
-  }
-
-  void _onSwipeDragEnd(DragEndDetails details) {
-    if (_swipeType == null) return;
-    // Keep [_swipeType] so the fading pill keeps its icon; only the
-    // active flag stops further updates/platform pushes.
-    _swipeGestureActive = false;
-    _swipeOverlayTimer?.cancel();
-    _swipeOverlayTimer = Timer(const Duration(milliseconds: 800), () {
-      if (mounted && !_swipeGestureActive) {
-        setState(() => _swipeType = null);
-      }
-    });
-    _restartHideTimer();
   }
 
   @override
@@ -1656,6 +1769,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     bool expandChapters = false;
     bool expandSubtitleDelay = false;
     bool expandDecoder = false;
+    bool expandBoost = false;
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: const Color(0xFF1C1C1E),
@@ -1798,6 +1912,77 @@ class _PlayerScreenState extends State<PlayerScreen>
                       ),
                     const Divider(color: Colors.white12, height: 1),
                   ],
+                  // Volume Boost
+                  _tvListTile(
+                    leading: const Icon(Icons.volume_up, color: Colors.white70),
+                    title: const Text('Volume Boost', style: TextStyle(color: Colors.white)),
+                    subtitle: Text(_audioBoost > 1.01 ? '${_audioBoost.toStringAsFixed(1)}×' : 'Off', style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                    trailing: Icon(expandBoost ? Icons.expand_less : Icons.expand_more, color: Colors.white54),
+                    onTap: () => setSheet(() => expandBoost = !expandBoost),
+                  ),
+                  if (expandBoost)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                      child: Column(
+                        children: [
+                          Slider(
+                            value: _audioBoost.clamp(1.0, 3.0),
+                            min: 1.0,
+                            max: 3.0,
+                            divisions: 20,
+                            label: '${_audioBoost.toStringAsFixed(1)}×',
+                            onChanged: (v) {
+                              final b = double.parse(v.toStringAsFixed(1));
+                              setState(() => _audioBoost = b);
+                              setSheet(() {});
+                            },
+                            onChangeEnd: (v) async {
+                              final b = double.parse(v.toStringAsFixed(1));
+                              setState(() => _audioBoost = b);
+                              _exo?.setAudioBoost(b);
+                              await PlaybackBoostStore.save(b);
+                            },
+                          ),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              TextButton(onPressed: () async {
+                                setState(() => _audioBoost = 1.0);
+                                setSheet(() {});
+                                _exo?.setAudioBoost(1.0);
+                                await PlaybackBoostStore.save(1.0);
+                              }, child: const Text('Reset')),
+                              Text('${_audioBoost.toStringAsFixed(1)}×', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                              const SizedBox(width: 48),
+                            ],
+                          ),
+                          const Text('LoudnessEnhancer (0–1500 mB)', style: TextStyle(color: Colors.white38, fontSize: 11)),
+                        ],
+                      ),
+                    ),
+                  const Divider(color: Colors.white12, height: 1),
+                  _tvListTile(
+                    leading: const Icon(Icons.nights_stay, color: Colors.white70),
+                    title: const Text('Night Mode', style: TextStyle(color: Colors.white)),
+                    subtitle: Text(_nightMode ? 'On — compressed dynamic range' : 'Off', style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                    trailing: Switch(
+                      value: _nightMode,
+                      onChanged: (v) async {
+                        setState(() => _nightMode = v);
+                        setSheet(() {});
+                        _exo?.setNightMode(v);
+                        await NightModeStore.save(v);
+                      },
+                    ),
+                    onTap: () async {
+                      final v = !_nightMode;
+                      setState(() => _nightMode = v);
+                      setSheet(() {});
+                      _exo?.setNightMode(v);
+                      await NightModeStore.save(v);
+                    },
+                  ),
+                  const Divider(color: Colors.white12, height: 1),
                   _tvListTile(
                     leading: const Icon(Icons.skip_next, color: Colors.white70),
                     title: const Text('Auto-play next', style: TextStyle(color: Colors.white)),
@@ -1955,6 +2140,11 @@ class _PlayerScreenState extends State<PlayerScreen>
     _exo?.seekTo(target);
     _dragging = false;
     _dragValue = value;
+    _showControls();
+  }
+
+  void _toggleTouchLock() {
+    setState(() => _touchLocked = !_touchLocked);
     _showControls();
   }
 
@@ -2136,6 +2326,12 @@ class _PlayerScreenState extends State<PlayerScreen>
             child: FormatChip(label: 'Transcoding', color: _transcodeColor),
           )
         : null;
+    final boostChip = _audioBoost > 1.01
+        ? FormatChip(label: 'Boost ${_audioBoost.toStringAsFixed(1)}×', color: const Color(0xFFFFA726))
+        : null;
+    final nightChip = _nightMode
+        ? const FormatChip(label: 'Night', color: Color(0xFF7E57C2))
+        : null;
     final chips = [
       hdrChip,
       ?videoChip,
@@ -2143,6 +2339,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       ?resolutionChip,
       ?decoderChip,
       ?transcodeChip,
+      ?boostChip,
+      ?nightChip,
     ];
 
     // IMPORTANT: keep the widget-tree shape stable across casting state.
@@ -2319,12 +2517,9 @@ class _PlayerScreenState extends State<PlayerScreen>
                 onTapUp: _onTapUp,
                 onDoubleTapDown: _onDoubleTapDown,
                 onDoubleTap: () {},
-                onVerticalDragStart: _onSwipeDragStart,
-                onVerticalDragUpdate: _onSwipeDragUpdate,
-                onVerticalDragEnd: _onSwipeDragEnd,
-                onHorizontalDragStart: _onSeekDragStart,
-                onHorizontalDragUpdate: _onSeekDragUpdate,
-                onHorizontalDragEnd: _onSeekDragEnd,
+                onScaleStart: _onScaleStart,
+                onScaleUpdate: _onScaleUpdate,
+                onScaleEnd: _onScaleEnd,
                 child: const SizedBox.expand(),
               ),
             ),
@@ -2632,6 +2827,18 @@ class _PlayerScreenState extends State<PlayerScreen>
                                     color: Colors.white,
                                     onFocusChange: (_) => _showControls(),
                                   ),
+                                  if (!_isTv)
+                                    _TvControlButton(
+                                      onPressed: _toggleTouchLock,
+                                      icon: Icon(
+                                        _touchLocked
+                                            ? Icons.lock
+                                            : Icons.lock_open,
+                                      ),
+                                      color: _touchLocked
+                                          ? Colors.amber
+                                          : Colors.white,
+                                    ),
                                   if (!_isTv)
                                     _TvControlButton(
                                       onPressed: _toggleFullscreen,

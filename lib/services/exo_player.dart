@@ -86,6 +86,42 @@ class PlaybackSpeedStore {
   }
 }
 
+/// Persists the volume boost factor (1.0 = off, 3.0 = +1500 mB).
+class PlaybackBoostStore {
+  PlaybackBoostStore._();
+
+  static const String _prefsKey = 'dreamplayer.audioBoost';
+
+  static Future<double> load() async {
+    final prefs = await SharedPreferences.getInstance();
+    final v = prefs.getDouble(_prefsKey);
+    if (v == null) return 1.0;
+    return v.clamp(1.0, 3.0);
+  }
+
+  static Future<void> save(double boost) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_prefsKey, boost.clamp(1.0, 3.0));
+  }
+}
+
+/// Persists Night Mode (dynamic range compression).
+class NightModeStore {
+  NightModeStore._();
+
+  static const String _prefsKey = 'dreamplayer.nightMode';
+
+  static Future<bool> load() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_prefsKey) ?? false;
+  }
+
+  static Future<void> save(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_prefsKey, enabled);
+  }
+}
+
 /// A single audio track exposed by the native ExoPlayer, for the track picker.
 @immutable
 class ExoAudioTrack {
@@ -228,6 +264,8 @@ class ExoPlayerEvent {
     this.errorMessage,
     this.errorCause,
     this.audioPassthrough = false,
+    this.audioBoost = 1.0,
+    this.nightMode = false,
     this.chapters = const [],
     this.videoDecoderName,
     this.isHwDecoder,
@@ -286,6 +324,12 @@ class ExoPlayerEvent {
   /// HDMI output via AudioTrack passthrough mode).
   final bool audioPassthrough;
 
+  /// Volume boost factor (1.0–3.0) from the native LoudnessEnhancer.
+  final double audioBoost;
+
+  /// Night Mode flag (compressed dynamic range).
+  final bool nightMode;
+
   /// Container chapters (MKV only, local files). Empty when the file has
   /// none or the source is a network stream.
   final List<ExoChapter> chapters;
@@ -338,6 +382,8 @@ class ExoPlayerEvent {
       errorMessage: m['errorMessage'] as String?,
       errorCause: m['errorCause'] as String?,
       audioPassthrough: m['audioPassthrough'] == true,
+      audioBoost: m['audioBoost'] is num ? (m['audioBoost'] as num).toDouble().clamp(1.0, 3.0) : 1.0,
+      nightMode: m['nightMode'] == true,
       chapters: (m['chapters'] as List? ?? const [])
           .map((e) => ExoChapter.fromMap(e as Map<dynamic, dynamic>))
           .toList(),
@@ -406,6 +452,16 @@ abstract class PlaybackController {
 
   /// Returns the current system media volume normalised to 0.0–1.0.
   Future<double> getSystemVolume();
+
+  /// Volume boost factor (1.0 = unity, 3.0 = ~+1500 mB via LoudnessEnhancer).
+  Future<void> setAudioBoost(double boost);
+
+  /// Night Mode — dynamic range compression / loudness normalisation.
+  Future<void> setNightMode(bool enabled);
+
+  /// Pinch-to-zoom crop: scales the video surface around its center
+  /// (1.0 = fit, up to ~3.0 = zoomed in). Transient per session.
+  Future<void> setZoom(double scale);
 
   Future<ExoPlayerEvent?> getState();
 
@@ -570,6 +626,18 @@ class ExoPlayerController implements PlaybackController {
       return 1.0;
     }
   }
+
+  @override
+  Future<void> setAudioBoost(double boost) =>
+      _send('setAudioBoost', {'boost': boost.clamp(1.0, 3.0)});
+
+  @override
+  Future<void> setNightMode(bool enabled) =>
+      _send('setNightMode', {'enabled': enabled});
+
+  @override
+  Future<void> setZoom(double scale) =>
+      _send('setZoom', {'scale': scale.clamp(1.0, 3.0)});
 
   Future<void> disposeNative() => _send('dispose');
 

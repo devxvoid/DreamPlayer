@@ -367,6 +367,8 @@ Color _sourceColor(PlaybackSource source) {
       return const Color(0xFF9C27B0);
     case PlaybackSource.files:
       return const Color(0xFF00695C);
+    case PlaybackSource.ftp:
+      return const Color(0xFF2E7D32);
     case PlaybackSource.network:
       return const Color(0xFF455A64);
   }

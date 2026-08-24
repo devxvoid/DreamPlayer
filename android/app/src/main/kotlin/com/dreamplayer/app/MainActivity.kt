@@ -81,6 +81,9 @@ class MainActivity : FlutterActivity() {
         UpnpClient(this).configure(
             MethodChannel(flutterEngine.dartExecutor.binaryMessenger, UpnpClient.CHANNEL),
         )
+        FtpClient(this).configure(
+            MethodChannel(flutterEngine.dartExecutor.binaryMessenger, FtpClient.CHANNEL),
+        )
         intentChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "dreamplayer/intent",

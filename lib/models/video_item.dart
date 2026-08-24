@@ -65,6 +65,7 @@ class VideoExternalSub {
 /// identifiers so the UI can show where playback is served from.
 enum PlaybackSource {
   webdav('WebDAV'),
+  ftp('FTP'),
   cxSmb('CX SMB'),
   filesSmb('Files / SMB'),
   smb('SMB'),
@@ -168,6 +169,7 @@ class VideoItem {
   PlaybackSource? get playbackSource {
     final key = resumeKey;
     if (key != null) {
+      if (key.startsWith('ftp_')) return PlaybackSource.ftp;
       if (key.startsWith('webdav_')) return PlaybackSource.webdav;
       if (key.startsWith('cx:')) return PlaybackSource.cxSmb;
       if (key.startsWith('folderbookmark:')) return PlaybackSource.filesSmb;

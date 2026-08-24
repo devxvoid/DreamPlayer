@@ -73,4 +73,8 @@ dependencies {
     // slf4j-nop: jcifs-ng requires an SLF4J binding at runtime; the no-op
     // binding avoids pulling in a logging framework.
     implementation("org.slf4j:slf4j-nop:2.0.13")
+    // FTP/SFTP: Apache Commons Net (FTP) + JSch (SFTP/SSH). Mirrors the
+    // WebDAV/SMB pattern: browsing + streaming DataSource (FtpDataSource).
+    implementation("commons-net:commons-net:3.11.1")
+    implementation("com.jcraft:jsch:0.1.55")
 }
