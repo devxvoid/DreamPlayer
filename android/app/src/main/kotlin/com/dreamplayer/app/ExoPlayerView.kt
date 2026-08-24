@@ -33,6 +33,7 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.LoadControl
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.extractor.DefaultExtractorsFactory
@@ -238,6 +239,23 @@ class ExoPlayerView(
             // No language preference: Media3's empty preferredAudioLanguages
             // already selects the container's DEFAULT-flagged audio track
             // (first track as last resort) — exactly the file's own default.
+            p.addAnalyticsListener(object : AnalyticsListener {
+                override fun onVideoDecoderInitialized(
+                    eventTime: AnalyticsListener.EventTime,
+                    decoderName: String,
+                    initializedTimestampMs: Long,
+                    initializationDurationMs: Long,
+                ) {
+                    currentVideoDecoderName = decoderName
+                    handler.post { emit() }
+                }
+                override fun onVideoDecoderReleased(
+                    eventTime: AnalyticsListener.EventTime,
+                    decoderName: String,
+                ) {
+                    // Keep last name until next init so the badge doesn't flicker.
+                }
+            })
         }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -353,6 +371,11 @@ class ExoPlayerView(
     /// MKV chapters parsed from the local container on open (Media3 has no
     /// chapters API). Empty for network sources or files without chapters.
     @Volatile private var chapters: List<MkvChapters.Chapter> = emptyList()
+
+    /// Name of the video decoder currently in use (e.g. `c2.qti.hevc.decoder`
+    /// for HW, `c2.android.hevc.decoder` for SW). Updated via
+    /// `AnalyticsListener.onVideoDecoderInitialized`.
+    @Volatile private var currentVideoDecoderName: String? = null
 
     /// Scans the first video samples for an HDR10+ SEI (ITU-T T.35 user data,
     /// country 0xB5 / provider 0x003C = ST 2094-40) on a background thread and
@@ -710,6 +733,7 @@ class ExoPlayerView(
                     hdr10PlusContent = false
                     hdr10Content = false
                     chapters = emptyList()
+                    currentVideoDecoderName = null
                     val mediaItem = MediaItem.Builder()
                         .apply {
                             when {
@@ -1308,6 +1332,8 @@ class ExoPlayerView(
         map["subtitleOn"] = subtitleOn
         map["subtitleTracks"] = subtitleTracks
         map["selectedSubtitleTrack"] = selectedSubtitle
+        map["videoDecoderName"] = currentVideoDecoderName
+        map["isHwDecoder"] = currentVideoDecoderName?.let { !isSoftwareDecoder(it) }
         map["error"] = errorCodeName
         map["errorMessage"] = errorMessage
         map["errorCause"] = errorCause
@@ -1322,6 +1348,11 @@ class ExoPlayerView(
             }
         }
         return map
+    }
+
+    private fun isSoftwareDecoder(name: String): Boolean {
+        val n = name.lowercase()
+        return n.contains("google") || n.contains("ffmpeg") || n.startsWith("c2.android.")
     }
 
     private fun emit(

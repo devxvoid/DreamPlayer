@@ -229,6 +229,8 @@ class ExoPlayerEvent {
     this.errorCause,
     this.audioPassthrough = false,
     this.chapters = const [],
+    this.videoDecoderName,
+    this.isHwDecoder,
   });
 
   final int state;
@@ -288,6 +290,13 @@ class ExoPlayerEvent {
   /// none or the source is a network stream.
   final List<ExoChapter> chapters;
 
+  /// Video decoder component name (e.g. `c2.qti.hevc.decoder` = HW,
+  /// `c2.android.avc.decoder` = SW). Null until the decoder is initialized.
+  final String? videoDecoderName;
+
+  /// True = hardware decoder, false = software, null = unknown yet.
+  final bool? isHwDecoder;
+
   Duration get position => Duration(milliseconds: positionMs);
   Duration get duration => Duration(milliseconds: durationMs);
   Duration get buffered => Duration(milliseconds: bufferedMs);
@@ -332,6 +341,8 @@ class ExoPlayerEvent {
       chapters: (m['chapters'] as List? ?? const [])
           .map((e) => ExoChapter.fromMap(e as Map<dynamic, dynamic>))
           .toList(),
+      videoDecoderName: m['videoDecoderName'] as String?,
+      isHwDecoder: m['isHwDecoder'] as bool?,
     );
   }
 }

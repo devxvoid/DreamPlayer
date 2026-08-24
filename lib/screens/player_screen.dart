@@ -107,6 +107,8 @@ class _PlayerScreenState extends State<PlayerScreen>
   bool _liveAudioPassthrough = false;
   String? _liveResolution;
   HdrFormat _liveHdr = HdrFormat.sdr;
+  String? _liveDecoderName;
+  bool? _isHwDecoder;
   List<ExoAudioTrack> _audioTracks = const [];
   int _selectedAudioTrackIndex = -1;
 
@@ -533,6 +535,10 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (e.audioChannels > 0) _liveAudioChannelCount = e.audioChannels;
     }
     _liveAudioPassthrough = e.audioPassthrough;
+    if (e.videoDecoderName != null && e.videoDecoderName!.isNotEmpty) {
+      _liveDecoderName = e.videoDecoderName;
+    }
+    if (e.isHwDecoder != null) _isHwDecoder = e.isHwDecoder;
     _audioTracks = e.audioTracks;
     _selectedAudioTrackIndex = e.selectedAudioTrack;
     if (e.chapters.isNotEmpty) _chapters = e.chapters;
@@ -2051,6 +2057,10 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   Color get _infoColor => const Color(0xFF90A4AE);
 
+  Color get _hwColor => const Color(0xFF66BB6A);
+
+  Color get _swColor => const Color(0xFFFFA726);
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -2097,7 +2107,16 @@ class _PlayerScreenState extends State<PlayerScreen>
             color: _infoColor,
           )
         : null;
-    final chips = [hdrChip, ?videoChip, ?audioChip, ?resolutionChip];
+    final decoderChip = (Platform.isAndroid && _liveDecoderName != null)
+        ? Tooltip(
+            message: _liveDecoderName!,
+            child: FormatChip(
+              label: (_isHwDecoder ?? true) ? 'HW' : 'SW',
+              color: (_isHwDecoder ?? true) ? _hwColor : _swColor,
+            ),
+          )
+        : null;
+    final chips = [hdrChip, ?videoChip, ?audioChip, ?resolutionChip, ?decoderChip];
 
     // IMPORTANT: keep the widget-tree shape stable across casting state.
     // The platform view must ALWAYS be mounted at the same slot — swapping
