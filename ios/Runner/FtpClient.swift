@@ -259,7 +259,7 @@ final class FtpClient: NSObject {
                 username: server.username, password: server.password)
             defer { Task { await session.close() } }
             let comps = try await session.listComponents(path: effective)
-            raw = comps.map { ($0.filename, Entry(name: $0.filename, isDir: $0.isDir, size: $0.size)) }
+            raw = comps.map { ($0.filename, Entry(name: $0.filename, isDir: $0.isDir, size: $0.size ?? 0)) }
         } else {
             let conn = FtpControlConnection(host: server.host, port: server.port)
             try await conn.connectAndLogin(username: server.username, password: server.password)
@@ -624,8 +624,7 @@ final class TcpConnection: @unchecked Sendable {
     init(host: String, port: UInt16) {
         connection = NWConnection(
             host: NWEndpoint.Host(host),
-            port: NWEndpoint.Port(rawValue: port) ?? 21,
-            using: params)
+            port: NWEndpoint.Port(rawValue: port) ?? 21)
     }
 
     func connect() async throws {
@@ -694,7 +693,7 @@ final class TcpConnection: @unchecked Sendable {
     }
 
     func send(_ data: Data) async throws {
-        try await withCheckedThrowingContinuation { cont in
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             connection.send(content: data, completion: .contentProcessed { err in
                 if let err { cont.resume(throwing: err) } else { cont.resume(returning: ()) }
             })
