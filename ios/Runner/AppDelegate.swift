@@ -37,5 +37,6 @@ import UIKit
     WebDAVClient.register(with: messenger)
     JellyfinDiscovery.register(with: messenger)
     CacheCleaner.register(with: messenger)
+    UpnpClient.register(with: messenger)
   }
 }

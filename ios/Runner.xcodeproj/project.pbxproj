@@ -14,6 +14,7 @@
 		7884E8682EC3CC0700C636F2 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */; };
 		A1B2C3D50000000000000001 /* AvPlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000001 /* AvPlayerView.swift */; };
 		A1B2C3D50000000000000007 /* MkvChapters.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000007 /* MkvChapters.swift */; };
+		A1B2C3D50000000000000008 /* UpnpClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000008 /* UpnpClient.swift */; };
 		A1B2C3D50000000000000002 /* FileBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000002 /* FileBrowser.swift */; };
 		A1B2C3D50000000000000003 /* IntentBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000003 /* IntentBridge.swift */; };
 		
@@ -66,6 +67,7 @@
 		7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
 		A1B2C3D40000000000000001 /* AvPlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AvPlayerView.swift; sourceTree = "<group>"; };
 		A1B2C3D40000000000000007 /* MkvChapters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MkvChapters.swift; sourceTree = "<group>"; };
+		A1B2C3D40000000000000008 /* UpnpClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpnpClient.swift; sourceTree = "<group>"; };
 		A1B2C3D40000000000000002 /* FileBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileBrowser.swift; sourceTree = "<group>"; };
 		A1B2C3D40000000000000003 /* IntentBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentBridge.swift; sourceTree = "<group>"; };
 		
@@ -151,6 +153,7 @@
 				7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */,
 				A1B2C3D40000000000000001 /* AvPlayerView.swift */,
 				A1B2C3D40000000000000007 /* MkvChapters.swift */,
+				A1B2C3D40000000000000008 /* UpnpClient.swift */,
 				A1B2C3D40000000000000002 /* FileBrowser.swift */,
 				A1B2C3D40000000000000003 /* IntentBridge.swift */,
 				A1B2C3D4000000000000000D /* BufferedSMBReader.swift */,
@@ -324,6 +327,7 @@
 				7884E8682EC3CC0700C636F2 /* SceneDelegate.swift in Sources */,
 				A1B2C3D50000000000000001 /* AvPlayerView.swift in Sources */,
 				A1B2C3D50000000000000007 /* MkvChapters.swift in Sources */,
+				A1B2C3D50000000000000008 /* UpnpClient.swift in Sources */,
 				A1B2C3D50000000000000002 /* FileBrowser.swift in Sources */,
 				A1B2C3D50000000000000003 /* IntentBridge.swift in Sources */,
 				A1B2C3D5000000000000000E /* BufferedSMBReader.swift in Sources */,
