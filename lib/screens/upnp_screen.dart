@@ -81,20 +81,25 @@ class _UpnpScreenState extends State<UpnpScreen> {
     setState(() {
       _browsing = true;
       _browseError = null;
+      _diag = const [];
     });
     try {
       final entries = await UpnpClient.instance.browse(server.id, objectId);
+      final diag = await UpnpClient.instance.diagnostics();
       if (!mounted) return;
       setState(() {
         _entries = entries;
+        _diag = diag ?? const [];
         _browsing = false;
       });
       _prefetchTmdb(entries);
     } on PlatformException catch (e) {
+      final diag = await UpnpClient.instance.diagnostics();
       if (!mounted) return;
       setState(() {
         _browsing = false;
         _browseError = e.message ?? 'Browse failed';
+        _diag = diag ?? const [];
       });
     } catch (e) {
       if (!mounted) return;
@@ -336,7 +341,27 @@ class _UpnpScreenState extends State<UpnpScreen> {
                       ),
                     )
                   : _entries.isEmpty
-                      ? const Center(child: Text('Nothing here'))
+                      ? SingleChildScrollView(
+                          padding: const EdgeInsets.all(24),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Text('Nothing here'),
+                              if (_diag.isNotEmpty) ...[
+                                const SizedBox(height: 16),
+                                Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: Theme.of(context).colorScheme.surfaceContainerLow,
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(_diag.join('\n'), style: const TextStyle(fontFamily: 'monospace', fontSize: 11)),
+                                ),
+                              ],
+                            ],
+                          ),
+                        )
                       : ListView.separated(
                           itemCount: _entries.length,
                           separatorBuilder: (context, _) => const Divider(height: 1),

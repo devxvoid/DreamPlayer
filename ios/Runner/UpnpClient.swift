@@ -460,40 +460,110 @@ final class UpnpClient: NSObject {
         req.httpBody = soap.data(using: .utf8)
 
         let (data, response) = try await standardSession.data(for: req)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            throw NSError(domain: "UpnpClient", code: (response as? HTTPURLResponse)?.statusCode ?? 500, userInfo: [NSLocalizedDescriptionKey: "Browse HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)"])
+        guard let http = response as? HTTPURLResponse else {
+            Self.diag("browse: no HTTP response")
+            throw NSError(domain: "UpnpClient", code: 500, userInfo: [NSLocalizedDescriptionKey: "Browse failed"])
+        }
+        Self.diag("browse HTTP \(http.statusCode) object=\(objectId)")
+        guard (200...299).contains(http.statusCode) else {
+            throw NSError(domain: "UpnpClient", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "Browse HTTP \(http.statusCode)"])
         }
         return parseBrowseResult(data: data)
     }
 
     private func parseBrowseResult(data: Data) -> [[String: Any]] {
         // Pull <Result> which holds escaped DIDL-Lite.
-        guard let xml = String(data: data, encoding: .utf8) else { return [] }
-        // Quick string scan for <Result>…</Result> to avoid a full SOAP parse.
-        guard let start = xml.range(of: "<Result>"), let end = xml.range(of: "</Result>") else { return [] }
-        let didlEscaped = String(xml[start.upperBound..<end.lowerBound])
-        // XMLParser will decode entities (&lt; etc.) if we wrap it.
-        let wrapper = "<wrapper>\(didlEscaped)</wrapper>"
-        guard let didlData = wrapper.data(using: .utf8) else { return [] }
-        // First decode via XMLParser to unescape.
-        let unescaper = ResultUnescaper()
-        let p1 = XMLParser(data: didlData)
-        p1.delegate = unescaper
-        p1.parse()
-        let didl = unescaper.result.isEmpty ? didlEscaped : unescaper.result
-        // Unescaped DIDL may still be entity-escaped twice; decode again if needed.
-        let didlDecoded = didl.replacingOccurrences(of: "&lt;", with: "<").replacingOccurrences(of: "&gt;", with: ">").replacingOccurrences(of: "&amp;", with: "&").replacingOccurrences(of: "&quot;", with: "\"").replacingOccurrences(of: "&apos;", with: "'")
-        guard let didlData2 = didlDecoded.data(using: .utf8) else { return [] }
-        return parseDidl(data: didlData2)
+        guard let xml = String(data: data, encoding: .utf8) else {
+            Self.diag("SOAP: body not UTF-8")
+            return []
+        }
+        if let nrStart = xml.range(of: "<NumberReturned>"),
+           let nrEnd = xml.range(of: "</NumberReturned>") {
+            Self.diag("SOAP NumberReturned=\(xml[nrStart.upperBound..<nrEnd.lowerBound])")
+        }
+        // Tolerant extraction (upnpx/VLC style): allow attributes/whitespace
+        // inside the Result tag instead of a literal "<Result>" match.
+        guard let startRange = xml.range(of: "<Result[^>]*>", options: .regularExpression),
+              let endRange = xml.range(of: "</Result>", options: [.regularExpression, .caseInsensitive]) else {
+            Self.diag("SOAP: no <Result> element (fault?)")
+            return []
+        }
+        let didlEscaped = String(xml[startRange.upperBound..<endRange.lowerBound])
+        Self.diag("SOAP didl escaped len=\(didlEscaped.count)")
+        // Single-pass entity decode — no XMLParser round-trip needed.
+        let didl = Self.unescapeEntities(didlEscaped)
+        guard let didlData = didl.data(using: .utf8) else { return [] }
+        let entries = parseDidl(data: didlData)
+        Self.diag("DIDL parsed \(entries.count) entr(ies)")
+        return entries
+    }
+
+    /// Decodes XML entities (named + numeric refs) in ONE left-to-right pass,
+    /// so `&amp;lt;` correctly stays `&lt;`. `&amp;` is handled by the pass
+    /// itself rather than a fragile replace order.
+    private static func unescapeEntities(_ input: String) -> String {
+        guard input.contains("&") else { return input }
+        var out = String()
+        out.reserveCapacity(input.count)
+        var i = input.startIndex
+        while i < input.endIndex {
+            let c = input[i]
+            if c == "&" {
+                // Find the terminating ';' within 12 characters.
+                var j = input.index(after: i)
+                var scan = 0
+                var semi: String.Index?
+                while j < input.endIndex && scan < 12 {
+                    if input[j] == ";" { semi = j; break }
+                    j = input.index(after: j)
+                    scan += 1
+                }
+                if let semi {
+                    let ent = String(input[input.index(after: i)..<semi])
+                    switch ent {
+                    case "lt": out.append("<"); i = input.index(after: semi); continue
+                    case "gt": out.append(">"); i = input.index(after: semi); continue
+                    case "quot": out.append("\""); i = input.index(after: semi); continue
+                    case "apos": out.append("'"); i = input.index(after: semi); continue
+                    case "amp": out.append("&"); i = input.index(after: semi); continue
+                    default:
+                        if ent.hasPrefix("#") {
+                            let hex = ent.hasPrefix("#x") || ent.hasPrefix("#X")
+                            let digits = String(ent.dropFirst(hex ? 2 : 1))
+                            if let code = UInt32(digits, radix: hex ? 16 : 10),
+                               let scalar = Unicode.Scalar(code) {
+                                out.unicodeScalars.append(scalar)
+                                i = input.index(after: semi)
+                                continue
+                            }
+                        }
+                        // Unknown entity: keep verbatim.
+                        out.append(c)
+                        i = input.index(after: i)
+                        continue
+                    }
+                }
+            }
+            out.append(c)
+            i = input.index(after: i)
+        }
+        return out
     }
 
     private func parseDidl(data: Data) -> [[String: Any]] {
         let delegate = DidlParser()
         let parser = XMLParser(data: data)
-        parser.shouldProcessNamespaces = true
+        // upnpx/VLC-iOS approach: do NOT process namespaces. Foundation's
+        // namespace processing on DIDL's default-xmlns + dc:/upnp: prefix mix
+        // reported zero usable matches on device; matching qualified names
+        // via suffix ("dc:title", "upnp:class") is what VLC does and is
+        // parser-behavior independent.
+        parser.shouldProcessNamespaces = false
         parser.delegate = delegate
         parser.parse()
-        // Sort folders first, then alphabetically.
+        if let err = parser.parserError?.localizedDescription {
+            Self.diag("DIDL parse error: \(err)")
+        }
         return delegate.entries.sorted { a, b in
             let da = a["isDirectory"] as? Bool ?? false
             let db = b["isDirectory"] as? Bool ?? false
@@ -537,13 +607,6 @@ private final class DeviceXmlParser: NSObject, XMLParserDelegate {
     }
 }
 
-// MARK: - Result unescaper (decodes &lt; etc. inside <Result>)
-
-private final class ResultUnescaper: NSObject, XMLParserDelegate {
-    var result = ""
-    func parser(_ parser: XMLParser, foundCharacters string: String) { result += string }
-}
-
 // MARK: - DIDL-Lite parser
 
 private final class DidlParser: NSObject, XMLParserDelegate {
@@ -561,20 +624,18 @@ private final class DidlParser: NSObject, XMLParserDelegate {
     private let videoExts: Set<String> = ["mkv","mp4","avi","mov","ts","m2ts","wmv","flv","mpg","mpeg","webm","m4v","3gp","divx","vob"]
 
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String : String] = [:]) {
-        let local = elementName // with shouldProcessNamespaces=true, this is local name
-        if local == "container" {
-            flush()
+        // Namespaces OFF: elementName carries any prefix ("dc:title").
+        if Self.matches(elementName, "container") {
             inContainer = true; inItem = false
             currentIsContainer = true
             currentId = attributeDict["id"]
             currentTitle = nil; currentRes = nil; currentClass = nil
-        } else if local == "item" {
-            flush()
+        } else if Self.matches(elementName, "item") {
             inItem = true; inContainer = false
             currentIsContainer = false
             currentId = attributeDict["id"]
             currentTitle = nil; currentRes = nil; currentClass = nil; currentResSize = 0
-        } else if local == "res" {
+        } else if Self.matches(elementName, "res") {
             currentProtocolInfo = attributeDict["protocolInfo"]
             if let sz = attributeDict["size"], let v = Int64(sz) { currentResSize = v }
         }
@@ -584,23 +645,25 @@ private final class DidlParser: NSObject, XMLParserDelegate {
     func parser(_ parser: XMLParser, foundCharacters string: String) { text += string }
 
     func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
-        let local = elementName
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        switch local {
-        case "title": if !value.isEmpty { currentTitle = value }
-        case "class": currentClass = value
-        case "res": if !value.isEmpty { currentRes = value }
-        case "container", "item":
+        if Self.matches(elementName, "title") {
+            if !value.isEmpty { currentTitle = value }
+        } else if Self.matches(elementName, "class") {
+            currentClass = value
+        } else if Self.matches(elementName, "res") {
+            if !value.isEmpty { currentRes = value }
+        } else if Self.matches(elementName, "container") || Self.matches(elementName, "item") {
             flushEntry()
             inContainer = false; inItem = false
             currentId = nil; currentTitle = nil; currentRes = nil; currentClass = nil
-        default: break
         }
         text = ""
     }
 
-    private func flush() {
-        // Flush is just a guard for malformed nesting; actual emit on end tag.
+    /// Qualified-name match: plain local name or ANY prefix ("dc:title",
+    /// "upnp:class"). This is the upnpx/VLC-iOS matching style.
+    private static func matches(_ elementName: String, _ name: String) -> Bool {
+        elementName == name || elementName.hasSuffix(":\(name)")
     }
 
     private func flushEntry() {
