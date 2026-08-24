@@ -78,6 +78,9 @@ class MainActivity : FlutterActivity() {
         SMBClient(this).configure(
             MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SMBClient.CHANNEL),
         )
+        UpnpClient(this).configure(
+            MethodChannel(flutterEngine.dartExecutor.binaryMessenger, UpnpClient.CHANNEL),
+        )
         intentChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "dreamplayer/intent",

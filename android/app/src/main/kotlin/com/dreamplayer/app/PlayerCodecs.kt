@@ -74,9 +74,32 @@ object PlayerCodecs {
         return OkHttpDataSource.Factory(client)
     }
 
+    fun decoderMode(context: Context): String {
+        val prefs = context.getSharedPreferences(
+            "FlutterSharedPreferences", Context.MODE_PRIVATE,
+        )
+        return prefs.getString("flutter.dreamplayer.decoderMode", null) ?: "auto"
+    }
+
+    private fun isSoftwareVideoDecoder(name: String): Boolean {
+        val n = name.lowercase()
+        return n.contains("google") || n.contains("ffmpeg") || n.startsWith("c2.android.")
+    }
+
     fun mediaCodecSelector(context: Context): MediaCodecSelector {
         val passthrough = passthroughEnabled(context)
+        val mode = decoderMode(context)
         return MediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
+            // HW/SW filter applies to video decoders only (audio passthrough/FLAC/Dolby logic is independent).
+            val isVideo = mimeType?.startsWith("video/") == true
+            fun filterByMode(list: List<androidx.media3.exoplayer.mediacodec.MediaCodecInfo>): List<androidx.media3.exoplayer.mediacodec.MediaCodecInfo> = when (mode) {
+                "hw" -> list.filterNot { isSoftwareVideoDecoder(it.name) }
+                "sw" -> {
+                    val sw = list.filter { isSoftwareVideoDecoder(it.name) }
+                    if (sw.isNotEmpty()) sw + list.filterNot { isSoftwareVideoDecoder(it.name) } else list
+                }
+                else -> list
+            }
             when {
                 mimeType == MimeTypes.AUDIO_FLAC -> emptyList()
                 // Passthrough: return empty for compressed surround formats so
@@ -91,18 +114,29 @@ object PlayerCodecs {
                 // Dolby Vision: use the device's DV decoder when one exists
                 // (P7/P8 base layers are HDR10 HEVC, so DV-less devices fall
                 // back to the HEVC hardware decoder and play as HDR10).
-                mimeType == MimeTypes.VIDEO_DOLBY_VISION ->
-                    MediaCodecSelector.DEFAULT.getDecoderInfos(
-                        mimeType,
-                        requiresSecureDecoder,
-                        requiresTunnelingDecoder,
-                    ).ifEmpty {
+                mimeType == MimeTypes.VIDEO_DOLBY_VISION -> {
+                    val dv = filterByMode(
+                        MediaCodecSelector.DEFAULT.getDecoderInfos(
+                            mimeType,
+                            requiresSecureDecoder,
+                            requiresTunnelingDecoder,
+                        ),
+                    )
+                    if (dv.isNotEmpty()) dv else filterByMode(
                         MediaCodecSelector.DEFAULT.getDecoderInfos(
                             MimeTypes.VIDEO_H265,
                             requiresSecureDecoder,
                             requiresTunnelingDecoder,
-                        )
-                    }
+                        ),
+                    )
+                }
+                isVideo -> filterByMode(
+                    MediaCodecSelector.DEFAULT.getDecoderInfos(
+                        mimeType,
+                        requiresSecureDecoder,
+                        requiresTunnelingDecoder,
+                    ),
+                )
                 else -> MediaCodecSelector.DEFAULT.getDecoderInfos(
                     mimeType,
                     requiresSecureDecoder,

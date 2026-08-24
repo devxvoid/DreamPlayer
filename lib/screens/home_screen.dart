@@ -19,6 +19,7 @@ import 'file_browser_screen.dart';
 import 'jellyfin_screen.dart';
 import 'smb_screen.dart';
 import 'tmd_details_screen.dart';
+import 'upnp_screen.dart';
 import 'webdav_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -646,6 +647,13 @@ class _HomeScreenState extends State<HomeScreen>
                 subtitle: const Text('SMB via the Files app'),
                 onTap: () => Navigator.of(context).pop('smb-ios'),
               ),
+            if (Platform.isAndroid)
+              ListTile(
+                leading: const Icon(Icons.cast_connected_outlined),
+                title: const Text('DLNA'),
+                subtitle: const Text('DLNA / UPnP servers on this network'),
+                onTap: () => Navigator.of(context).pop('upnp'),
+              ),
             ListTile(
               leading: const Icon(Icons.video_library_outlined),
               title: const Text('Add folder to library'),
@@ -690,6 +698,11 @@ class _HomeScreenState extends State<HomeScreen>
         // shares) bookmarks it as a library folder, so the share shows up on
         // the home grid with a TMDB poster and is browsable/playable.
         await _addFolderToLibrary();
+        break;
+      case 'upnp':
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => const UpnpScreen()),
+        );
         break;
       case 'storage':
         await Navigator.of(context).push(

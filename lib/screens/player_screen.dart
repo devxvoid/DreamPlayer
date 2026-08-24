@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io' show Platform;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -12,6 +13,7 @@ import '../services/exo_player.dart';
 import '../services/file_browser.dart';
 import '../services/jellyfin_client.dart';
 import '../services/auto_play_store.dart';
+import '../services/decoder_mode.dart';
 import '../services/smb_client.dart';
 import '../services/resume_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -127,6 +129,7 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   int _subtitleDelayMs = 0;
   bool _autoPlayNext = false;
+  DecoderMode _decoderMode = DecoderMode.auto;
 
   /// Whether the app is running on a TV (set once on first build).
   bool _isTv = false;
@@ -213,6 +216,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         _swipeEnabled = await areSwipeGesturesEnabled();
         _subtitleDelayMs = (await SubtitleStyle.load()).delayMs;
         _autoPlayNext = await isAutoPlayNextEnabled();
+        _decoderMode = await DecoderModeStore.load();
       } catch (_) {
         // Persistence unavailable; keep the default fit.
       }
@@ -1654,6 +1658,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     bool expandSpeed = false;
     bool expandChapters = false;
     bool expandSubtitleDelay = false;
+    bool expandDecoder = false;
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: const Color(0xFF1C1C1E),
@@ -1742,6 +1747,56 @@ class _PlayerScreenState extends State<PlayerScreen>
                       ),
                     ),
                   const Divider(color: Colors.white12, height: 1),
+                  if (defaultTargetPlatform == TargetPlatform.android) ...[
+                    _tvListTile(
+                      leading: const Icon(Icons.memory, color: Colors.white70),
+                      title: const Text('Video decoder', style: TextStyle(color: Colors.white)),
+                      subtitle: Text(_decoderMode.label, style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                      trailing: Icon(expandDecoder ? Icons.expand_less : Icons.expand_more, color: Colors.white54),
+                      onTap: () => setSheet(() => expandDecoder = !expandDecoder),
+                    ),
+                    if (expandDecoder)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 12),
+                        child: Column(
+                          children: [
+                            for (final m in DecoderMode.values)
+                              _tvListTile(
+                                leading: Icon(
+                                  _decoderMode == m ? Icons.radio_button_checked : Icons.radio_button_off,
+                                  color: _decoderMode == m ? Colors.white : Colors.white54,
+                                ),
+                                title: Text(m.label, style: const TextStyle(color: Colors.white)),
+                                subtitle: Text(
+                                  switch (m) {
+                                    DecoderMode.hw => 'Force hardware decoders',
+                                    DecoderMode.sw => 'Prefer software decoders',
+                                    _ => 'Automatic (recommended)',
+                                  },
+                                  style: const TextStyle(color: Colors.white38, fontSize: 11),
+                                ),
+                                onTap: () async {
+                                  if (m != _decoderMode) {
+                                    setState(() => _decoderMode = m);
+                                    setSheet(() {});
+                                    await DecoderModeStore.save(m);
+                                    if (mounted && context.mounted) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(content: Text('Takes effect on next video')),
+                                      );
+                                    }
+                                  }
+                                },
+                              ),
+                            const Padding(
+                              padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
+                              child: Text('Change applies to the next video you open.', style: TextStyle(color: Colors.white38, fontSize: 11)),
+                            ),
+                          ],
+                        ),
+                      ),
+                    const Divider(color: Colors.white12, height: 1),
+                  ],
                   _tvListTile(
                     leading: const Icon(Icons.skip_next, color: Colors.white70),
                     title: const Text('Auto-play next', style: TextStyle(color: Colors.white)),

@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/auto_play_store.dart';
 import '../services/cache_cleaner.dart';
+import '../services/decoder_mode.dart';
 import '../services/support_links.dart';
 import '../utils/tv_helper.dart';
 import '../widgets/tv_overscan.dart';
@@ -26,6 +27,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _passthrough = false;
   bool _swipeGestures = true;
   bool _autoPlayNext = false;
+  DecoderMode _decoderMode = DecoderMode.auto;
 
   @override
   void initState() {
@@ -34,6 +36,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _loadPassthrough();
     _loadSwipeGestures();
     _loadAutoPlayNext();
+    _loadDecoderMode();
   }
 
   Future<void> _loadPassthrough() async {
@@ -52,6 +55,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       final enabled = await isAutoPlayNextEnabled();
       if (mounted) setState(() => _autoPlayNext = enabled);
+    } catch (_) {}
+  }
+
+  Future<void> _loadDecoderMode() async {
+    try {
+      final mode = await DecoderModeStore.load();
+      if (mounted) setState(() => _decoderMode = mode);
     } catch (_) {}
   }
 
@@ -232,6 +242,49 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   );
                 },
               ),
+              if (defaultTargetPlatform == TargetPlatform.android)
+                TvTile(
+                  leading: const Icon(Icons.memory),
+                  title: const Text('Video decoder'),
+                  subtitle: Text(
+                    switch (_decoderMode) {
+                      DecoderMode.hw => 'Hardware — fastest, HDR passthrough',
+                      DecoderMode.sw => 'Software — compatibility fallback',
+                      _ => 'Auto — hardware when available',
+                    },
+                  ),
+                  onTap: () async {
+                    final picked = await showDialog<DecoderMode>(
+                      context: context,
+                      builder: (context) => SimpleDialog(
+                        title: const Text('Video decoder'),
+                        children: [
+                          for (final m in DecoderMode.values)
+                            RadioListTile<DecoderMode>(
+                              value: m,
+                              groupValue: _decoderMode,
+                              title: Text(m.label),
+                              subtitle: Text(switch (m) {
+                                DecoderMode.hw => 'Force hardware decoders',
+                                DecoderMode.sw => 'Prefer software decoders',
+                                _ => 'Let the system choose (recommended)',
+                              }),
+                              onChanged: (v) => Navigator.of(context).pop(v),
+                            ),
+                        ],
+                      ),
+                    );
+                    if (picked != null) {
+                      await DecoderModeStore.save(picked);
+                      if (mounted) setState(() => _decoderMode = picked);
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Takes effect on next video')),
+                        );
+                      }
+                    }
+                  },
+                ),
             ],
             const Divider(),
             Padding(
