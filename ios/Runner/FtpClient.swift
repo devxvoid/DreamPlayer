@@ -624,7 +624,8 @@ final class TcpConnection: @unchecked Sendable {
     init(host: String, port: UInt16) {
         connection = NWConnection(
             host: NWEndpoint.Host(host),
-            port: NWEndpoint.Port(rawValue: port) ?? 21)
+            port: NWEndpoint.Port(rawValue: port) ?? 21,
+            using: NWParameters())
     }
 
     func connect() async throws {
