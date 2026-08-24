@@ -133,7 +133,7 @@ A video player app supporting:
   path** for Apple containers. `engine.bind(view:)` mounts `AetherPlayerView`
   (own `AVPlayerLayer` → real HDR where the panel supports it; iPad Pro M2
   does). Engine added as an SPM dependency (`project.pbxproj`, pinned
-  `upToNextMajorVersion` from 6.21.0) — Xcode auto-resolves FFmpegBuild's
+  `upToNextMajorVersion` from **6.38.0** (2026-08-24; was 6.21.0) — Xcode auto-resolves FFmpegBuild's
   dynamic FFmpeg xcframeworks into the app bundle. **CI-green** (run on commit
   `82b3dd9`). **Verified on-device (2026-08):** local/Documents files play on the iPad Pro M2;
   SMB playback was fully REMOVED (2026-08, see "SMB / network shares") — NAS files reach the app
