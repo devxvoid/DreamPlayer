@@ -3,6 +3,30 @@
 All notable changes to DreamPlayer are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## 0.2.6
+
+### Added
+
+- **Playback speed 0.25×–2× + refresh-rate matching (Phase 1)** — bottom-bar overflow holds the current rate (`1×`), dropdown offers 0.25×–2×; persisted as `dreamplayer.playbackSpeed` and re-applied after every open/reopen. Android: `player.setPlaybackSpeed`; iOS: `AVPlayer.defaultRate`/`rate` via layer walk. Android also matches the display mode to the video FPS (`preferredDisplayModeId` on STATE_READY / size change, ±0.5 Hz hysteresis, restores on dispose). iOS FFmpeg custom-source (WebDAV) has no AVPlayer → speed is no-op there until AetherEngine exposes a rate API.
+- **Chapters + watched marks + overflow dropdown (Phase 2)** — MKV `Chapters` parsed directly (EBML walk: SeekHead → EditionEntry → ChapterAtom, SeekID `0x1043A770`, ns→ms, first `ChapString` fallback "Chapter N") for local (`RandomAccessFile`), SMB (`SmbRandomAccessFile` + saved share creds), and HTTP/WebDAV (`Range: 0–8M` via OkHttp standard+permissive clients); Jellyfin `Item.Chapters` (`Fields=Chapters`, ticks/10000 ms) seeded from `VideoItem.chapters`. Chapters appear in the bottom-bar overflow `⋮` (Aspect/Speed/Chapters collapsible sections), highlight the current chapter and tap-to-seek. Watched marks auto-set on `STATE_ENDED` and manual via check icon per row, green check = watched, resume labels now `h:mm:ss` for ≥1h. Bottom bar decluttered 6→4 buttons (`audio · CC · ⋮ · fullscreen`).
+- **HW / SW decoder toggle + live badge** — Settings + overflow let you pick Auto / Hardware / Software; `PlayerCodecs.mediaCodecSelector` filters `isSoftwareVideoDecoder` live per query (HW filters SW decoders, SW prefers `c2.android.`/`google`/`ffmpeg`). Player top bar shows `Auto, H/W` / `Auto, S/W` etc. via `onVideoDecoderInitialized` (`videoDecoderName/isHwDecoder`), chips wrap in portrait. Verified: software fallback no longer kills HDR — video stays on `MediaCodecVideoRenderer`.
+- **DLNA / UPnP browse (Android + iOS, DONE)** — Home **+** → DLNA: SSDP discovery (Android `XmlPullParser`, iOS BSD-socket poll+resend with `IP_MULTICAST_TTL=2` + `IP_MULTICAST_IF=en*`, entitlement `com.apple.developer.networking.multicast`), SOAP `ContentDirectory#Browse`, DIDL parsing with VLC/upnpx semantics (`shouldProcessNamespaces=false` + suffix matching `dc:title`/`upnp:class`, tolerant `<Result>` regex, single-pass entity unescape). On-screen Diagnostics box + `getDiagnostics` channel. iOS fallbacks when SSDP gated: saved-Jellyfin-host probe → UDP-7359 broadcast → direct `http://192.168.1.16:8096` probe.
+- **Jellyfin DLNA transcode & multi-res fixes** — Jellyfin serves external-subtitle items as `CI=1` `video/mp2t` live transcodes; `JellyfinClient.upgradeDlnaUrl()` matches `/dlna/(videos|audios)/<id>/` against saved Jellyfin servers (origin match) and rebuilds the item via `getItem`+`videoItem` → original-bytes direct play with sidecar subs as tracks + chapters + stable resume key. Multi-res DIDL (one `text/srt` res per subtitle) no longer hands the player an `.srt` as main media — video `protocolInfo` preferred, every `text/*` res collected into `externalSubs` → selectable tracks on the raw DLNA path. Verified on-device: House S02E04 plays original `hevc` direct (`stream.mkv?Static=true`) or `h264` TS with red badge depending on server session — both work. **Red "Transcoding" chip** whenever playback is server-transcoded (HLS fallback, `CI=1`, or `master.m3u8`).
+- **Series grouping + live subtitle delay (Android) + auto-play next** — Season grouping for Jellyfin/file folders, Android subtitle delay now live via `DelayingParser` (`SubtitleTiming.delayUs` + reopen on change; PGS/DVB bitmap cues still not shifted), auto-play next episode within the same folder (local/SMB, Jellyfin parent walk still TODO).
+- **OOM fix** — `android:largeHeap="true"` + `BufferTuning` 96→64 MiB on large-RAM devices (Fire TV 192 MB heap stays 24 MiB), fixes `MediaCodec.BufferInfo` heap abort on 256 MB devices.
+
+### Fixed
+
+- **iOS DLNA browse empty** — Foundation `XMLParser` with namespaces on silently yields zero entries (prefix `D:response`), fixed by `shouldProcessNamespaces=false` + qualified-name suffix checks; `ResultUnescaper` replaced with single-pass parser.
+- **iOS Files-app MKV chapters** — `MkvChapters.swift` EBML probe for `mkv/mka/mks/webm/mk3d`.
+- **Decoder badge flicker** — badge no longer vanishes on mode switch; label is mode-aware.
+- **Chips overflow in portrait** — chips now `Wrap` to next line when many badges present.
+- **iOS discovery gated on managed Wi-Fi** — now falls back through saved Jellyfin hosts and 7359 broadcast before failing.
+
+### Changed
+
+- AetherEngine `6.21.0` → `6.38.0` (latest, drop-in SPM).
+
 ## 0.2.5
 
 ### Added
