@@ -897,6 +897,7 @@ class ExoPlayerView(
                         call.argument<Number>("color")?.toInt() ?: 0xFFFFFFFF.toInt(),
                         call.argument<Number>("bg")?.toInt() ?: 0x80000000.toInt(),
                         call.argument<Boolean>("outline") ?: true,
+                        (call.argument<Number>("delayMs")?.toLong()) ?: 0L,
                     )
                     result.success(null)
                 }
@@ -1347,7 +1348,10 @@ class ExoPlayerView(
     /// it; the others map 1:1 to Media3 resize modes.
     /// Applies the user's subtitle appearance to Media3's SubtitleView.
     /// Size is a multiplier around Media3's default fractional text size.
-    private fun applySubtitleStyle(sizeMult: Double, color: Int, bg: Int, outline: Boolean) {
+    /// `delayMs` is stored globally so the next `open()`'s parsers shift every
+    /// cue (positive = later; requires re-open to take effect mid-playback).
+    private fun applySubtitleStyle(sizeMult: Double, color: Int, bg: Int, outline: Boolean, delayMs: Long = 0L) {
+        SubtitleTiming.delayUs = delayMs * 1000L
         val view = playerView.subtitleView ?: return
         view.setFractionalTextSize(
             SubtitleView.DEFAULT_TEXT_SIZE_FRACTION * sizeMult.coerceIn(0.6, 2.0).toFloat()

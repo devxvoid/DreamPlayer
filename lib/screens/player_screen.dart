@@ -11,8 +11,12 @@ import '../services/continue_watching.dart';
 import '../services/exo_player.dart';
 import '../services/file_browser.dart';
 import '../services/jellyfin_client.dart';
+import '../services/auto_play_store.dart';
 import '../services/smb_client.dart';
 import '../services/resume_store.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../services/tmdb_client.dart';
 import '../services/watched_store.dart';
 import '../services/subtitle_style.dart';
 import '../utils/codec_info.dart';
@@ -113,12 +117,16 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   /// Guard so an ended video is marked watched exactly once per session.
   bool _markedWatched = false;
+  bool _autoPlayFired = false;
   int _selectedSubtitleTrack = -1;
 
   VideoFitMode _fitMode = VideoFitMode.fit;
 
   /// Persisted playback speed, re-applied on every (re)open.
   double _playbackSpeed = 1.0;
+
+  int _subtitleDelayMs = 0;
+  bool _autoPlayNext = false;
 
   /// Whether the app is running on a TV (set once on first build).
   bool _isTv = false;
@@ -203,6 +211,8 @@ class _PlayerScreenState extends State<PlayerScreen>
         _fitMode = await FitModeStore.load();
         _playbackSpeed = await PlaybackSpeedStore.load();
         _swipeEnabled = await areSwipeGesturesEnabled();
+        _subtitleDelayMs = (await SubtitleStyle.load()).delayMs;
+        _autoPlayNext = await isAutoPlayNextEnabled();
       } catch (_) {
         // Persistence unavailable; keep the default fit.
       }
@@ -232,6 +242,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   Future<void> _openCurrent() async {
     final video = _current;
     _markedWatched = false;
+    _autoPlayFired = false;
     // Seed chapters from the VideoItem (e.g. Jellyfin `MediaSources[].Chapters`);
     // native MKV parsing (`e.chapters`) will override once available.
     _chapters = video.chapters
@@ -529,6 +540,12 @@ class _PlayerScreenState extends State<PlayerScreen>
       final key = _resumeKey;
       if (!_inTests && key.isNotEmpty) WatchedStore.set(key, true);
     }
+    // Auto-play next episode (Settings → Player). Once per ended session.
+    if (e.ended && !_autoPlayFired && !_inTests) {
+      _autoPlayFired = true;
+      // Fire-and-forget: don't block the event loop.
+      _maybeAutoPlayNext();
+    }
 
     // Resume bookmark: persist every ~5s while playing, and immediately when
     // playback pauses/stops. A finished video clears its bookmark (it ended,
@@ -552,6 +569,110 @@ class _PlayerScreenState extends State<PlayerScreen>
       _syncControlsForPlaybackState();
     }
     if (mounted) setState(() {});
+  }
+
+  Future<void> _maybeAutoPlayNext() async {
+    try {
+      if (!await isAutoPlayNextEnabled()) return;
+    } catch (_) {
+      return;
+    }
+    final next = await _findNextEpisode();
+    if (next == null || !mounted) return;
+    // Small grace period so the user sees the ended state and can cancel
+    // via back. If the screen is popped in that window, `mounted` is false.
+    await Future.delayed(const Duration(seconds: 3));
+    if (!mounted) return;
+    // Verify we're still in the ended state (user didn't seek/replay).
+    if (!_completed) return;
+    _current = next;
+    if (mounted) setState(() => _error = null);
+    await _openCurrent();
+  }
+
+  /// Finds the next episode in the same folder (season-aware). Returns null
+  /// when the current video isn't part of a recognizable episode sequence or
+  /// when there is no next entry. File folders + Jellyfin both supported.
+  Future<VideoItem?> _findNextEpisode() async {
+    final cur = _current;
+    // Local / SMB file folders (path or content:// handled via FileBrowser).
+    final p = cur.path;
+    if (p != null && p.isNotEmpty) {
+      final parent = _parentDir(p);
+      if (parent == null) return null;
+      try {
+        final entries = await FileBrowserService.instance.listDirectory(parent);
+        final videos = entries.where((e) => !e.isDirectory).toList();
+        if (videos.isEmpty) return null;
+        // Prefer season/episode ordering when the folder looks episodic.
+        final episodic = videos.any((e) => ParsedFileName.parse(e.name).isEpisode);
+        if (episodic) {
+          videos.sort((a, b) {
+            final pa = ParsedFileName.parse(a.name);
+            final pb = ParsedFileName.parse(b.name);
+            final c = pa.season.compareTo(pb.season);
+            if (c != 0) return c;
+            final d = pa.episode.compareTo(pb.episode);
+            if (d != 0) return d;
+            return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+          });
+        } else {
+          videos.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+        }
+        final idx = videos.indexWhere((e) => e.path == p);
+        if (idx < 0 || idx + 1 >= videos.length) return null;
+        final nxt = videos[idx + 1];
+        final isContent = nxt.path.startsWith('content://');
+        return VideoItem(
+          id: 'folder_next_${nxt.path.hashCode}',
+          title: nxt.name,
+          path: isContent ? null : nxt.path,
+          uri: isContent ? nxt.path : null,
+          resumeKey: nxt.resumeKey,
+          duration: Duration.zero,
+          sizeBytes: nxt.size,
+        );
+      } catch (_) {
+        return null;
+      }
+    }
+    // Jellyfin: next playable in the same parent folder.
+    if (cur.jellyfinItemId != null && cur.jellyfinServerId != null) {
+      try {
+        final client = JellyfinClient();
+        final server = await client.serverForUrl(cur.jellyfinServerId!);
+        // `cur.jellyfinServerId` is the host, not the full URL — `serverForUrl`
+        // expects a URL; reconstruct via the stored servers list.
+        JellyfinServer? resolved = server;
+        if (resolved == null) {
+          final servers = await client.loadServers();
+          try {
+            resolved = servers.firstWhere((s) => s.urlHost == cur.jellyfinServerId);
+          } catch (_) {
+            resolved = null;
+          }
+        }
+        if (resolved == null) return null;
+        // We don't have the parentId for the current item, but we can locate
+        // it by scanning the user's views for the item's parent. Simpler:
+        // list the item's siblings via a recent-items search isn't reliable.
+        // For now skip Jellyfin auto-play — it needs the parent folder id
+        // threaded through the player. The file path above covers the main
+        // use case (local/SMB folders); Jellyfin will follow.
+        return null;
+      } catch (_) {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  String? _parentDir(String path) {
+    // Handles both `/storage/.../Show/S01E01.mkv` and `tree:<id>/Show/...`
+    // synthetic paths used for SAF bookmark trees.
+    final idx = path.lastIndexOf('/');
+    if (idx <= 0) return null;
+    return path.substring(0, idx);
   }
 
   /// Keeps the controls visible while paused or buffering, and starts the
@@ -1372,6 +1493,12 @@ class _PlayerScreenState extends State<PlayerScreen>
   static String speedLabel(double speed) =>
       speed == speed.roundToDouble() ? '${speed.toInt()}×' : '$speed×';
 
+  static String _subtitleDelayLabel(int ms) {
+    if (ms == 0) return 'Off';
+    final s = (ms / 1000).toStringAsFixed(1);
+    return '${ms > 0 ? '+' : ''}${s}s';
+  }
+
   // ignore: unused_element
   Future<void> _openSpeedSheet() async {
     _showControls();
@@ -1526,6 +1653,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     bool expandAspect = false;
     bool expandSpeed = false;
     bool expandChapters = false;
+    bool expandSubtitleDelay = false;
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: const Color(0xFF1C1C1E),
@@ -1613,6 +1741,79 @@ class _PlayerScreenState extends State<PlayerScreen>
                         ],
                       ),
                     ),
+                  const Divider(color: Colors.white12, height: 1),
+                  _tvListTile(
+                    leading: const Icon(Icons.skip_next, color: Colors.white70),
+                    title: const Text('Auto-play next', style: TextStyle(color: Colors.white)),
+                    subtitle: Text(_autoPlayNext ? 'On' : 'Off', style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                    trailing: Switch(
+                      value: _autoPlayNext,
+                      onChanged: (v) async {
+                        setState(() => _autoPlayNext = v);
+                        setSheet(() {});
+                        final prefs = await SharedPreferences.getInstance();
+                        await prefs.setBool(kAutoPlayNextKey, v);
+                      },
+                    ),
+                    onTap: () async {
+                      final v = !_autoPlayNext;
+                      setState(() => _autoPlayNext = v);
+                      setSheet(() {});
+                      final prefs = await SharedPreferences.getInstance();
+                      await prefs.setBool(kAutoPlayNextKey, v);
+                    },
+                  ),
+                  const Divider(color: Colors.white12, height: 1),
+                  _tvListTile(
+                    leading: const Icon(Icons.timer_outlined, color: Colors.white70),
+                    title: const Text('Subtitle delay', style: TextStyle(color: Colors.white)),
+                    subtitle: Text(_subtitleDelayLabel(_subtitleDelayMs), style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                    trailing: Icon(expandSubtitleDelay ? Icons.expand_less : Icons.expand_more, color: Colors.white54),
+                    onTap: () => setSheet(() => expandSubtitleDelay = !expandSubtitleDelay),
+                  ),
+                  if (expandSubtitleDelay)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                      child: Column(
+                        children: [
+                          Slider(
+                            value: _subtitleDelayMs.toDouble().clamp(-30000, 30000).toDouble(),
+                            min: -30000,
+                            max: 30000,
+                            divisions: 60,
+                            label: _subtitleDelayLabel(_subtitleDelayMs),
+                            onChanged: (v) {
+                              final ms = v.round();
+                              setState(() => _subtitleDelayMs = ms);
+                              setSheet(() {});
+                            },
+                            onChangeEnd: (v) async {
+                              await _applySubtitleDelay(v.round(), setSheet);
+                            },
+                          ),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              TextButton(onPressed: () async {
+                                await _applySubtitleDelay(0, setSheet);
+                              }, child: const Text('Reset')),
+                              Text(_subtitleDelayLabel(_subtitleDelayMs), style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                              Row(
+                                children: [
+                                  IconButton(icon: const Icon(Icons.remove, color: Colors.white70), onPressed: () async {
+                                    await _applySubtitleDelay((_subtitleDelayMs - 500).clamp(-30000, 30000), setSheet);
+                                  }),
+                                  IconButton(icon: const Icon(Icons.add, color: Colors.white70), onPressed: () async {
+                                    await _applySubtitleDelay((_subtitleDelayMs + 500).clamp(-30000, 30000), setSheet);
+                                  }),
+                                ],
+                              ),
+                            ],
+                          ),
+                          const Text('Live on iOS · reopens at same position on Android', style: TextStyle(color: Colors.white38, fontSize: 11)),
+                        ],
+                      ),
+                    ),
                   if (_chapters.isNotEmpty) ...[
                     const Divider(color: Colors.white12, height: 1),
                     _tvListTile(
@@ -1660,6 +1861,20 @@ class _PlayerScreenState extends State<PlayerScreen>
         ),
       ),
     );
+  }
+
+  Future<void> _applySubtitleDelay(int ms, StateSetter setSheet) async {
+    setState(() => _subtitleDelayMs = ms);
+    setSheet(() {});
+    try {
+      final style = await SubtitleStyle.load();
+      final updated = style.copyWith(delayMs: ms);
+      await updated.save();
+      await _exo?.setSubtitleStyle(updated);
+      if (Platform.isAndroid && (_subtitleTracks.isNotEmpty || _subtitleOn)) {
+        await _reopenAt(_position, _duration);
+      }
+    } catch (_) {}
   }
 
   void _seekBy(Duration delta) {

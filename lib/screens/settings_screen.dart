@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../services/auto_play_store.dart';
 import '../services/cache_cleaner.dart';
 import '../services/support_links.dart';
 import '../utils/tv_helper.dart';
@@ -24,6 +25,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _cleared = false;
   bool _passthrough = false;
   bool _swipeGestures = true;
+  bool _autoPlayNext = false;
 
   @override
   void initState() {
@@ -31,6 +33,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _refreshDiskSize();
     _loadPassthrough();
     _loadSwipeGestures();
+    _loadAutoPlayNext();
   }
 
   Future<void> _loadPassthrough() async {
@@ -42,6 +45,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       final enabled = await areSwipeGesturesEnabled();
       if (mounted) setState(() => _swipeGestures = enabled);
+    } catch (_) {}
+  }
+
+  Future<void> _loadAutoPlayNext() async {
+    try {
+      final enabled = await isAutoPlayNextEnabled();
+      if (mounted) setState(() => _autoPlayNext = enabled);
     } catch (_) {}
   }
 
@@ -197,6 +207,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   final prefs = await SharedPreferences.getInstance();
                   await prefs.setBool(kSwipeGesturesKey, value);
                   if (mounted) setState(() => _swipeGestures = value);
+                },
+              ),
+              SwitchListTile(
+                secondary: const Icon(Icons.skip_next),
+                title: const Text('Auto-play next episode'),
+                subtitle: const Text('Play the next episode when one ends'),
+                value: _autoPlayNext,
+                onChanged: (value) async {
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.setBool(kAutoPlayNextKey, value);
+                  if (mounted) setState(() => _autoPlayNext = value);
                 },
               ),
               ListTile(

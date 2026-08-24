@@ -322,45 +322,103 @@ class _FolderScreenState extends State<FolderScreen> {
       );
     }
     final entries = _currentEntries;
+    if (entries.isEmpty) {
+      return Column(
+        children: [
+          if (_atRoot) _header(context),
+          const Expanded(child: Center(child: Text('No videos or folders here'))),
+        ],
+      );
+    }
+    // Separate folders from playable videos so seasons group only videos.
+    final folders = <Object>[];
+    final videos = <Object>[];
+    for (final e in entries) {
+      final isFolder = _isJellyfin ? (e as JellyfinItem).isFolder : (e as FileEntry).isDirectory;
+      (isFolder ? folders : videos).add(e);
+    }
+    // Build season groups for episode videos; movies stay ungrouped.
+    final seasonGroups = <int, List<Object>>{};
+    final movies = <Object>[];
+    for (final v in videos) {
+      if (_isEpisode(v)) {
+        final s = _seasonOf(v);
+        (seasonGroups[s] ??= []).add(v);
+      } else {
+        movies.add(v);
+      }
+    }
+    final hasSeasons = seasonGroups.isNotEmpty;
+    // Sort episodes inside each season by episode number.
+    for (final list in seasonGroups.values) {
+      list.sort((a, b) => _episodeOf(a).compareTo(_episodeOf(b)));
+    }
+    final sortedSeasons = seasonGroups.keys.toList()..sort();
+
+    Widget tileFor(Object e) {
+      if (_isJellyfin) {
+        final item = e as JellyfinItem;
+        return _JellyfinFolderTile(
+          item: item,
+          tmdbMeta: item.isFolder ? null : _tmdbForJellyfin(item),
+          watched: _watchedKeys.contains(_watchedKeyForEntry(item)),
+          onToggleWatched: () => _toggleWatched(item),
+          onTap: () => _openJellyfinItem(item),
+        );
+      }
+      final fileEntry = e as FileEntry;
+      return _FolderTile(
+        entry: fileEntry,
+        tmdbMeta: fileEntry.isDirectory ? null : _tmdbFor(fileEntry),
+        watched: _watchedKeys.contains(_watchedKeyForEntry(fileEntry)),
+        onToggleWatched: () => _toggleWatched(fileEntry),
+        onTap: () => _openEntry(fileEntry),
+      );
+    }
+
     return Column(
       children: [
         if (_atRoot) _header(context),
         Expanded(
-          child: entries.isEmpty
-              ? const Center(child: Text('No videos or folders here'))
-              : ListView.builder(
-                  itemCount: entries.length,
-                  itemBuilder: (context, index) {
-                    final entry = entries[index];
-                    if (_isJellyfin) {
-                      final item = entry as JellyfinItem;
-                      return _JellyfinFolderTile(
-                        item: item,
-                        tmdbMeta: item.isFolder
-                            ? null
-                            : _tmdbForJellyfin(item),
-                        watched:
-                            _watchedKeys.contains(_watchedKeyForEntry(item)),
-                        onToggleWatched: () => _toggleWatched(item),
-                        onTap: () => _openJellyfinItem(item),
-                      );
-                    }
-                    final fileEntry = entry as FileEntry;
-                    return _FolderTile(
-                      entry: fileEntry,
-                      tmdbMeta: fileEntry.isDirectory
-                          ? null
-                          : _tmdbFor(fileEntry),
-                      watched:
-                          _watchedKeys.contains(_watchedKeyForEntry(fileEntry)),
-                      onToggleWatched: () => _toggleWatched(fileEntry),
-                      onTap: () => _openEntry(fileEntry),
-                    );
-                  },
-                ),
+          child: ListView(
+            children: [
+              for (final f in folders) tileFor(f),
+              if (hasSeasons)
+                for (final s in sortedSeasons) ...[
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                    child: Text(
+                      'Season $s',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.primary,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                  for (final v in seasonGroups[s]!) tileFor(v),
+                ],
+              for (final m in movies) tileFor(m),
+            ],
+          ),
         ),
       ],
     );
+  }
+
+  bool _isEpisode(Object e) {
+    if (_isJellyfin) return (e as JellyfinItem).type == 'Episode';
+    return ParsedFileName.parse((e as FileEntry).name).isEpisode;
+  }
+
+  int _seasonOf(Object e) {
+    if (_isJellyfin) return (e as JellyfinItem).parentIndexNumber ?? 0;
+    return ParsedFileName.parse((e as FileEntry).name).season;
+  }
+
+  int _episodeOf(Object e) {
+    if (_isJellyfin) return (e as JellyfinItem).indexNumber ?? 0;
+    return ParsedFileName.parse((e as FileEntry).name).episode;
   }
 
   /// The entries for the current mode (files or Jellyfin items), unified so

@@ -11,6 +11,17 @@ import androidx.media3.extractor.text.SubtitleParser
 import com.google.common.collect.ImmutableList
 import java.util.regex.Pattern
 
+/// Global subtitle timing offset (µs). Set from `ExoPlayerView.applySubtitleStyle`
+/// via the `delayMs` channel arg. Applied at parse time so every cue's
+/// `startTimeUs` is shifted — positive = show later, negative = earlier.
+/// Applied to every format (both our custom parsers and the delegate's) so
+/// embedded + sideloaded subtitles share the same delay. Takes effect on the
+/// next `open()` (re-open the video to see a live-changed delay).
+@UnstableApi
+object SubtitleTiming {
+    @Volatile var delayUs: Long = 0L
+}
+
 /// Media3's stock [DefaultSubtitleParserFactory] handles SubRip, SSA/ASS,
 /// WebVTT, TTML, TX3G, PGS, VobSub and DVB — but not the classic text formats
 /// SAMI (`.smi`), MicroDVD (`.sub`), MPL2 (`.mpl2`) or SubViewer (time-based
@@ -47,12 +58,41 @@ class DreamSubtitleParserFactory(
     }
 
     override fun create(format: Format): SubtitleParser {
-        return when (format.sampleMimeType) {
+        val base: SubtitleParser = when (format.sampleMimeType) {
             SubtitleFormats.MIME_SAMI -> SamiParser()
             SubtitleFormats.MIME_MICRODVD -> FrameSubParser(FrameSubParser.Mode.MICRODVD)
             SubtitleFormats.MIME_MPL2 -> FrameSubParser(FrameSubParser.Mode.MPL2)
             else -> delegate.create(format)
         }
+        return if (SubtitleTiming.delayUs == 0L) base else DelayingParser(base)
+    }
+}
+
+/// Wraps any [SubtitleParser] and shifts every emitted cue's `startTimeUs` by
+/// [SubtitleTiming.delayUs]. Positive = subtitles appear later.
+@UnstableApi
+private class DelayingParser(
+    private val delegate: SubtitleParser,
+) : SubtitleParser {
+    override fun getCueReplacementBehavior(): Int = delegate.getCueReplacementBehavior()
+    override fun reset() = delegate.reset()
+    override fun parse(
+        data: ByteArray,
+        offset: Int,
+        length: Int,
+        outputOptions: SubtitleParser.OutputOptions,
+        output: Consumer<CuesWithTiming>,
+    ) {
+        val delay = SubtitleTiming.delayUs
+        if (delay == 0L) {
+            delegate.parse(data, offset, length, outputOptions, output)
+            return
+        }
+        delegate.parse(data, offset, length, outputOptions, Consumer { cwt ->
+            // Shift the cue's presentation time; duration stays the same.
+            val shifted = CuesWithTiming(cwt.cues, cwt.startTimeUs + delay, cwt.durationUs)
+            output.accept(shifted)
+        })
     }
 }
 
