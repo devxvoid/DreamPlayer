@@ -2463,17 +2463,10 @@ class _PlayerScreenState extends State<PlayerScreen>
                           const SizedBox(height: 4),
                           Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 8),
-                            child: SingleChildScrollView(
-                              scrollDirection: Axis.horizontal,
-                              child: Row(
-                                children: [
-                                  for (final chip in chips)
-                                    Padding(
-                                      padding: const EdgeInsets.only(right: 8),
-                                      child: chip,
-                                    ),
-                                ],
-                              ),
+                            child: Wrap(
+                              spacing: 8,
+                              runSpacing: 4,
+                              children: chips,
                             ),
                           ),
                         ],
