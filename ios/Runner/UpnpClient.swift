@@ -146,7 +146,7 @@ final class UpnpClient: NSObject {
                     }
                     if n <= 0 { break }
                     let resp = String(bytes: buf[0..<n], encoding: .utf8) ?? ""
-                    if let loc = headerValue(resp, name: "LOCATION") ?? headerValue(resp, name: "Location") {
+                    if let loc = Self.headerValue(resp, name: "LOCATION") ?? Self.headerValue(resp, name: "Location") {
                         let trimmed = loc.trimmingCharacters(in: .whitespacesAndNewlines)
                         if !trimmed.isEmpty { locations.insert(trimmed) }
                     }
@@ -156,7 +156,7 @@ final class UpnpClient: NSObject {
         }
     }
 
-    private func headerValue(_ resp: String, name: String) -> String? {
+    private static func headerValue(_ resp: String, name: String) -> String? {
         for line in resp.components(separatedBy: "\r\n") {
             guard let idx = line.firstIndex(of: ":") else { continue }
             let k = String(line[..<idx]).trimmingCharacters(in: .whitespaces)
