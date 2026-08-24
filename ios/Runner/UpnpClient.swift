@@ -676,7 +676,10 @@ private final class DidlParser: NSObject, XMLParserDelegate {
             let isVideo = isVideoCandidate()
             if !isVideo { return }
             let name = currentTitle ?? URL(string: url)?.lastPathComponent ?? id
-            entries.append(["name": name, "id": id, "isDirectory": false, "url": url, "size": currentResSize])
+            // DLNA.ORG_CI=1 → server-side transcode on demand (Jellyfin does
+            // this for items with external subtitles → lossy H.264 TS).
+            let transcoded = currentProtocolInfo?.range(of: "DLNA.ORG_CI=1", options: .caseInsensitive) != nil
+            entries.append(["name": name, "id": id, "isDirectory": false, "url": url, "size": currentResSize, "transcoded": transcoded])
         }
     }
 

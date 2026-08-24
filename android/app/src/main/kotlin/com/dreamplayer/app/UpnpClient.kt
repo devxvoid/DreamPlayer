@@ -335,6 +335,10 @@ class UpnpClient(private val context: Context) {
                             "url" to url,
                             "size" to currentResSize,
                             "duration" to currentResDuration,
+                            // DLNA.ORG_CI=1 → the server will TRANSCODE this item
+                            // on demand (e.g. Jellyfin downgrades items with
+                            // external subtitles to a lossy H.264 TS stream).
+                            "transcoded" to (currentProtocolInfo?.contains("DLNA.ORG_CI=1", ignoreCase = true) == true),
                         ),
                     )
                 }

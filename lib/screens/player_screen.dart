@@ -390,6 +390,9 @@ class _PlayerScreenState extends State<PlayerScreen>
       // Spinner shows while HLS buffers; keep _error null so the platform
       // view (and its player) survives the source swap.
       _buffering = true;
+      // Marks the session as transcoded: the "Transcoding" badge shows and
+      // dispose stops the server-side job (previously never set → leak).
+      _transcodeActive = true;
     });
     debugPrint(
       'jellyfin: switching to server transcode at ${pos.inMilliseconds}ms '
@@ -2065,6 +2068,8 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   Color get _swColor => const Color(0xFFFFA726);
 
+  Color get _transcodeColor => const Color(0xFFE57373);
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -2133,7 +2138,24 @@ class _PlayerScreenState extends State<PlayerScreen>
             ),
           )
         : null;
-    final chips = [hdrChip, ?videoChip, ?audioChip, ?resolutionChip, ?decoderChip];
+    // Server-side transcode badge: Jellyfin HLS fallback engaged, a DLNA
+    // stream the server declared CI=1 (transcoded), or any master.m3u8 URI.
+    final transcodeChip = (_transcodeActive ||
+            _current.isTranscoded ||
+            JellyfinClient.isTranscodeUri(_current.uri ?? ''))
+        ? Tooltip(
+            message: 'Server is re-encoding this file — quality may be reduced',
+            child: FormatChip(label: 'Transcoding', color: _transcodeColor),
+          )
+        : null;
+    final chips = [
+      hdrChip,
+      ?videoChip,
+      ?audioChip,
+      ?resolutionChip,
+      ?decoderChip,
+      ?transcodeChip,
+    ];
 
     // IMPORTANT: keep the widget-tree shape stable across casting state.
     // The platform view must ALWAYS be mounted at the same slot — swapping

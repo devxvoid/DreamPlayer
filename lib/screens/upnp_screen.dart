@@ -152,6 +152,8 @@ class _UpnpScreenState extends State<UpnpScreen> {
       resumeKey: key,
       duration: Duration.zero,
       sizeBytes: entry.size,
+      // Server declared DLNA.ORG_CI=1 — this URL is a live transcode.
+      isTranscoded: entry.transcoded,
     );
     if (!mounted) return;
     Navigator.of(context).push(

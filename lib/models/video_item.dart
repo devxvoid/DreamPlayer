@@ -99,6 +99,7 @@ class VideoItem {
     this.jellyfinItemId,
     this.externalSubtitles = const [],
     this.chapters = const [],
+    this.isTranscoded = false,
   });
 
   final String id;
@@ -136,6 +137,10 @@ class VideoItem {
   /// Chapters from the container (MKV) or the server (Jellyfin). Empty when
   /// the source has none. Fertilized on next open for resume keys etc.
   final List<VideoChapter> chapters;
+
+  /// The source is a server-side transcode (Jellyfin HLS fallback, DLNA
+  /// `CI=1` stream) — lossy and re-encoded, so the player shows a badge.
+  final bool isTranscoded;
 
   final Duration duration;
   final int? sizeBytes;
@@ -252,6 +257,7 @@ class VideoItem {
               externalSubtitles.map((s) => s.toJson()).toList(),
         if (chapters.isNotEmpty)
           'chapters': chapters.map((c) => c.toJson()).toList(),
+        if (isTranscoded) 'isTranscoded': true,
       };
 
   factory VideoItem.fromJson(Map<String, dynamic> json) {
@@ -278,6 +284,7 @@ class VideoItem {
               .map(VideoChapter.fromJson)
               .toList()
           : const [],
+      isTranscoded: json['isTranscoded'] == true,
     );
   }
 }

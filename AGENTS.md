@@ -557,8 +557,44 @@ verified for local/SMB/Jellyfin/WebDAV)**:
 **Phase 3 — parity + binge (pending)**: Android subtitle delay (cue-pipeline
 offset), optional auto-play-next-episode within the same folder.
 
-**Later/demand-driven**: UPnP/DLNA browse, HW/SW decoder toggle, Trakt sync,
-cloud drives. **Declined by user**: online subtitle download.
+**Later/demand-driven**: Trakt sync, cloud drives. **Declined by user**: online
+subtitle download.
+
+### UPnP/DLNA browse (DONE 2026-08, both platforms)
+
+Home **+** → "DLNA" (`lib/screens/upnp_screen.dart`, channel
+`dreamplayer/upnp`): SSDP discovery → server list → ContentDirectory browse →
+TMDB-postered file rows → details screen → player. Android `UpnpClient.kt`
+(XmlPullParser SOAP/DIDL), iOS `UpnpClient.swift` (BSD-socket SSDP with poll +
+resend, `IP_MULTICAST_TTL=2` + `IP_MULTICAST_IF=en*`; multicast entitlement in
+`Runner.entitlements`). **iOS discovery fallbacks when SSDP is gated**
+(multicast often dropped on managed Wi-Fi): saved-Jellyfin-hosts probe →
+Jellyfin UDP-7359 broadcast → direct probe `http://192.168.1.16:8096`. Parse
+layer uses the upnpx/VLC-iOS semantics — `shouldProcessNamespaces=false` +
+qualified-name suffix matching (`dc:title`/`upnp:class`) and a single-pass
+entity unescaper; Foundation's namespace processing silently yielded zero
+entries on iPad. On-screen Diagnostics box (server-list AND browser empty
+states) via `getDiagnostics`.
+
+- **Jellyfin DLNA transcode trap (2026-08, the big one)**: Jellyfin refuses
+  direct-play for items carrying external subtitles (default DLNA profile has
+  no subtitle delivery) and serves a LIVE TRANSCODE instead — HTTP 200 chunked,
+  `video/mp2t`, `DLNA.ORG_CI=1`, HEVC→H.264 TS, `Accept-Ranges: none`. Both
+  engines choke (Android `parsing_container_unsupported`, iOS "source has no
+  audio stream"), it is unseekable, and it strips DV/HDR. Verified against the
+  real NAS: sibling without sidecars = instant `stream.mkv` 206; episode with
+  `.ass/.srt` = `stream.ts` re-encode. Fix: `JellyfinClient.upgradeDlnaUrl()`
+  matches `/dlna/(videos|audios)/<id>/` res URLs against saved Jellyfin servers
+  (origin match) and rebuilds the `VideoItem` through `getItem`+`videoItem` —
+  original-bytes direct play + sidecar subs as tracks + chapters + stable
+  resume key. Non-Jellyfin DLNA URLs play raw as before.
+- **Transcode badge**: red "Transcoding" chip in the player top bar whenever
+  playback is server-transcoded — Jellyfin HLS fallback engaged
+  (`_transcodeActive`, which also now actually gets SET, fixing the leak where
+  the server-side encode job was never stopped on dispose), DLNA item whose
+  `protocolInfo` carries `CI=1` (`UpnpEntry.transcoded`, emitted by both native
+  parsers), or a `master.m3u8` URI. `VideoItem.isTranscoded` persists through
+  JSON.
 
 ### Library (user-added folders)
 

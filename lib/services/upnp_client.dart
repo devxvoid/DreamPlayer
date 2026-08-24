@@ -34,6 +34,7 @@ class UpnpEntry {
     this.url,
     this.size = 0,
     this.duration,
+    this.transcoded = false,
   });
 
   final String name;
@@ -43,6 +44,11 @@ class UpnpEntry {
   final int size;
   final String? duration;
 
+  /// The server declared `DLNA.ORG_CI=1` — playing this URL triggers a
+  /// server-side transcode (Jellyfin does it for items with external
+  /// subtitles: lossy HEVC→H.264 TS, unseekable, HDR stripped).
+  final bool transcoded;
+
   factory UpnpEntry.fromMap(Map<dynamic, dynamic> m) => UpnpEntry(
         name: m['name'] as String? ?? '',
         id: m['id'] as String? ?? '',
@@ -50,6 +56,7 @@ class UpnpEntry {
         url: m['url'] as String?,
         size: m['size'] is num ? (m['size'] as num).toInt() : 0,
         duration: m['duration'] as String?,
+        transcoded: m['transcoded'] == true,
       );
 
   bool get isVideo => !isDirectory && url != null && url!.isNotEmpty;
