@@ -706,7 +706,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                     // SEI 137/144 scan upgrades them to HDR10. Scan the first
                     // ~8 MiB for HEVC SEI NALs (prefix 39 / suffix 40, ITU-T T.35
                     // B5 00 3C for HDR10+, 137/144 for static HDR10).
-                    let hdrPath = localURL.path
+                    let hdrPath = fileURL.path
                     DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                         let res = Self.scanHdrProbe(path: hdrPath)
                         if res.hdr10Plus || res.hdr10 {
