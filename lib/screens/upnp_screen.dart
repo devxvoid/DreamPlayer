@@ -20,6 +20,7 @@ class _UpnpScreenState extends State<UpnpScreen> {
   List<UpnpServer> _servers = const [];
   bool _discovering = false;
   String? _discoverError;
+  List<String> _diag = const [];
 
   // Browser state (when a server is selected)
   UpnpServer? _activeServer;
@@ -38,19 +39,24 @@ class _UpnpScreenState extends State<UpnpScreen> {
     setState(() {
       _discovering = true;
       _discoverError = null;
+      _diag = const [];
     });
     try {
       final servers = await UpnpClient.instance.discover();
+      final diag = await UpnpClient.instance.diagnostics();
       if (!mounted) return;
       setState(() {
         _servers = servers;
+        _diag = diag ?? const [];
         _discovering = false;
       });
     } on PlatformException catch (e) {
+      final diag = await UpnpClient.instance.diagnostics();
       if (!mounted) return;
       setState(() {
         _discovering = false;
         _discoverError = e.message ?? 'Discovery failed';
+        _diag = diag ?? const [];
       });
     } catch (e) {
       if (!mounted) return;
@@ -209,25 +215,39 @@ class _UpnpScreenState extends State<UpnpScreen> {
       );
     }
     if (_servers.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.cast_connected_outlined, size: 48),
-              const SizedBox(height: 12),
-              const Text('No DLNA servers found', style: TextStyle(fontWeight: FontWeight.w600)),
-              const SizedBox(height: 8),
-              Text(
-                'Make sure your NAS or PC advertises a MediaServer (minidlna, Plex DLNA, Gerbera, Kodi…). Both devices must be on the same Wi-Fi.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
+      return SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.cast_connected_outlined, size: 48),
+            const SizedBox(height: 12),
+            const Text('No DLNA servers found', style: TextStyle(fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
+            Text(
+              '1. Allow Local Network when prompted (Settings → Privacy & Security → Local Network → DreamPlayer).\n'
+              '2. iPad and the server must be on the same Wi-Fi.\n'
+              '3. Tap Discover again after granting.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 13),
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(onPressed: _discover, icon: const Icon(Icons.refresh), label: const Text('Discover again')),
+            if (_diag.isNotEmpty) ...[
+              const SizedBox(height: 20),
+              Align(alignment: Alignment.centerLeft, child: Text('Diagnostics', style: Theme.of(context).textTheme.titleSmall)),
+              const SizedBox(height: 6),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceContainerLow,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(_diag.join('\n'), style: const TextStyle(fontFamily: 'monospace', fontSize: 11)),
               ),
-              const SizedBox(height: 16),
-              FilledButton.icon(onPressed: _discover, icon: const Icon(Icons.refresh), label: const Text('Discover again')),
             ],
-          ),
+          ],
         ),
       );
     }

@@ -17,6 +17,15 @@ final class UpnpClient: NSObject {
     private var serverCache: [String: UpnpServer] = [:]
     private let cacheQueue = DispatchQueue(label: "dreamplayer.upnp.cache")
 
+    /// Last discovery diagnostics — surfaced to the Dart UI via
+    /// `getDiagnostics` so failures are visible on-device (no Mac console).
+    private static var lastDiag: [String] = []
+    private static func diag(_ line: String) {
+        NSLog("[UpnpClient] %@", line)
+        lastDiag.append(line)
+        if lastDiag.count > 80 { lastDiag.removeFirst(lastDiag.count - 80) }
+    }
+
     private struct UpnpServer {
         let id: String
         let name: String
@@ -44,6 +53,7 @@ final class UpnpClient: NSObject {
     private func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         switch call.method {
         case "discover":
+            Self.lastDiag.removeAll()
             Task.detached { [weak self] in
                 guard let self else { return }
                 do {
@@ -53,6 +63,8 @@ final class UpnpClient: NSObject {
                     self.respond(result, FlutterError(code: "upnp", message: error.localizedDescription, details: nil))
                 }
             }
+        case "getDiagnostics":
+            result(Self.lastDiag)
         case "browse":
             guard let args = call.arguments as? [String: Any],
                   let serverId = args["serverId"] as? String else {
@@ -81,11 +93,14 @@ final class UpnpClient: NSObject {
     // MARK: - Discovery (SSDP)
 
     private func discover() async throws -> [UpnpServer] {
+        Self.diag("discover: localIP=\(Self.localIPv4Address() ?? "nil")")
         let locations = try await ssdpLocations()
         var servers: [String: UpnpServer] = [:]
         for loc in locations {
             if let srv = try? await fetchDeviceInfo(location: loc), !srv.controlUrl.isEmpty {
                 servers[srv.id] = srv
+            } else {
+                Self.diag("device fetch failed for \(loc)")
             }
         }
         // iOS multicast may be blocked without the entitlement (or on a
@@ -97,13 +112,14 @@ final class UpnpClient: NSObject {
         // LAN (Rogscar-Ubuntu). This at least makes 192.168.1.16 show up
         // on iPad even when multicast is gated.
         if servers.isEmpty {
+            Self.diag("SSDP empty → Jellyfin fallback")
             for srv in await jellyfinDLNAFallback() {
                 servers[srv.id] = srv
             }
         }
         let list = Array(servers.values)
         cacheQueue.sync { serverCache = servers }
-        NSLog("[UpnpClient] discover done %lu server(s)", UInt(list.count))
+        Self.diag("discover done \(list.count) server(s)")
         return list
     }
 
@@ -119,7 +135,7 @@ final class UpnpClient: NSObject {
         if let json = UserDefaults.standard.string(forKey: key),
            let data = json.data(using: .utf8),
            let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
-            NSLog("[UpnpClient] Jellyfin fallback: %lu saved server(s)", UInt(arr.count))
+            Self.diag("Jellyfin prefs: \(arr.count) saved")
             var out: [UpnpServer] = []
             for entry in arr {
                 guard let urlStr = entry["url"] as? String, !urlStr.isEmpty,
@@ -127,40 +143,41 @@ final class UpnpClient: NSObject {
                       let host = url.host else { continue }
                 let base = "\(url.scheme ?? "http")://\(host)\(url.port.map { ":\($0)" } ?? "")"
                 if let srv = await probeJellyfinDLNA(base: base) {
-                    NSLog("[UpnpClient] Jellyfin DLNA fallback: %@ -> %@", base, srv.name)
+                    Self.diag("saved host OK \(base) → \(srv.name)")
                     out.append(srv)
+                } else {
+                    Self.diag("saved host FAIL \(base)")
                 }
             }
             if !out.isEmpty { return out }
         } else {
-            NSLog("[UpnpClient] Jellyfin fallback: no saved servers, trying 7359 broadcast")
+            Self.diag("Jellyfin prefs: none (key \(key))")
         }
         // No saved hosts or none had DLNA — discover via 7359 broadcast like
         // JellyfinDiscovery (SO_BROADCAST to 255.255.255.255:7359, no multicast
         // entitlement needed). The host at 192.168.1.16 answers with
         // {"Address":"192.168.1.16:8096","Name":"Rogscar-Ubuntu",...}
         let addrs = jellyfin7359Broadcast()
-        NSLog("[UpnpClient] Jellyfin 7359 found %lu addr(s)", UInt(addrs.count))
+        Self.diag("7359 broadcast: \(addrs.count) addr(s)")
         var out: [UpnpServer] = []
         for addr in addrs {
             // addr is "192.168.1.16:8096" or "192.168.1.16"
             let hostPort = addr.contains(":") ? addr : "\(addr):8096"
             let base = "http://\(hostPort)"
             if let srv = await probeJellyfinDLNA(base: base) {
-                NSLog("[UpnpClient] Jellyfin 7359 DLNA: %@ -> %@", base, srv.name)
+                Self.diag("7359 host OK \(base) → \(srv.name)")
                 out.append(srv)
             }
         }
         // Last resort: directly probe this LAN's known Jellyfin host
         // (covers the 7359 UDP being blocked by UFW without 7359/udp allow).
         if out.isEmpty {
-            let directBases = ["http://192.168.1.16:8096"]
-            for base in directBases {
-                if let srv = await probeJellyfinDLNA(base: base) {
-                    NSLog("[UpnpClient] direct probe fallback: %@ -> %@", base, srv.name)
-                    out.append(srv)
-                    break
-                }
+            Self.diag("direct probe http://192.168.1.16:8096 …")
+            if let srv = await probeJellyfinDLNA(base: "http://192.168.1.16:8096") {
+                Self.diag("direct probe OK → \(srv.name)")
+                out.append(srv)
+            } else {
+                Self.diag("direct probe FAILED (LAN blocked? Local Network denied?)")
             }
         }
         return out
@@ -260,16 +277,20 @@ final class UpnpClient: NSObject {
                     var mif = in_addr()
                     inet_pton(AF_INET, localIP, &mif)
                     setsockopt(fd, IPPROTO_IP, IP_MULTICAST_IF, &mif, socklen_t(MemoryLayout<in_addr>.size))
-                    NSLog("[UpnpClient] local IP %@, multicast IF set", localIP)
+                    Self.diag("SSDP socket up, IF \(localIP), TTL 2")
+                } else {
+                    Self.diag("SSDP: no en* IPv4 (Wi-Fi off?)")
                 }
 
                 let msg = Data("M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 3\r\nST: urn:schemas-upnp-org:device:MediaServer:1\r\nUSER-AGENT: DreamPlayer/1.0 UPnP/1.0\r\n\r\n".utf8)
                 guard let dest = Self.sockaddrInet(target: "239.255.255.250", port: 1900) else {
+                    Self.diag("sockaddrInet failed")
                     cont.resume(returning: locations); return
                 }
 
                 let deadline = Date().addingTimeInterval(4.0)
-                NSLog("[UpnpClient] SSDP M-SEARCH to 239.255.255.250:1900 (ST MediaServer:1)")
+                var packets = 0
+                var sendErrno = 0
                 // Send inside the deadline loop (like JellyfinDiscovery) so
                 // lossy Wi-Fi still gets a probe each second, and use poll()
                 // with 1 s timeout instead of blocking SO_RCVTIMEO.
@@ -278,8 +299,13 @@ final class UpnpClient: NSObject {
                     withUnsafePointer(to: dest) { addrPtr in
                         let sockAddr = addrPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { $0 }
                         msg.withUnsafeBytes { msgPtr in
-                            _ = sendto(fd, msgPtr.baseAddress, msg.count, 0, sockAddr, socklen_t(MemoryLayout<sockaddr_in>.size))
+                            let r = sendto(fd, msgPtr.baseAddress, msg.count, 0, sockAddr, socklen_t(MemoryLayout<sockaddr_in>.size))
+                            if r < 0 { sendErrno = Int(errno) }
                         }
+                    }
+                    if sendErrno != 0 {
+                        Self.diag("sendto errno=\(sendErrno) (Local Network denied?)")
+                        break
                     }
                     var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
                     // 1 s poll so we stay responsive to deadline and can resend
@@ -295,12 +321,13 @@ final class UpnpClient: NSObject {
                             }
                         }
                         if n > 0 {
+                            packets += 1
                             let resp = String(bytes: buf[0..<n], encoding: .utf8) ?? ""
                             if let loc = Self.headerValue(resp, name: "LOCATION") ?? Self.headerValue(resp, name: "Location") {
                                 let trimmed = loc.trimmingCharacters(in: .whitespacesAndNewlines)
                                 if !trimmed.isEmpty {
                                     locations.insert(trimmed)
-                                    NSLog("[UpnpClient] LOCATION %@", trimmed)
+                                    Self.diag("SSDP reply #\(packets): \(trimmed)")
                                 }
                             }
                             // Drain any additional waiting packets without extra poll
@@ -330,7 +357,7 @@ final class UpnpClient: NSObject {
                         }
                     }
                 }
-                NSLog("[UpnpClient] SSDP done %lu location(s)", UInt(locations.count))
+                Self.diag("SSDP done: \(packets) packet(s), \(locations.count) location(s)")
                 cont.resume(returning: locations)
             }
         }

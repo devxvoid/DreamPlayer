@@ -79,4 +79,16 @@ class UpnpClient {
     if (raw == null) return const [];
     return raw.map((e) => UpnpEntry.fromMap(e as Map<dynamic, dynamic>)).toList();
   }
+
+  /// Last discovery diagnostics from the native side (iOS only; null when
+  /// unsupported). Shown in the empty state so on-device failures are
+  /// visible without a Mac console.
+  Future<List<String>?> diagnostics() async {
+    try {
+      final raw = await _upnpChannel.invokeMethod<List<dynamic>>('getDiagnostics');
+      return raw?.map((e) => e.toString()).toList();
+    } catch (_) {
+      return null;
+    }
+  }
 }
