@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/video_item.dart';
+import '../services/jellyfin_client.dart';
 import '../services/tmdb_client.dart';
 import '../services/upnp_client.dart';
 import '../utils/tv_helper.dart';
@@ -124,7 +125,7 @@ class _UpnpScreenState extends State<UpnpScreen> {
     return 'upnp:$serverId/${entry.id}';
   }
 
-  void _onEntryTap(UpnpEntry entry) {
+  Future<void> _onEntryTap(UpnpEntry entry) async {
     final server = _activeServer;
     if (server == null) return;
     if (entry.isDirectory) {
@@ -136,7 +137,15 @@ class _UpnpScreenState extends State<UpnpScreen> {
     }
     if (entry.url == null || entry.url!.isEmpty) return;
     final key = _identityKey(entry);
-    final video = VideoItem(
+    // Jellyfin DLNA servers transcode items with external subtitles to a
+    // lossy unseekable H.264 TS stream (kills HDR). If this URL is one of
+    // those and the host is a saved Jellyfin server, play direct instead.
+    VideoItem? video = await JellyfinClient().upgradeDlnaUrl(
+      url: entry.url!,
+      title: entry.name,
+      sizeBytes: entry.size,
+    );
+    video ??= VideoItem(
       id: key,
       title: entry.name,
       uri: entry.url!,
@@ -144,8 +153,9 @@ class _UpnpScreenState extends State<UpnpScreen> {
       duration: Duration.zero,
       sizeBytes: entry.size,
     );
+    if (!mounted) return;
     Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => TmdDetailsScreen(video: video)),
+      MaterialPageRoute<void>(builder: (_) => TmdDetailsScreen(video: video!)),
     );
   }
 

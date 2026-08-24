@@ -645,6 +645,73 @@ class JellyfinClient {
     return _itemsFromJson(json);
   }
 
+  /// Single item by id (external subtitles + chapters included).
+  Future<JellyfinItem?> getItem(JellyfinServer server, String itemId) async {
+    if (itemId.isEmpty) return null;
+    final userId = server.userId ?? '';
+    final uri = Uri.parse('${server.url}/Users/$userId/Items/$itemId').replace(
+      queryParameters: {
+        'api_key': server.token ?? '',
+        'Fields': 'MediaSources,Width,Height,Chapters',
+      },
+    );
+    final json = await _getJson(uri.toString(), allowSelfSigned: server.allowSelfSigned);
+    return JellyfinItem.fromJson(json);
+  }
+
+  static final RegExp _dlnaStreamUrl = RegExp(
+    r'^(https?://[^/]+)/dlna/(?:videos|audios)/([0-9a-fA-F-]{32,36})/',
+  );
+
+  /// Rewrites a Jellyfin-style DLNA stream URL into the app's direct-play
+  /// path when the host matches a saved Jellyfin server. Returns null when
+  /// [url] is not a Jellyfin DLNA link or no saved server matches.
+  ///
+  /// Why: Jellyfin's DLNA endpoint refuses direct-play for items carrying
+  /// external subtitles (no subtitle delivery in its default profile) and
+  /// falls back to a live HEVC→H.264 MPEG-TS **transcode** (`CI=1`, chunked,
+  /// `Accept-Ranges: none`) — unseekable, probe-hostile on both players, and
+  /// it silently strips Dolby Vision/HDR. The saved-server path plays the
+  /// original container bytes and delivers sidecars as proper sub tracks.
+  Future<VideoItem?> upgradeDlnaUrl({
+    required String url,
+    required String title,
+    int? sizeBytes,
+  }) async {
+    final m = _dlnaStreamUrl.firstMatch(url);
+    if (m == null) return null;
+    final origin = Uri.parse(m.group(1)!).toString();
+    final itemId = m.group(2)!;
+    // Match against saved servers by origin (scheme://host:port), tolerant of
+    // a trailing slash on either side.
+    JellyfinServer? server;
+    for (final s in await loadServers()) {
+      final norm = Uri.parse(s.url).toString();
+      if (norm == origin || '$norm/' == '$origin/') {
+        server = s;
+        break;
+      }
+    }
+    if (server == null) return null;
+    final item = await getItem(server, itemId);
+    if (item == null || !item.isPlayable) return null;
+    final video = videoItem(server, item);
+    return VideoItem(
+      id: video.id,
+      title: title.isNotEmpty ? title : video.title,
+      uri: video.uri,
+      resumeKey: video.resumeKey,
+      duration: video.duration,
+      resolution: video.resolution,
+      sizeBytes: sizeBytes ?? video.sizeBytes,
+      allowSelfSigned: video.allowSelfSigned,
+      jellyfinServerId: video.jellyfinServerId,
+      jellyfinItemId: video.jellyfinItemId,
+      externalSubtitles: video.externalSubtitles,
+      chapters: video.chapters,
+    );
+  }
+
   /// Fetches the full metadata (overview, year, genres, rating, artwork URLs)
   /// for a single item — used for library folders bookmarked from the browser
   /// so the home card + details screen can show the show's real info without
