@@ -774,9 +774,6 @@ class TmdApi {
         '?api_key=$key&language=en-US&append_to_response=credits,images',
       );
       final parsed = TmdEpisode.fromJson(json);
-      debugPrint('episodeDetails: season=$seasonNumber ep=$episodeNumber '
-          'stills=${parsed.stills.length} cast=${parsed.cast.length} '
-          'guests=${parsed.guestStars.length}');
       if (parsed.episodeNumber <= 0) return null;
       // The episode endpoint's `append_to_response=images` can come back with
       // an empty stills list even when the episode has a gallery on the site —
@@ -817,8 +814,6 @@ class TmdApi {
           .map((s) => s['file_path'] as String?)
           .whereType<String>()
           .toList();
-      debugPrint('episodeGallery: season=$seasonNumber ep=$episodeNumber '
-          'stills=${paths.length}');
       return paths;
     } on TmdException {
       return const [];
@@ -1211,8 +1206,6 @@ class TmdService extends ChangeNotifier {
     // earlier run hit the empty `append_to_response=images` case, so the
     // dedicated /images gallery must be retried.
     if (existing.stills.isNotEmpty) {
-      debugPrint('episodeDetailsFor: cache hit, cast=${existing.cast.length} '
-          'stills=${existing.stills.length}');
       return existing;
     }
     final pendingKey = '$identityKey#e$seasonNumber.$episodeNumber';

@@ -708,13 +708,6 @@ class ExoPlayerView(
                 "open" -> {
                     val path = call.argument<String>("path")
                     val uri = call.argument<String>("uri")
-                    android.util.Log.d(
-                        "DreamOpen",
-                        "open path=$path uri=$uri contentType=" +
-                            (if (uri.isNullOrEmpty()) -1
-                             else androidx.media3.common.util.Util.inferContentType(
-                                 android.net.Uri.parse(uri))),
-                    )
                     val subtitleUri = call.argument<String>("subtitleUri")
                     val startMs = call.argument<Number>("startPositionMs")?.toLong() ?: 0L
                     // HTTP request headers for this media item (e.g. WebDAV
@@ -1220,11 +1213,9 @@ class ExoPlayerView(
             if (desired > 1.0f) ActivityInfo.COLOR_MODE_HDR else ActivityInfo.COLOR_MODE_DEFAULT
         if (window.colorMode != mode) {
             window.colorMode = mode
-            android.util.Log.d("DreamPlayerHDR", "setColorMode($mode)")
         }
         if (desired != hdrHeadroomSet) {
             window.setDesiredHdrHeadroom(desired)
-            android.util.Log.d("DreamPlayerHDR", "setDesiredHdrHeadroom($desired)")
             hdrHeadroomSet = desired
         }
         // The two-arg `SurfaceControl.Transaction.setDataSpace(SurfaceControl, Int)`
@@ -1242,10 +1233,6 @@ class ExoPlayerView(
                     else -> 0
                 }
             SurfaceControl.Transaction().setDataSpace(sc, dataSpace).apply()
-            android.util.Log.d(
-                "DreamPlayerHDR",
-                "setSurfaceDataSpace(0x${Integer.toHexString(dataSpace)})",
-            )
         }
     }
 

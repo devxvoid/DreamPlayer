@@ -703,7 +703,6 @@ class JellyfinClient {
       } catch (_) {}
     }
     if (server == null) {
-      debugPrint('dlna-upgrade: no saved server for origin $origin');
       return null;
     }
     // Metadata must never block playback: any failure falls back to the raw
@@ -711,7 +710,6 @@ class JellyfinClient {
     try {
       final item = await getItem(server, itemId);
       if (item == null || !item.isPlayable) {
-        debugPrint('dlna-upgrade: item $itemId not playable/found');
         return null;
       }
       final video = videoItem(server, item);
@@ -729,8 +727,7 @@ class JellyfinClient {
         externalSubtitles: video.externalSubtitles,
         chapters: video.chapters,
       );
-    } catch (e) {
-      debugPrint('dlna-upgrade: fetch failed ($e) — falling back to DLNA URL');
+    } catch (_) {
       return null;
     }
   }
@@ -1100,7 +1097,6 @@ class JellyfinClient {
     try {
       lockHeld = await _multicastAcquired();
       final probe = await _jellyfinProbe();
-      debugPrint('jellyfin: 7359 probe returned ${probe.length} hit(s)');
       for (final hit in probe) {
         final url = hit['address'] as String?;
         if (url == null || url.isEmpty) continue;
@@ -1263,7 +1259,6 @@ class JellyfinClient {
       return 'Timed out — is the server on and the port right?';
     }
     if (e is JellyfinException) return e.message;
-    debugPrint('jellyfin: ${e.runtimeType} $e');
     return 'Something went wrong ($e)';
   }
 }

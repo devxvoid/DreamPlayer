@@ -255,10 +255,6 @@ class _PlayerScreenState extends State<PlayerScreen>
         .map((c) => ExoChapter(title: c.title, startMs: c.startMs, endMs: c.endMs))
         .toList();
     if (_chapters.isNotEmpty && mounted) setState(() {});
-    debugPrint(
-      'DREAM_OPEN title="${video.title}" path=${video.path} uri=${video.uri} '
-      'headers=${video.httpHeaders.keys.toList()}',
-    );
     if (video.path == null && video.uri == null) {
       if (mounted) {
         setState(() => _error = 'No video source provided.');
@@ -394,10 +390,6 @@ class _PlayerScreenState extends State<PlayerScreen>
       // dispose stops the server-side job (previously never set → leak).
       _transcodeActive = true;
     });
-    debugPrint(
-      'jellyfin: switching to server transcode at ${pos.inMilliseconds}ms '
-      'uri=${fallback.uri}',
-    );
     try {
       await _exo?.open(
         '',
@@ -483,10 +475,6 @@ class _PlayerScreenState extends State<PlayerScreen>
         _retrying = true;
         final pos = _position;
         final dur = _duration;
-        debugPrint(
-          'DREAM_RETRY IO error $code, attempt $_ioRetries/$_maxIoRetries, '
-          'pos=${pos.inMilliseconds}ms',
-        );
         // Brief delay then reopen at the saved position.
         Future.delayed(const Duration(seconds: 2), () {
           if (!mounted || _retrying != true) return;
