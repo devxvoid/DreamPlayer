@@ -1784,8 +1784,6 @@ class _PlayerScreenState extends State<PlayerScreen>
                                 onTap: () async {
                                   if (m != _decoderMode) {
                                     setState(() => _decoderMode = m);
-                                    _liveDecoderName = null;
-                                    _isHwDecoder = null;
                                     setSheet(() {});
                                     await DecoderModeStore.save(m);
                                     // Live: reopen at same position so the
@@ -2113,12 +2111,25 @@ class _PlayerScreenState extends State<PlayerScreen>
             color: _infoColor,
           )
         : null;
+    // Decoder badge: always visible on Android once the first decoder
+    // has been reported — never cleared on switch so it doesn't vanish
+    // mid-reopen (the live `AnalyticsListener` updates it when the new
+    // MediaCodec inits). Label reflects the *mode* + actual HW/SW:
+    // Auto → "Auto, H/W" / "Auto, S/W", forced HW → "H/W", forced SW → "S/W".
     final decoderChip = (Platform.isAndroid && _liveDecoderName != null)
         ? Tooltip(
             message: _liveDecoderName!,
             child: FormatChip(
-              label: (_isHwDecoder ?? true) ? 'HW' : 'SW',
-              color: (_isHwDecoder ?? true) ? _hwColor : _swColor,
+              label: switch (_decoderMode) {
+                DecoderMode.auto => (_isHwDecoder ?? true) ? 'Auto, H/W' : 'Auto, S/W',
+                DecoderMode.hw => 'H/W',
+                DecoderMode.sw => 'S/W',
+              },
+              color: switch (_decoderMode) {
+                DecoderMode.hw => _hwColor,
+                DecoderMode.sw => _swColor,
+                DecoderMode.auto => (_isHwDecoder ?? true) ? _hwColor : _swColor,
+              },
             ),
           )
         : null;
