@@ -1912,77 +1912,81 @@ class _PlayerScreenState extends State<PlayerScreen>
                       ),
                     const Divider(color: Colors.white12, height: 1),
                   ],
-                  // Volume Boost
-                  _tvListTile(
-                    leading: const Icon(Icons.volume_up, color: Colors.white70),
-                    title: const Text('Volume Boost', style: TextStyle(color: Colors.white)),
-                    subtitle: Text(_audioBoost > 1.01 ? '${_audioBoost.toStringAsFixed(1)}×' : 'Off', style: const TextStyle(color: Colors.white54, fontSize: 12)),
-                    trailing: Icon(expandBoost ? Icons.expand_less : Icons.expand_more, color: Colors.white54),
-                    onTap: () => setSheet(() => expandBoost = !expandBoost),
-                  ),
-                  if (expandBoost)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                      child: Column(
-                        children: [
-                          Slider(
-                            value: _audioBoost.clamp(1.0, 3.0),
-                            min: 1.0,
-                            max: 3.0,
-                            divisions: 20,
-                            label: '${_audioBoost.toStringAsFixed(1)}×',
-                            onChanged: (v) {
-                              final b = double.parse(v.toStringAsFixed(1));
-                              setState(() => _audioBoost = b);
-                              setSheet(() {});
-                            },
-                            onChangeEnd: (v) async {
-                              final b = double.parse(v.toStringAsFixed(1));
-                              setState(() => _audioBoost = b);
-                              _exo?.setAudioBoost(b);
-                              await PlaybackBoostStore.save(b);
-                            },
-                          ),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              TextButton(onPressed: () async {
-                                setState(() => _audioBoost = 1.0);
-                                setSheet(() {});
-                                _exo?.setAudioBoost(1.0);
-                                await PlaybackBoostStore.save(1.0);
-                              }, child: const Text('Reset')),
-                              Text('${_audioBoost.toStringAsFixed(1)}×', style: const TextStyle(color: Colors.white70, fontSize: 12)),
-                              const SizedBox(width: 48),
-                            ],
-                          ),
-                          const Text('LoudnessEnhancer (0–1500 mB)', style: TextStyle(color: Colors.white38, fontSize: 11)),
-                        ],
-                      ),
+                  // Volume Boost + Night Mode are Android-only (Media3
+                  // LoudnessEnhancer) — AVPlayer caps volume at 1.0 and has
+                  // no DRC, so the toggles would be cosmetic no-ops on iOS.
+                  if (defaultTargetPlatform == TargetPlatform.android) ...[
+                    _tvListTile(
+                      leading: const Icon(Icons.volume_up, color: Colors.white70),
+                      title: const Text('Volume Boost', style: TextStyle(color: Colors.white)),
+                      subtitle: Text(_audioBoost > 1.01 ? '${_audioBoost.toStringAsFixed(1)}×' : 'Off', style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                      trailing: Icon(expandBoost ? Icons.expand_less : Icons.expand_more, color: Colors.white54),
+                      onTap: () => setSheet(() => expandBoost = !expandBoost),
                     ),
-                  const Divider(color: Colors.white12, height: 1),
-                  _tvListTile(
-                    leading: const Icon(Icons.nights_stay, color: Colors.white70),
-                    title: const Text('Night Mode', style: TextStyle(color: Colors.white)),
-                    subtitle: Text(_nightMode ? 'On — compressed dynamic range' : 'Off', style: const TextStyle(color: Colors.white54, fontSize: 12)),
-                    trailing: Switch(
-                      value: _nightMode,
-                      onChanged: (v) async {
+                    if (expandBoost)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                        child: Column(
+                          children: [
+                            Slider(
+                              value: _audioBoost.clamp(1.0, 3.0),
+                              min: 1.0,
+                              max: 3.0,
+                              divisions: 20,
+                              label: '${_audioBoost.toStringAsFixed(1)}×',
+                              onChanged: (v) {
+                                final b = double.parse(v.toStringAsFixed(1));
+                                setState(() => _audioBoost = b);
+                                setSheet(() {});
+                              },
+                              onChangeEnd: (v) async {
+                                final b = double.parse(v.toStringAsFixed(1));
+                                setState(() => _audioBoost = b);
+                                _exo?.setAudioBoost(b);
+                                await PlaybackBoostStore.save(b);
+                              },
+                            ),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                TextButton(onPressed: () async {
+                                  setState(() => _audioBoost = 1.0);
+                                  setSheet(() {});
+                                  _exo?.setAudioBoost(1.0);
+                                  await PlaybackBoostStore.save(1.0);
+                                }, child: const Text('Reset')),
+                                Text('${_audioBoost.toStringAsFixed(1)}×', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                                const SizedBox(width: 48),
+                              ],
+                            ),
+                            const Text('LoudnessEnhancer (0–1500 mB)', style: TextStyle(color: Colors.white38, fontSize: 11)),
+                          ],
+                        ),
+                      ),
+                    const Divider(color: Colors.white12, height: 1),
+                    _tvListTile(
+                      leading: const Icon(Icons.nights_stay, color: Colors.white70),
+                      title: const Text('Night Mode', style: TextStyle(color: Colors.white)),
+                      subtitle: Text(_nightMode ? 'On — compressed dynamic range' : 'Off', style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                      trailing: Switch(
+                        value: _nightMode,
+                        onChanged: (v) async {
+                          setState(() => _nightMode = v);
+                          setSheet(() {});
+                          _exo?.setNightMode(v);
+                          await NightModeStore.save(v);
+                        },
+                      ),
+                      onTap: () async {
+                        final v = !_nightMode;
                         setState(() => _nightMode = v);
                         setSheet(() {});
                         _exo?.setNightMode(v);
                         await NightModeStore.save(v);
                       },
                     ),
-                    onTap: () async {
-                      final v = !_nightMode;
-                      setState(() => _nightMode = v);
-                      setSheet(() {});
-                      _exo?.setNightMode(v);
-                      await NightModeStore.save(v);
-                    },
-                  ),
-                  const Divider(color: Colors.white12, height: 1),
+                    const Divider(color: Colors.white12, height: 1),
+                  ],
                   _tvListTile(
                     leading: const Icon(Icons.skip_next, color: Colors.white70),
                     title: const Text('Auto-play next', style: TextStyle(color: Colors.white)),

@@ -280,10 +280,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   );
                 },
               ),
-              TvTile(
-                leading: const Icon(Icons.volume_up),
-                title: const Text('Volume Boost'),
-                subtitle: Text(_audioBoost > 1.01 ? '${_audioBoost.toStringAsFixed(1)}× (LoudnessEnhancer)' : 'Off — 1.0×'),
+              // Volume Boost + Night Mode need Media3's LoudnessEnhancer
+              // (Android only) — AVPlayer caps volume at 1.0 and exposes no
+              // DRC, so showing these on iOS would be cosmetic no-ops.
+              if (defaultTargetPlatform == TargetPlatform.android) ...[
+                TvTile(
+                  leading: const Icon(Icons.volume_up),
+                  title: const Text('Volume Boost'),
+                  subtitle: Text(_audioBoost > 1.01 ? '${_audioBoost.toStringAsFixed(1)}× (LoudnessEnhancer)' : 'Off — 1.0×'),
                 onTap: () async {
                   double temp = _audioBoost;
                   final picked = await showDialog<double>(
@@ -328,6 +332,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   if (mounted) setState(() => _nightMode = value);
                 },
               ),
+              ],
               if (defaultTargetPlatform == TargetPlatform.android)
                 TvTile(
                   leading: const Icon(Icons.memory),
