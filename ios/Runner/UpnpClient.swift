@@ -88,9 +88,70 @@ final class UpnpClient: NSObject {
                 servers[srv.id] = srv
             }
         }
+        // iOS multicast may be blocked without the entitlement (or on a
+        // simulator where the 239.255.255.250 route is missing). If SSDP
+        // found nothing, synthesize a DLNA entry from any saved Jellyfin
+        // server — Jellyfin's DLNA publisher is at
+        // http://<host>:8096/dlna/<uuid>/description.xml (uuid from
+        // /System/Info/Public) and is the DLNA service running on this
+        // LAN (Rogscar-Ubuntu). This at least makes 192.168.1.16 show up
+        // on iPad even when multicast is gated.
+        if servers.isEmpty {
+            for srv in await jellyfinDLNAFallback() {
+                servers[srv.id] = srv
+            }
+        }
         let list = Array(servers.values)
         cacheQueue.sync { serverCache = servers }
+        NSLog("[UpnpClient] discover done %lu server(s)", UInt(list.count))
         return list
+    }
+
+    /// Synthesizes DLNA servers from saved Jellyfin hosts when SSDP is
+    /// gated. Reads `flutter.dreamplayer.jellyfinServers` (SharedPreferences
+    /// JSON string) and probes each host's DLNA description.xml.
+    private func jellyfinDLNAFallback() async -> [UpnpServer] {
+        let key = "flutter.dreamplayer.jellyfinServers"
+        guard let json = UserDefaults.standard.string(forKey: key),
+              let data = json.data(using: .utf8),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            NSLog("[UpnpClient] Jellyfin fallback: no saved servers")
+            return []
+        }
+        var out: [UpnpServer] = []
+        for entry in arr {
+            guard let urlStr = entry["url"] as? String, !urlStr.isEmpty,
+                  let url = URL(string: urlStr),
+                  let host = url.host else { continue }
+            let base = "\(url.scheme ?? "http")://\(host)\(url.port.map { ":\($0)" } ?? "")"
+            // Try to get the server Id via /System/Info/Public, then build DLNA URL
+            if let srv = await probeJellyfinDLNA(base: base) {
+                NSLog("[UpnpClient] Jellyfin DLNA fallback: %@ -> %@", base, srv.name)
+                out.append(srv)
+            }
+        }
+        return out
+    }
+
+    private func probeJellyfinDLNA(base: String) async -> UpnpServer? {
+        // 1) Get Id from /System/Info/Public
+        guard let publicURL = URL(string: base + "/System/Info/Public") else { return nil }
+        var serverId: String?
+        do {
+            let (data, resp) = try await standardSession.data(from: publicURL)
+            guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let id = json["Id"] as? String, !id.isEmpty else { return nil }
+            serverId = id
+        } catch { return nil }
+        guard let id = serverId else { return nil }
+        // Jellyfin DLNA uses hyphenated UUID in URL path
+        let hyphenated: String
+        if id.count == 32 {
+            hyphenated = "\(id.prefix(8))-\(id.dropFirst(8).prefix(4))-\(id.dropFirst(12).prefix(4))-\(id.dropFirst(16).prefix(4))-\(id.dropFirst(20))"
+        } else { hyphenated = id }
+        let dlnaURL = base + "/dlna/\(hyphenated)/description.xml"
+        return try? await fetchDeviceInfo(location: dlnaURL)
     }
 
     private func ssdpLocations() async throws -> Set<String> {
