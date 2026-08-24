@@ -69,6 +69,23 @@ class FitModeStore {
   }
 }
 
+/// Persists the user's preferred playback speed (applied on every open).
+class PlaybackSpeedStore {
+  PlaybackSpeedStore._();
+
+  static const String _prefsKey = 'dreamplayer.playbackSpeed';
+
+  static Future<double> load() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getDouble(_prefsKey) ?? 1.0;
+  }
+
+  static Future<void> save(double speed) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_prefsKey, speed);
+  }
+}
+
 /// A single audio track exposed by the native ExoPlayer, for the track picker.
 @immutable
 class ExoAudioTrack {
@@ -333,6 +350,10 @@ abstract class PlaybackController {
 
   Future<void> setFitMode(VideoFitMode mode);
 
+  /// Sets the playback speed (0.25–4.0). Persists across seeks; Dart
+  /// re-applies it on every open.
+  Future<void> setSpeed(double speed);
+
   /// Sets the display brightness (0.0 = dim, 1.0 = max). Per-app; reverts on
   /// player close on both platforms. Pass -1 to restore system default.
   Future<void> setBrightness(double brightness);
@@ -474,6 +495,10 @@ class ExoPlayerController implements PlaybackController {
   @override
   Future<void> setFitMode(VideoFitMode mode) =>
       _send('setResizeMode', {'mode': mode.value});
+
+  @override
+  Future<void> setSpeed(double speed) =>
+      _send('setSpeed', {'speed': speed.clamp(0.25, 4.0)});
 
   @override
   Future<void> setBrightness(double brightness) =>

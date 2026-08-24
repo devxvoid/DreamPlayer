@@ -243,6 +243,11 @@ class ExoPlayerView(
     private val handler = Handler(Looper.getMainLooper())
     private var positionTicker: Runnable? = null
 
+    /// Display mode captured when the platform view attaches; restored on
+    /// dispose so leaving playback returns the panel to the startup-selected
+    /// rate (flutter_displaymode's high-refresh pick).
+    private var initialModeId: Int? = null
+
     /// Auto-paired sideloaded subtitle: `(uri, display label)`.
     private var currentSubtitle: Pair<String, String>? = null
     private var subtitleOn = false
@@ -263,6 +268,7 @@ class ExoPlayerView(
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             emit()
+            if (playbackState == Player.STATE_READY) matchRefreshRate()
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -272,6 +278,7 @@ class ExoPlayerView(
 
         override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
             emit()
+            matchRefreshRate()
         }
 
         override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
@@ -624,6 +631,8 @@ class ExoPlayerView(
         player.addListener(listener)
         playerView.keepScreenOn = true
 
+        initialModeId = currentDisplay()?.mode?.modeId
+
         // Fire TV fix: lift the video SurfaceView above any dim layers the
         // framework inserts between dual SurfaceViews in the same window.
         // Combined with a transparent window background (set in MainActivity),
@@ -852,6 +861,13 @@ class ExoPlayerView(
                 }
                 "setResizeMode" -> {
                     applyFitMode(call.argument<Number>("mode")?.toInt() ?: 0)
+                    result.success(null)
+                }
+                "setSpeed" -> {
+                    val speed = (call.argument<Number>("speed")?.toDouble() ?: 1.0)
+                        .toFloat()
+                        .coerceIn(0.25f, 4f)
+                    player.setPlaybackSpeed(speed)
                     result.success(null)
                 }
                 "setBrightness" -> {
@@ -1329,7 +1345,53 @@ class ExoPlayerView(
         playerView.applyForced()
     }
 
+    private fun currentDisplay(): android.view.Display? =
+        (activity.getSystemService(Context.DISPLAY_SERVICE) as?
+            android.hardware.display.DisplayManager)
+            ?.getDisplay(android.view.Display.DEFAULT_DISPLAY)
+
+    /// Switches the panel to the supported refresh mode closest to the video's
+    /// frame rate (23.976 → a 24/60 Hz mode instead of staying at the
+    /// startup-selected max), matching motion cadence to content like Just
+    /// Player / mpv do. Only fires when a candidate is meaningfully closer to
+    /// the content fps than the current mode; [restoreRefreshRate] undoes it
+    /// when the view is disposed. Resolution modes are filtered so only the
+    /// refresh rate changes.
+    private fun matchRefreshRate() {
+        val fps = player.videoFormat?.frameRate ?: return
+        if (fps <= 0f || fps.isNaN()) return
+        val display = currentDisplay() ?: return
+        val current = display.mode
+        val candidates = display.supportedModes.filter {
+            it.physicalWidth == current.physicalWidth &&
+                it.physicalHeight == current.physicalHeight
+        }
+        val best = candidates.minByOrNull { kotlin.math.abs(it.refreshRate - fps) } ?: return
+        val curErr = kotlin.math.abs(current.refreshRate - fps)
+        val bestErr = kotlin.math.abs(best.refreshRate - fps)
+        // Stay put when already within rounding distance of the content
+        // (59.94-vs-60 style) or when no candidate beats the current mode.
+        if (best.modeId == current.modeId || curErr < 0.5f || bestErr >= curErr) return
+        runCatching {
+            val params = activity.window.attributes
+            params.preferredDisplayModeId = best.modeId
+            activity.window.attributes = params
+        }
+    }
+
+    private fun restoreRefreshRate() {
+        val id = initialModeId ?: return
+        runCatching {
+            val params = activity.window.attributes
+            if (params.preferredDisplayModeId != id) {
+                params.preferredDisplayModeId = id
+                activity.window.attributes = params
+            }
+        }
+    }
+
     override fun dispose() {
+        restoreRefreshRate()
         stopPositionTicker()
         player.removeListener(listener)
         methodChannel.setMethodCallHandler(null)

@@ -364,6 +364,10 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                     let mode = (args?["mode"] as? NSNumber)?.intValue ?? 0
                     self.setResizeMode(mode)
                     result(nil)
+                case "setSpeed":
+                    let speed = Float((args?["speed"] as? NSNumber)?.doubleValue ?? 1.0)
+                    self.applySpeed(min(max(speed, 0.25), 4.0))
+                    result(nil)
                 case "setBrightness":
                     let brightness = (args?["brightness"] as? NSNumber)?.floatValue ?? 0.5
                     UIScreen.main.brightness = CGFloat(max(0, min(brightness, 1)))
@@ -604,6 +608,8 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                     engine.selectSubtitleTrack(index: pending)
                 }
                 self.pendingAutoSubtitleIndex = nil
+                // Fresh AVPlayer instance after load — re-apply the saved rate.
+                self.applySpeed(self.pendingSpeed)
                 self.emit()
             } catch {
                 self.lastError = String(describing: error)
@@ -636,6 +642,8 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             if let activeSub, engine.subtitleTracks.contains(where: { $0.id == activeSub }) {
                 engine.selectSubtitleTrack(index: activeSub)
             }
+            // Fresh AVPlayer instance after reload — re-apply the saved rate.
+            applySpeed(pendingSpeed)
         } catch {
             lastError = String(describing: error)
         }
@@ -685,6 +693,35 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     private func findPlayerLayer() -> AVPlayerLayer? {
         if let layer = container.layer as? AVPlayerLayer { return layer }
         return container.layer.sublayers?.lazy.compactMap { $0 as? AVPlayerLayer }.first
+    }
+
+    // MARK: - Playback speed
+
+    /// Last speed requested from Dart. Applied to the AVPlayerLayer's player
+    /// (native AVPlayer path — local files, DV/HDR) via `defaultRate`, so
+    /// play()/interruptions resume at the same rate; re-applied after every
+    /// session load/reload since the engine builds a fresh player. The FFmpeg
+    /// custom-source path (WebDAV) has no AVPlayer — the call is a no-op there.
+    private var pendingSpeed: Float = 1.0
+
+    private func applySpeed(_ speed: Float) {
+        pendingSpeed = speed
+        guard let player = Self.findAVPlayer(in: container) else { return }
+        player.defaultRate = speed
+        if engine?.state == .playing {
+            player.rate = speed
+        }
+    }
+
+    private static func findAVPlayer(in view: UIView) -> AVPlayer? {
+        func walk(_ layer: CALayer) -> AVPlayer? {
+            if let p = (layer as? AVPlayerLayer)?.player { return p }
+            for sub in layer.sublayers ?? [] {
+                if let p = walk(sub) { return p }
+            }
+            return nil
+        }
+        return walk(view.layer)
     }
 
     // MARK: - Track selection

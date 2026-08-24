@@ -492,6 +492,42 @@ Run DreamPlayer on an Android TV box/panel as a real 10-foot app. **Status: Phas
 
 **Rejected by user**: Picture-in-Picture (2026-08-22) — do not re-propose.
 
+### Competitor-gap roadmap, phased (2026-08)
+
+Gap analysis vs Infuse / Just Player / Nova / VLC produced a phased plan. Later
+phases start only after the previous phase is verified on-device.
+
+**Phase 1 — speed + cadence (DONE 2026-08-23, on-device verify pending)**:
+- **Playback speed**: bottom-bar button shows the live rate (`1×`, `1.5×`); the
+  sheet offers 0.25×–2× (`_openSpeedSheet`, same `_tvListTile` pattern as the
+  aspect sheet). Persisted as `dreamplayer.playbackSpeed`
+  (`PlaybackSpeedStore`), re-applied after every `open()`/`_reopenAt()`.
+  Android: Media3 `player.setPlaybackSpeed`. iOS: `AvPlayerView.applySpeed`
+  finds the engine's `AVPlayerLayer` (recursive layer walk) and sets
+  `AVPlayer.defaultRate` (=16 deployment target) + `rate` when playing;
+  re-applied after every load/reload because the engine builds a fresh player.
+  **iOS FFmpeg custom-source path (WebDAV) has no AVPlayer → no-op there**
+  until AetherEngine exposes a rate API.
+- **Refresh-rate matching** (Android, in `ExoPlayerView.kt`):
+  `matchRefreshRate()` runs on STATE_READY and onVideoSizeChanged; reads
+  `videoFormat.frameRate`, filters `display.supportedModes` to the current
+  resolution, picks the mode with the smallest |refresh − fps|, and switches
+  only when that candidate beats the current mode by more than rounding noise
+  (±0.5 Hz covers 59.94-vs-60). Sets `preferredDisplayModeId` on the window;
+  `restoreRefreshRate()` puts back the mode captured at attach (flutter_displaymode's
+  high-refresh pick) on dispose.
+
+**Phase 2 — chapters + watched state (pending)**: MKV/MP4 chapters need our own
+container parser (Media3 does not surface chapter atoms/editions) feeding a
+chapter skip button + list; watched/unwatched marks persisted per resume key,
+then group folder episodes into series pages (feeds Continue watching too).
+
+**Phase 3 — parity + binge (pending)**: Android subtitle delay (cue-pipeline
+offset), optional auto-play-next-episode within the same folder.
+
+**Later/demand-driven**: UPnP/DLNA browse, HW/SW decoder toggle, Trakt sync,
+cloud drives. **Declined by user**: online subtitle download.
+
 ### Library (user-added folders)
 
 The home library shows **only folders the user explicitly adds** — nothing is auto-scanned. **Status: implemented (2026-08; on-device verify pending).** Reference-only: videos are never imported or moved; they stay in place and play through the folder's SAF tree (`tree:<id>`), absolute path, or (for Jellyfin folders) the server API.

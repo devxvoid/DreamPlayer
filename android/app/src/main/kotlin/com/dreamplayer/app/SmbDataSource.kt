@@ -70,6 +70,15 @@ internal object BufferTuning {
                         ringCapacityBytes = 48 * 1024 * 1024
                         media3TargetBytes = 48 * 1024 * 1024
                     }
+                    else -> {
+                        // Large-RAM devices: was 96 MiB, which filled a big
+                        // chunk of the Java heap and OOM-aborted the MediaCodec
+                        // callback thread mid-playback on a 256 MB-growth-limit
+                        // device (`could not create MediaCodec.BufferInfo`).
+                        // 64 MiB still buffers ~50 s of 10 Mb/s content.
+                        ringCapacityBytes = 64 * 1024 * 1024
+                        media3TargetBytes = 64 * 1024 * 1024
+                    }
                 }
                 Log.i(
                     "BufferTuning",

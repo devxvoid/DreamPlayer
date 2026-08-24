@@ -109,6 +109,9 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   VideoFitMode _fitMode = VideoFitMode.fit;
 
+  /// Persisted playback speed, re-applied on every (re)open.
+  double _playbackSpeed = 1.0;
+
   /// Whether the app is running on a TV (set once on first build).
   bool _isTv = false;
 
@@ -190,6 +193,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       _exoSub = exo.events.listen(_onExoEvent);
       try {
         _fitMode = await FitModeStore.load();
+        _playbackSpeed = await PlaybackSpeedStore.load();
         _swipeEnabled = await areSwipeGesturesEnabled();
       } catch (_) {
         // Persistence unavailable; keep the default fit.
@@ -260,8 +264,9 @@ class _PlayerScreenState extends State<PlayerScreen>
         title: video.title,
         externalSubtitles: video.externalSubtitles,
       );
-      // Re-apply the user's persisted fit mode to the new session.
+      // Re-apply the user's persisted fit mode + speed to the new session.
       _exo?.setFitMode(_fitMode);
+      _exo?.setSpeed(_playbackSpeed);
     } catch (e) {
       if (mounted) {
         setState(() => _error = 'Playback unavailable: $e');
@@ -312,6 +317,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         externalSubtitles: video.externalSubtitles,
       );
       _exo?.setFitMode(_fitMode);
+      _exo?.setSpeed(_playbackSpeed);
       _ioRetries = 0;
     } catch (_) {
       // Reopen itself failed — the error surface will show it.
@@ -1334,6 +1340,74 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
+  /// Bottom-sheet playback-speed picker (0.25×–2×). Choice applies natively
+  /// immediately and persists for future sessions.
+  ///
+  /// Button/sheet label for a speed value ("1×", "1.5×").
+  static String speedLabel(double speed) =>
+      speed == speed.roundToDouble() ? '${speed.toInt()}×' : '$speed×';
+
+  Future<void> _openSpeedSheet() async {
+    _showControls();
+    const speeds = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
+    final choice = await showModalBottomSheet<double>(
+      context: context,
+      backgroundColor: const Color(0xFF1C1C1E),
+      builder: (sheetContext) => SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.6,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 16, 20, 4),
+                child: Text(
+                  'Playback speed',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: speeds.length,
+                  itemBuilder: (context, i) {
+                    final speed = speeds[i];
+                    final isSelected = speed == _playbackSpeed;
+                    return _tvListTile(
+                      leading: Icon(
+                        isSelected
+                            ? Icons.radio_button_checked
+                            : Icons.radio_button_off,
+                        color: isSelected ? Colors.white : Colors.white54,
+                      ),
+                      title: Text(
+                        speedLabel(speed),
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      onTap: () => Navigator.of(sheetContext).pop(speed),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (choice != null && choice != _playbackSpeed) {
+      setState(() => _playbackSpeed = choice);
+      _exo?.setSpeed(choice);
+      if (!_inTests) PlaybackSpeedStore.save(choice);
+    }
+  }
+
   void _seekBy(Duration delta) {
     _exo?.seekTo(_position + delta);
     _showControls();
@@ -1992,6 +2066,19 @@ class _PlayerScreenState extends State<PlayerScreen>
                                   _TvControlButton(
                                     onPressed: _openFitModeSheet,
                                     icon: const Icon(Icons.tune),
+                                    color: Colors.white,
+                                    onFocusChange: (_) => _showControls(),
+                                  ),
+                                  _TvControlButton(
+                                    onPressed: _openSpeedSheet,
+                                    iconSize: 15,
+                                    icon: Text(
+                                      speedLabel(_playbackSpeed),
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
                                     color: Colors.white,
                                     onFocusChange: (_) => _showControls(),
                                   ),
