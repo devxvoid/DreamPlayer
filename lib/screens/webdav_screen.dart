@@ -821,7 +821,6 @@ class _ServerFormDialogState extends State<_ServerFormDialog> {
               : const Icon(Icons.wifi_tethering, size: 16),
           label: const Text('Test'),
         ),
-        const Spacer(),
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Cancel'),
