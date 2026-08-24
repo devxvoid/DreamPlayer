@@ -717,6 +717,8 @@ class ExoPlayerView(
         val isHttp = !isLocal && !isSmb && uri != null &&
             (uri.startsWith("http://", ignoreCase = true) ||
                 uri.startsWith("https://", ignoreCase = true))
+        val isFtp = !uri.isNullOrEmpty() && (uri!!.startsWith("ftp://", ignoreCase = true) ||
+            uri.startsWith("sftp://", ignoreCase = true))
         val isHttpMkv = isHttp && (base.endsWith(".mkv") || base.endsWith(".mka") ||
             base.endsWith(".mk3d") || base.endsWith(".webm"))
         val isHttpMp4 = isHttp && (base.endsWith(".mp4") || base.endsWith(".mov") ||
@@ -730,7 +732,12 @@ class ExoPlayerView(
         val isSmbMkv = isSmb && (smbExt == "mkv" || smbExt == "mka" || smbExt == "mk3d" || smbExt == "webm")
         val isSmbMp4 = isSmb && (smbExt == "mp4" || smbExt == "mov" || smbExt == "m4v" ||
             smbExt == "m4a" || smbExt == "m4b" || smbExt == "3gp")
-        if (!isLocal && !isSmb && !isHttpMkv && !isHttpMp4) {
+        val isFtpMkv = isFtp && (base.endsWith(".mkv") || base.endsWith(".mka") ||
+            base.endsWith(".mk3d") || base.endsWith(".webm"))
+        val isFtpMp4 = isFtp && (base.endsWith(".mp4") || base.endsWith(".mov") ||
+            base.endsWith(".m4v") || base.endsWith(".m4a") || base.endsWith(".m4b") ||
+            base.endsWith(".3gp"))
+        if (!isLocal && !isSmb && !isFtp && !isHttpMkv && !isHttpMp4) {
             // Unknown remote scheme (e.g. content://) — still probe local-like files
             // when a path is available, otherwise nothing to read.
             if (!isLocalMkv && !isLocalMp4 && isLocal) {
@@ -740,10 +747,11 @@ class ExoPlayerView(
         Thread {
             try {
                 val parsed: List<MkvChapters.Chapter> = when {
-                    isLocalMp4 || isSmbMp4 || isHttpMp4 -> {
+                    isLocalMp4 || isSmbMp4 || isHttpMp4 || isFtpMp4 -> {
                         val mp4: List<Mp4Chapters.Chapter> = when {
                             isLocal -> Mp4Chapters.parse(path!!)
                             isSmb -> Mp4Chapters.parseSmb(uri!!, activity)
+                            isFtp -> Mp4Chapters.parseFtp(uri!!, activity)
                             else -> Mp4Chapters.parseHttp(uri!!, headers, allowSelfSigned)
                         }
                         if (mp4.isNotEmpty()) mp4.map { MkvChapters.Chapter(it.title, it.startMs, it.endMs) }
@@ -752,14 +760,16 @@ class ExoPlayerView(
                             when {
                                 isLocal -> MkvChapters.parse(path!!)
                                 isSmb -> MkvChapters.parseSmb(uri!!, activity)
+                                isFtp -> MkvChapters.parseFtp(uri!!, activity)
                                 else -> MkvChapters.parseHttp(uri!!, headers, allowSelfSigned)
                             }
                         }
                     }
-                    isLocalMkv || isSmbMkv || isHttpMkv -> {
+                    isLocalMkv || isSmbMkv || isHttpMkv || isFtpMkv -> {
                         val mkv = when {
                             isLocal -> MkvChapters.parse(path!!)
                             isSmb -> MkvChapters.parseSmb(uri!!, activity)
+                            isFtp -> MkvChapters.parseFtp(uri!!, activity)
                             else -> MkvChapters.parseHttp(uri!!, headers, allowSelfSigned)
                         }
                         if (mkv.isNotEmpty()) mkv
@@ -767,6 +777,7 @@ class ExoPlayerView(
                             val mp4: List<Mp4Chapters.Chapter> = when {
                                 isLocal -> Mp4Chapters.parse(path!!)
                                 isSmb -> Mp4Chapters.parseSmb(uri!!, activity)
+                                isFtp -> Mp4Chapters.parseFtp(uri!!, activity)
                                 else -> Mp4Chapters.parseHttp(uri!!, headers, allowSelfSigned)
                             }
                             mp4.map { MkvChapters.Chapter(it.title, it.startMs, it.endMs) }
@@ -782,6 +793,12 @@ class ExoPlayerView(
                         val mkv = MkvChapters.parseSmb(uri!!, activity)
                         if (mkv.isNotEmpty()) mkv
                         else Mp4Chapters.parseSmb(uri, activity).map { MkvChapters.Chapter(it.title, it.startMs, it.endMs) }
+                    }
+                    isFtp -> {
+                        // Extension-less remote file — try MKV then MP4.
+                        val mkv = MkvChapters.parseFtp(uri!!, activity)
+                        if (mkv.isNotEmpty()) mkv
+                        else Mp4Chapters.parseFtp(uri, activity).map { MkvChapters.Chapter(it.title, it.startMs, it.endMs) }
                     }
                     else -> {
                         val mkv = MkvChapters.parseHttp(uri!!, headers, allowSelfSigned)

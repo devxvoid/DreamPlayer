@@ -628,16 +628,14 @@ class _HomeScreenState extends State<HomeScreen>
               subtitle: const Text('Add a WebDAV server'),
               onTap: () => Navigator.of(context).pop('webdav'),
             ),
-            // FTP/SFTP browsing is Android-only for now — the iOS FtpClient
-            // is a persistence-only stub (no native FTP stack), so showing
-            // the entry would dead-end on an empty browser.
-            if (Platform.isAndroid)
-              ListTile(
-                leading: const Icon(Icons.folder_outlined),
-                title: const Text('FTP / SFTP'),
-                subtitle: const Text('FTP or SFTP file server'),
-                onTap: () => Navigator.of(context).pop('ftp'),
-              ),
+            // FTP/SFTP browse + playback on every platform (iOS via the
+            // Network.framework FTP client / Citadel SFTP in FtpClient.swift).
+            ListTile(
+              leading: const Icon(Icons.folder_outlined),
+              title: const Text('FTP / SFTP'),
+              subtitle: const Text('FTP or SFTP file server'),
+              onTap: () => Navigator.of(context).pop('ftp'),
+            ),
             ListTile(
               leading: const Icon(Icons.live_tv_outlined),
               title: const Text('Jellyfin'),

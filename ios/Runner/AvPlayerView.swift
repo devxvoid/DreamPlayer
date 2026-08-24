@@ -241,6 +241,9 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     private var lastSource: MediaSource?
     private var lastLoadOptions = LoadOptions()
     private var lastWebDAVInfo: (url: URL, headers: [String: String], allowSelfSigned: Bool)?
+    /// Pending/active FTP/SFTP uri (dreamplayer `ftp://<serverId>/<path>`),
+    /// rebuilt on replay/scrub-after-end like the WebDAV source.
+    private var lastFtpUri: String?
 
     /// Subtitle cue shift from the user's appearance settings (seconds).
     /// Positive = cues appear LATER than authored.
@@ -519,9 +522,19 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         var source: MediaSource?
         var localURL: URL?
         var webDAVSource: (url: URL, headers: [String: String], allowSelfSigned: Bool)?
+        var ftpUri: String?
         if let path, !path.isEmpty {
             localURL = URL(fileURLWithPath: path)
             source = .url(localURL!)
+        } else if let uri, uri.lowercased().hasPrefix("ftp://") || uri.lowercased().hasPrefix("sftp://") {
+            // FTP/SFTP playback: the engine has no FTP stack, so serve it via
+            // FtpClient's ByteRangeSource (plain-FTP REST reads or Citadel
+            // SFTP offset reads) wrapped in BufferedSMBReader read-ahead —
+            // the same shape as the WebDAV path below. Built inside the load
+            // Task so the blocking handshake never touches the main thread.
+            ftpUri = uri
+            localURL = URL(string: uri)
+            source = nil
         } else if let uri, let u = URL(string: uri),
                   (u.scheme?.lowercased() == "http" || u.scheme?.lowercased() == "https"),
                   !httpHeaders.isEmpty || allowSelfSigned {
@@ -558,6 +571,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         isDolbyVision = false
         dvProfile = nil
         lastWebDAVInfo = nil
+        lastFtpUri = nil
         chapters = []
         isHdr10PlusContent = false
         isHdr10Content = false
@@ -623,6 +637,18 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         Task { @MainActor [weak self] in
             guard let self, let engine = self.engine else { return }
             do {
+                if let pendingFtpUri = ftpUri {
+                    // Handshake (login + PASV/SFTP open) is blocking I/O —
+                    // keep it off the main actor like the WebDAV probe.
+                    let buffered = try await Task.detached(priority: .userInitiated) {
+                        try await FtpClient.makeByteRangeSource(uriText: pendingFtpUri)
+                    }.value
+                    let ext = URL(string: pendingFtpUri)?.pathExtension.lowercased() ?? ""
+                    source = .custom(
+                        buffered,
+                        formatHint: ext.isEmpty ? nil : ext
+                    )
+                }
                 if let (webURL, webHeaders, webAllowSelfSigned) = webDAVSource {
                     // Size probe is a blocking URLSession round-trip; keep it
                     // off the main actor.
@@ -646,6 +672,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                 }
                 self.lastSource = finalSource
                 self.lastWebDAVInfo = webDAVSource
+                self.lastFtpUri = ftpUri
                 let probe = try await engine.load(source: finalSource, startPosition: startPosition, options: options)
                 if let probe {
                     self.videoCodecName = probe.videoCodecName
@@ -762,9 +789,20 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     }
 
     /// Builds a fresh `MediaSource` from the stored open info.
+    /// FTP/SFTP: new login + PASV/handle → new BufferedSMBReader.
     /// WebDAV: new HTTP session → new BufferedSMBReader.
     /// Local file: reuses the file URL (always re-openable).
     private func buildFreshSource() async throws -> MediaSource? {
+        if let ftpUri = lastFtpUri {
+            let buffered = try await Task.detached(priority: .userInitiated) {
+                try await FtpClient.makeByteRangeSource(uriText: ftpUri)
+            }.value
+            let ext = URL(string: ftpUri)?.pathExtension.lowercased() ?? ""
+            return .custom(
+                buffered,
+                formatHint: ext.isEmpty ? nil : ext
+            )
+        }
         if let web = lastWebDAVInfo {
             let byteSource = try await Task.detached(priority: .userInitiated) {
                 try WebDAVClient.shared.makeByteRangeSource(

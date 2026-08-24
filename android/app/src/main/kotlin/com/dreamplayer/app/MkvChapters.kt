@@ -124,6 +124,32 @@ internal object MkvChapters {
         }
     }
 
+    /// FTP/SFTP source (`ftp://<serverId>/<path>`): seekable reads over the
+    /// saved server credentials, like the SMB path.
+    fun parseFtp(ftpUri: String, context: Context): List<Chapter> {
+        val src = FtpSeekSource.open(ftpUri, context) ?: return emptyList()
+        try {
+            return doParse(object : SeekableReader {
+                private var p = 0L
+                override fun read(): Int {
+                    val buf = ByteArray(1)
+                    return if (src.readFullyAt(p, buf)) (buf[0].toInt() and 0xFF).also { p += 1 } else -1
+                }
+                override fun readFully(buf: ByteArray) {
+                    if (!src.readFullyAt(p, buf)) throw EOFException()
+                    p += buf.size
+                }
+                override fun seek(pos: Long) { p = pos }
+                override fun pos(): Long = p
+            })
+        } catch (e: Exception) {
+            Log.i("MkvChapters", "parseFtp failed (${e.javaClass.simpleName}: ${e.message})")
+            return emptyList()
+        } finally {
+            src.close()
+        }
+    }
+
     private val standardClient: OkHttpClient by lazy { OkHttpClient() }
 
     private val permissiveClient: OkHttpClient by lazy {

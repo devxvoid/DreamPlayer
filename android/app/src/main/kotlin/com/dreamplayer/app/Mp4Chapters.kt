@@ -82,6 +82,31 @@ internal object Mp4Chapters {
         }
     }
 
+    fun parseFtp(ftpUri: String, context: Context): List<Chapter> {
+        val src = FtpSeekSource.open(ftpUri, context) ?: return emptyList()
+        try {
+            return doParse(object : SeekableReader {
+                private var p = 0L
+                override fun read(): Int {
+                    val buf = ByteArray(1)
+                    return if (src.readFullyAt(p, buf)) (buf[0].toInt() and 0xFF).also { p += 1 } else -1
+                }
+                override fun readFully(buf: ByteArray) {
+                    if (!src.readFullyAt(p, buf)) throw EOFException()
+                    p += buf.size
+                }
+                override fun seek(pos: Long) { p = pos }
+                override fun pos(): Long = p
+                override fun length(): Long = src.size
+            })
+        } catch (e: Exception) {
+            Log.i("Mp4Chapters", "parseFtp failed (${e.javaClass.simpleName}: ${e.message})")
+            return emptyList()
+        } finally {
+            src.close()
+        }
+    }
+
     private fun fetchHttpHeader(
         url: String,
         headers: Map<String, String>,

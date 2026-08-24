@@ -16,6 +16,7 @@
 		A1B2C3D50000000000000007 /* MkvChapters.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000007 /* MkvChapters.swift */; };
 		A1B2C3D50000000000000013 /* Mp4Chapters.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000013 /* Mp4Chapters.swift */; };
 		A1B2C3D50000000000000014 /* FtpClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000014 /* FtpClient.swift */; };
+		A1B2C3D50000000000000016 /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D40000000000000016 /* Citadel */; };
 		A1B2C3D50000000000000008 /* UpnpClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000008 /* UpnpClient.swift */; };
 		A1B2C3D50000000000000002 /* FileBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000002 /* FileBrowser.swift */; };
 		A1B2C3D50000000000000003 /* IntentBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000003 /* IntentBridge.swift */; };
@@ -100,6 +101,7 @@
 				78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */,
 				A1B2C3D40000000000000006 /* AetherEngine in Frameworks */,
 				A1B2C3D5000000000000000D /* AetherEngineSMB in Frameworks */,
+				A1B2C3D50000000000000016 /* Citadel in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -214,6 +216,7 @@
 				78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */,
 				A1B2C3D40000000000000005 /* AetherEngine */,
 				A1B2C3D4000000000000000C /* AetherEngineSMB */,
+				A1B2C3D40000000000000016 /* Citadel */,
 			);
 			productName = Runner;
 			productReference = 97C146EE1CF9000F007C117D /* Runner.app */;
@@ -251,6 +254,7 @@
 			packageReferences = (
 				781AD8BC2B33823900A9FFBB /* XCLocalSwiftPackageReference "Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage" */,
 				A1B2C3D40000000000000004 /* XCRemoteSwiftPackageReference "AetherEngine" */,
+				A1B2C3D40000000000000015 /* XCRemoteSwiftPackageReference "Citadel" */,
 			);
 			productRefGroup = 97C146EF1CF9000F007C117D /* Products */;
 			projectDirPath = "";
@@ -706,7 +710,15 @@
 				minimumVersion = 6.38.0;
 			};
 		};
-		/* End XCRemoteSwiftPackageReference section */
+				A1B2C3D40000000000000015 /* XCRemoteSwiftPackageReference "Citadel" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/orlandos-nl/Citadel.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.12.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */ = {
@@ -722,6 +734,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A1B2C3D40000000000000004 /* XCRemoteSwiftPackageReference "AetherEngine" */;
 			productName = AetherEngineSMB;
+		};
+		A1B2C3D40000000000000016 /* Citadel */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1B2C3D40000000000000015 /* XCRemoteSwiftPackageReference "Citadel" */;
+			productName = Citadel;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
