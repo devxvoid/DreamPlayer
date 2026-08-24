@@ -259,29 +259,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       builder: (context) => SimpleDialog(
                         title: const Text('Video decoder'),
                         children: [
-                          for (final m in DecoderMode.values)
-                            RadioListTile<DecoderMode>(
-                              value: m,
-                              groupValue: _decoderMode,
-                              title: Text(m.label),
-                              subtitle: Text(switch (m) {
-                                DecoderMode.hw => 'Force hardware decoders',
-                                DecoderMode.sw => 'Prefer software decoders',
-                                _ => 'Let the system choose (recommended)',
-                              }),
-                              onChanged: (v) => Navigator.of(context).pop(v),
+                          RadioGroup<DecoderMode>(
+                            groupValue: _decoderMode,
+                            onChanged: (v) => Navigator.of(context).pop(v),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                for (final m in DecoderMode.values)
+                                  RadioListTile<DecoderMode>(
+                                    value: m,
+                                    title: Text(m.label),
+                                    subtitle: Text(switch (m) {
+                                      DecoderMode.hw => 'Force hardware decoders',
+                                      DecoderMode.sw => 'Prefer software decoders',
+                                      _ => 'Let the system choose (recommended)',
+                                    }),
+                                  ),
+                              ],
                             ),
+                          ),
                         ],
                       ),
                     );
                     if (picked != null) {
                       await DecoderModeStore.save(picked);
                       if (mounted) setState(() => _decoderMode = picked);
-                      if (mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Takes effect on next video')),
-                        );
-                      }
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Takes effect on next video')),
+                      );
                     }
                   },
                 ),

@@ -233,7 +233,7 @@ class _UpnpScreenState extends State<UpnpScreen> {
     }
     return ListView.separated(
       itemCount: _servers.length,
-      separatorBuilder: (_, __) => const Divider(height: 1),
+      separatorBuilder: (context, _) => const Divider(height: 1),
       itemBuilder: (context, i) {
         final s = _servers[i];
         return TvTile(
@@ -319,7 +319,7 @@ class _UpnpScreenState extends State<UpnpScreen> {
                       ? const Center(child: Text('Nothing here'))
                       : ListView.separated(
                           itemCount: _entries.length,
-                          separatorBuilder: (_, __) => const Divider(height: 1),
+                          separatorBuilder: (context, _) => const Divider(height: 1),
                           itemBuilder: (context, i) {
                             final e = _entries[i];
                             final isDir = e.isDirectory;
