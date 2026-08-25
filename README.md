@@ -30,16 +30,22 @@ A cross-platform video player for **Android, iOS/iPad, and Android TV** — buil
 - All major codecs: **DTS, DTS-HD, TrueHD, E-AC3, AC3, AAC, FLAC** and more
 - Mid-playback **audio track switching** with full track names and channel info
 - Optional **audio passthrough** over HDMI for Dolby Atmos / DTS:X on compatible soundbars
+- **Spatial audio** (Android 13+) — teal chip shows when the system Spatializer virtualizes multichannel surround for your headphones/speakers; works with wired, USB, and Bluetooth output
+- **Bass Boost** — Off/Low/Medium/High session-level DSP that restores the low-end HRTF virtualization thins out (appears while Spatial audio is engaged)
+- **Volume Boost + Night Mode** — up to 3× loudness lift and dynamic-range compression (Android)
 
 ### Subtitles
 - **Embedded + sideloaded** — every subtitle file next to the video auto-attaches
 - Supports SRT, SSA/ASS, WebVTT, TTML, SAMI, MicroDVD, MPL2, SubViewer
 - Full track picker with Off option; subtitles are anchored to the video, not the screen
+- **Appearance settings** — size, color, background, outline, and sync delay with live preview (in the player's ⋮ menu)
 
 ### Network Playback
 - **SMB / NAS** — in-app SMB browser on Android; CX Explorer "Open with" handoff
 - **WebDAV** — browse and stream from WebDAV servers on both platforms
 - **Jellyfin / Emby** — browse libraries, direct-play with auto-discovery
+- **FTP / SFTP** — browse and stream from FTP servers and SSH/SFTP file hosts
+- **DLNA / UPnP** — discover and play from media servers on your LAN
 - **Files app "Open with"** on iPad with bookmarked folders
 - Encrypted credentials (Android Keystore / iOS Keychain)
 
@@ -55,10 +61,19 @@ A cross-platform video player for **Android, iOS/iPad, and Android TV** — buil
 - TV episodes labeled with Season/Episode info
 - "Fix match" to correct a wrong auto-match
 
+### Trakt Sync
+- Connect your Trakt account from Settings to sync watch history
+
 ### Player Controls
 - Play/pause, seek, ±10s, fullscreen, auto-hiding UI
 - **Swipe gestures** — swipe left side for brightness, right side for system volume (phones/tablets, togglable in Settings)
 - Aspect ratio picker: Fit, Crop, Stretch, 16:9, 4:3 (persists per video)
+- **Chapters** — MKV chapter ticks in the overflow menu, current chapter highlighted, tap to seek
+- **Playback speed** 0.25×–2× with refresh-rate matching on Android
+- **Pinch-to-zoom**, horizontal-swipe seek, double-tap-to-seek ±10 s
+- **Touch lock** — locks gestures during playback; tap once to reveal the unlock button
+- **Watched marks** — videos auto-mark as watched at the end; toggle manually per row
+- **Auto-play next episode** within the same folder (togglable)
 - Resumes playback from where you left off, even after app close or screen lock
 
 ### Android TV / Fire TV
@@ -85,7 +100,7 @@ A cross-platform video player for **Android, iOS/iPad, and Android TV** — buil
 | Platform | Minimum version |
 |---|---|
 | Android | 5.0 (API 21) |
-| iOS / iPadOS | 16.0 |
+| iOS / iPadOS | 17.0 |
 
 ## Download
 

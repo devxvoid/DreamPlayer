@@ -3,6 +3,24 @@
 All notable changes to DreamPlayer are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## 0.2.7
+
+### Added
+
+- **FTP / SFTP on iPad** — server list with inline connection test → folders → videos → play. SFTP via Citadel (SwiftNIO SSH); plain FTP is a hand-rolled client over POSIX BSD sockets (non-blocking connect + poll, 10 s timeout). Playback streams through a byte-range source wrapped in the same read-ahead buffer as WebDAV; passwords stay in the Keychain.
+- **Spatial audio chip (Android)** — teal "Spatial" chip in the player top bar when the platform Spatializer is actually engaged: enabled in system settings + available for the current routing + multichannel track confirmed spatializable (`canBeSpatialized`). Live updates when headphones plug/unplug or the system toggle flips mid-playback. API 33+; minSdk untouched.
+- **Bass Boost (Android)** — Off/Low/Medium/High `BassBoost` session effect that restores the low end HRTF virtualization thins out. Lives in the player ⋮ menu and appears only while Spatial audio is engaged; persisted and re-applied on every open.
+- **Subtitle appearance moved into the player** — size / color / background / outline / delay with live preview now live in the ⋮ menu next to the CC picker (removed from app Settings); preview backdrop replaced with a gradient placeholder.
+
+### Fixed
+
+- **HDR badges on SDR content (iOS)** — the HDR10+/HDR10 bitstream probe accepted random compressed bytes as SEI NALs (raw `B5 003C` fallback + header aliasing on H.264 MP4s), so ordinary SDR files showed HDR chips. The probe now requires real NAL structure (Annex-B start codes or chaining AVCC length prefixes), HEVC parameter-set signatures, prefix-SEI-only, and strict payload-size windows.
+- **Replay after end failed with "cancellation error" (iOS)** — the replay button's seek+play pair triggered two overlapping engine reloads; AetherEngine supersedes the first load with `CancellationError`. Reloads are now coalesced and supersession is no longer surfaced as a playback failure.
+- **Touch lock trapped the player** — after locking, taps were swallowed entirely so controls could never be revealed to unlock. A tap now reveals the bars for the Unlock button; all other transport/seek/sheet controls are gated while locked.
+- **+ menu clipped in phone landscape** — default bottom sheets cap at 9/16 screen height; the menu is now scroll-controlled so every entry is reachable.
+- **FTP playback failures (iOS)** — SIZE reply parsing now strips the status code; reads at/past EOF answer empty instead of triggering server errors; concurrent chunk fill + moov-seek no longer cross REST/RETR replies on the shared control connection (one transfer at a time).
+- **Local Network permission prompt** — iOS fires a harmless Bonjour probe at app open so fresh installs see the permission dialog immediately instead of mid-flow.
+
 ## 0.2.6
 
 ### Added
