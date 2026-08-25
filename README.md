@@ -61,9 +61,6 @@ A cross-platform video player for **Android, iOS/iPad, and Android TV** — buil
 - TV episodes labeled with Season/Episode info
 - "Fix match" to correct a wrong auto-match
 
-### Trakt Sync
-- Connect your Trakt account from Settings to sync watch history
-
 ### Player Controls
 - Play/pause, seek, ±10s, fullscreen, auto-hiding UI
 - **Swipe gestures** — swipe left side for brightness, right side for system volume (phones/tablets, togglable in Settings)

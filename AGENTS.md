@@ -510,6 +510,16 @@ Run DreamPlayer on an Android TV box/panel as a real 10-foot app. **Status: Phas
 
 ### Trakt sync upgrade — two-way service (researched 2026-08-25)
 
+**SHELVED (2026-08-25, user decision)**: Trakt now gates API application
+*creation* behind a paid Trakt VIP subscription (quiet trakt-web change;
+forum-confirmed), so there is no free way for the developer to mint the
+client id/secret the build needs. Phase 1 code stays dormant and harmless —
+the Settings section only appears when `TRAKT_CLIENT_ID`/`SECRET` are baked
+via `--dart-define` (none committed; `.env.example` documents them). If
+Trakt ever reverses the paywall (or keys are obtained another way), resume
+at phase 2. Note: end users never needed VIP for our endpoints — this only
+blocks app registration.
+
 Current state: device-code auth (Settings), push-on-completion `addToHistory`
 with TMDB ids incl. S/E (`_pushTraktHistory` in player_screen.dart),
 batch `syncWatched` + `getWatchedTmdbIds` exist in `trakt_client.dart`. No
