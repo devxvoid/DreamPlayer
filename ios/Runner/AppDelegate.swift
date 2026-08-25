@@ -1,8 +1,43 @@
 import Flutter
 import UIKit
+import Network
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
+
+  /// iOS has no API to request Local Network permission on demand — the
+  /// dialog appears once, triggered by the first local-network access.
+  /// Browsing any Bonjour service deterministically triggers that evaluation,
+  /// so we fire it as soon as the app is active instead of mid-flow (e.g.
+  /// while the user is already tapping an FTP "Test" button). The probe finds
+  /// nothing by design; it exists only to make iOS show the prompt early.
+  private var lnProbeBrowser: NWBrowser?
+
+  private func triggerLocalNetworkPrompt() {
+    guard lnProbeBrowser == nil else { return }
+    let params = NWParameters()
+    params.includePeerToPeer = true
+    let browser = NWBrowser(
+      for: .bonjour(type: "_dreamplayer-probe._tcp.", domain: "local."),
+      using: params)
+    browser.stateUpdateHandler = { [weak self] state in
+      switch state {
+      case .ready, .failed, .cancelled:
+        self?.lnProbeBrowser?.cancel()
+        self?.lnProbeBrowser = nil
+      default:
+        break
+      }
+    }
+    browser.start(queue: .main)
+    lnProbeBrowser = browser
+  }
+
+  override func applicationDidBecomeActive(_ application: UIApplication) {
+    super.applicationDidBecomeActive(application)
+    triggerLocalNetworkPrompt()
+  }
+
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?

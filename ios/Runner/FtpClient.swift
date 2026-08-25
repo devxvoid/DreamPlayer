@@ -1017,6 +1017,51 @@ final class SftpSession: @unchecked Sendable {
 
 // MARK: - ByteRangeSource for the engine
 
+/// Minimal async counting semaphore. FTP control connections allow only ONE
+/// transfer at a time — concurrent PASV/REST/RETR streams from a background
+/// chunk fill + an engine seek cross replies on the shared control socket and
+/// corrupt the session (observed on-device: two RESTs, the tail transfer won,
+/// probe died). This gates all plain-FTP reads to one in-flight RETR.
+final class AsyncSemaphore: @unchecked Sendable {
+    private var value: Int
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private let lock = NSLock()
+
+    init(value: Int) { self.value = value }
+
+    func acquire() async {
+        await withCheckedSuspension { (cont: CheckedContinuation<Void, Never>) in
+            lock.lock()
+            if value > 0 {
+                value -= 1
+                lock.unlock()
+                cont.resume()
+                return
+            }
+            waiters.append(cont)
+            lock.unlock()
+        }
+    }
+
+    func release() {
+        lock.lock()
+        if !waiters.isEmpty {
+            let next = waiters.removeFirst()
+            lock.unlock()
+            next.resume()
+            return
+        }
+        value += 1
+        lock.unlock()
+    }
+
+    func withLock<T: Sendable>(_ body: @Sendable () async throws -> T) async rethrows -> T {
+        await acquire()
+        defer { release() }
+        return try await body()
+    }
+}
+
 /// Random-access reader over FTP/SFTP for AetherEngine, mirroring
 /// `WebDAVByteRangeSource`. Wrapped in `BufferedSMBReader` by the caller.
 final class FtpByteRangeSource: ByteRangeSource, @unchecked Sendable {
@@ -1028,6 +1073,7 @@ final class FtpByteRangeSource: ByteRangeSource, @unchecked Sendable {
     // Plain-FTP mode (one control connection; sequential chunks fast-path).
     private var ftpConn: FtpControlConnection?
     private let ftpPath: String?
+    private let ftpGate = AsyncSemaphore(value: 1)
 
     private(set) var byteSize: Int64
 
@@ -1073,7 +1119,16 @@ final class FtpByteRangeSource: ByteRangeSource, @unchecked Sendable {
         guard let ftpConn, let ftpPath else {
             throw FtpError.badRequest("Source closed")
         }
-        return try await ftpConn.retrieve(path: ftpPath, offset: max(0, offset), maxLength: length)
+        do {
+            // One REST/RETR transfer at a time on the shared control
+            // connection (see AsyncSemaphore above).
+            return try await ftpGate.withLock {
+                try await ftpConn.retrieve(path: ftpPath, offset: max(0, offset), maxLength: length)
+            }
+        } catch {
+            FtpClient.logStatic("FTP read off=\(offset) len=\(length) failed: \(error)")
+            throw error
+        }
     }
 
     func close() {
