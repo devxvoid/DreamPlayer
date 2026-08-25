@@ -110,6 +110,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   int? _liveAudioChannelCount;
   bool _liveAudioPassthrough = false;
   String _liveSpatial = '';
+  int _liveBass = 0;
   String? _liveResolution;
   HdrFormat _liveHdr = HdrFormat.sdr;
   String? _liveDecoderName;
@@ -579,6 +580,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
     if (e.isHwDecoder != null) _isHwDecoder = e.isHwDecoder;
     _liveSpatial = e.spatialAudio;
+    _liveBass = e.bassBoost;
     _audioTracks = e.audioTracks;
     _selectedAudioTrackIndex = e.selectedAudioTrack;
     if (e.chapters.isNotEmpty) _chapters = e.chapters;
@@ -1783,6 +1785,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     bool expandSubtitleDelay = false;
     bool expandDecoder = false;
     bool expandBoost = false;
+    bool expandBass = false;
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: const Color(0xFF1C1C1E),
@@ -1993,6 +1996,46 @@ class _PlayerScreenState extends State<PlayerScreen>
                           ],
                         ),
                       ),
+                    // Bass Boost appears only while platform spatial audio
+                    // is actually engaged — it exists to offset the HRTF
+                    // low-end thinning of virtualized surround.
+                    if (_liveSpatial == 'on') ...[
+                      const Divider(color: Colors.white12, height: 1),
+                      _tvListTile(
+                        leading: const Icon(Icons.music_note, color: Colors.white70),
+                        title: const Text('Bass Boost', style: TextStyle(color: Colors.white)),
+                        subtitle: Text(
+                          const ['Off', 'Low', 'Medium', 'High'][_liveBass.clamp(0, 3)],
+                          style: const TextStyle(color: Colors.white54, fontSize: 12),
+                        ),
+                        trailing: Icon(expandBass ? Icons.expand_less : Icons.expand_more, color: Colors.white54),
+                        onTap: () => setSheet(() => expandBass = !expandBass),
+                      ),
+                      if (expandBass)
+                        Padding(
+                          padding: const EdgeInsets.only(left: 12),
+                          child: Column(
+                            children: [
+                              for (final level in [0, 1, 2, 3])
+                                _tvListTile(
+                                  leading: Icon(
+                                    _liveBass == level ? Icons.radio_button_checked : Icons.radio_button_off,
+                                    color: _liveBass == level ? Colors.white : Colors.white54,
+                                  ),
+                                  title: Text(
+                                    const ['Off', 'Low', 'Medium', 'High'][level],
+                                    style: const TextStyle(color: Colors.white),
+                                  ),
+                                  onTap: () {
+                                    setState(() => _liveBass = level);
+                                    setSheet(() {});
+                                    _exo?.setBassBoost(level);
+                                  },
+                                ),
+                            ],
+                          ),
+                        ),
+                    ],
                     const Divider(color: Colors.white12, height: 1),
                     _tvListTile(
                       leading: const Icon(Icons.nights_stay, color: Colors.white70),

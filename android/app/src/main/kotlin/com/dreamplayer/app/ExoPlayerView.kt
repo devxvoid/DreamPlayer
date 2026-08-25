@@ -131,6 +131,15 @@ class ExoPlayerView(
         p.getBoolean("flutter.dreamplayer.nightMode", false)
     }
 
+    // ---- Bass Boost (android.media.audiofx.BassBoost on the session) ----
+    // Exists to offset the low-end thinning that HRTF spatialization causes.
+    // 0 = off, 1 = Low, 2 = Medium, 3 = High (strength 0–1000).
+    private var bassBoostLevel: Int = run {
+        val p = activity.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+        p.getInt("flutter.dreamplayer.bassBoost", 0).coerceIn(0, 3)
+    }
+    private var bassBoostFx: android.media.audiofx.BassBoost? = null
+
     // ---- Spatial audio (Android 13+ platform Spatializer) ----
     //
     // The effect lives at the AudioFlinger level: when the user enables
@@ -246,9 +255,24 @@ class ExoPlayerView(
     private fun applyAudioEffects() {
         try { loudnessEnhancer?.release() } catch (_: Exception) {}
         loudnessEnhancer = null
-        if (audioBoost <= 1.0f && !nightModeEnabled) return
+        try { bassBoostFx?.release() } catch (_: Exception) {}
+        bassBoostFx = null
         val sessionId = player.audioSessionId
-        if (sessionId == 0 || sessionId == C.AUDIO_SESSION_ID_UNSET) return
+        val sessionOk = sessionId != 0 && sessionId != C.AUDIO_SESSION_ID_UNSET
+        // Bass Boost is independent of the loudness guard — it applies even
+        // at 1.0× boost / night mode off.
+        if (sessionOk && bassBoostLevel > 0) {
+            try {
+                val bb = android.media.audiofx.BassBoost(0, sessionId)
+                bb.setStrength(((bassBoostLevel * 333).coerceAtMost(1000)).coerceAtLeast(150).toShort())
+                bb.enabled = true
+                bassBoostFx = bb
+            } catch (e: Exception) {
+                Log.w("ExoPlayerView", "BassBoost failed", e)
+            }
+        }
+        if (audioBoost <= 1.0f && !nightModeEnabled) return
+        if (!sessionOk) return
         try {
             val enhancer = LoudnessEnhancer(sessionId)
             val gainMb = when {
@@ -1223,6 +1247,15 @@ class ExoPlayerView(
                     emit()
                     result.success(null)
                 }
+                "setBassBoost" -> {
+                    val level = (call.argument<Number>("level")?.toInt() ?: 0).coerceIn(0, 3)
+                    bassBoostLevel = level
+                    activity.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+                        .edit().putInt("flutter.dreamplayer.bassBoost", level).apply()
+                    applyAudioEffects()
+                    emit()
+                    result.success(null)
+                }
                 "setZoom" -> {
                     val scale = (call.argument<Number>("scale")?.toDouble() ?: 1.0)
                         .toFloat()
@@ -1596,6 +1629,7 @@ class ExoPlayerView(
         map["audioPassthrough"] = passthroughEnabled
         map["audioBoost"] = audioBoost
         map["nightMode"] = nightModeEnabled
+        map["bassBoost"] = bassBoostLevel
         map["spatialAudio"] = spatialStatus()
         if (chapters.isNotEmpty()) {
             map["chapters"] = chapters.map {
@@ -1740,6 +1774,8 @@ class ExoPlayerView(
         unregisterSpatialListener()
         try { loudnessEnhancer?.release() } catch (_: Exception) {}
         loudnessEnhancer = null
+        try { bassBoostFx?.release() } catch (_: Exception) {}
+        bassBoostFx = null
         player.removeListener(listener)
         methodChannel.setMethodCallHandler(null)
         eventChannel.setStreamHandler(null)

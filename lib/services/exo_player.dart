@@ -266,6 +266,7 @@ class ExoPlayerEvent {
     this.audioPassthrough = false,
     this.audioBoost = 1.0,
     this.nightMode = false,
+    this.bassBoost = 0,
     this.spatialAudio = '',
     this.chapters = const [],
     this.videoDecoderName,
@@ -330,6 +331,9 @@ class ExoPlayerEvent {
   /// or `unavailable`. Empty before the first native event (iOS).
   final String spatialAudio;
 
+  /// Bass boost level 0–3 (off/low/medium/high) from the native BassBoost.
+  final int bassBoost;
+
   /// Volume boost factor (1.0–3.0) from the native LoudnessEnhancer.
   final double audioBoost;
 
@@ -391,6 +395,7 @@ class ExoPlayerEvent {
       spatialAudio: m['spatialAudio'] as String? ?? '',
       audioBoost: m['audioBoost'] is num ? (m['audioBoost'] as num).toDouble().clamp(1.0, 3.0) : 1.0,
       nightMode: m['nightMode'] == true,
+      bassBoost: asInt(m['bassBoost'], 0),
       chapters: (m['chapters'] as List? ?? const [])
           .map((e) => ExoChapter.fromMap(e as Map<dynamic, dynamic>))
           .toList(),
@@ -465,6 +470,9 @@ abstract class PlaybackController {
 
   /// Night Mode — dynamic range compression / loudness normalisation.
   Future<void> setNightMode(bool enabled);
+
+  /// Sets the bass boost level (0 off – 3 high); Android only.
+  Future<void> setBassBoost(int level);
 
   /// Pinch-to-zoom crop: scales the video surface around its center
   /// (1.0 = fit, up to ~3.0 = zoomed in). Transient per session.
@@ -641,6 +649,10 @@ class ExoPlayerController implements PlaybackController {
   @override
   Future<void> setNightMode(bool enabled) =>
       _send('setNightMode', {'enabled': enabled});
+
+  @override
+  Future<void> setBassBoost(int level) =>
+      _send('setBassBoost', {'level': level.clamp(0, 3)});
 
   @override
   Future<void> setZoom(double scale) =>
