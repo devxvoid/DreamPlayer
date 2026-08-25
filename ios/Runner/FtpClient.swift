@@ -39,7 +39,25 @@ final class FtpClient: NSObject {
     // MARK: - Channel
 
     private func log(_ msg: String) {
+        Self.logStatic(msg)
+    }
+
+    /// Shared file+console logger (usable from static methods too).
+    static func logStatic(_ msg: String) {
         NSLog("[FTP] %@", msg)
+        // Also append to a file in Documents (exposed via UIFileSharingEnabled)
+        // so the user can read the trace from the Files app without a Mac.
+        let line = "\(Date()) \(msg)\n"
+        if let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+            let url = dir.appendingPathComponent("ftp_debug.log")
+            if let handle = try? FileHandle(forWritingTo: url) {
+                handle.seekToEndOfFile()
+                handle.write(Data(line.utf8))
+                try? handle.close()
+            } else {
+                try? Data(line.utf8).write(to: url)
+            }
+        }
     }
 
     private func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -321,6 +339,7 @@ final class FtpClient: NSObject {
     /// Builds a read-ahead-buffered `ByteRangeSource` for an
     /// `ftp://<serverId>/<abs path>` / `sftp://…` URI.
     static func makeByteRangeSource(uriText: String) async throws -> BufferedSMBReader {
+        Self.logStatic("makeByteRangeSource uri=\(uriText)")
         guard let uri = URL(string: uriText),
               let scheme = uri.scheme?.lowercased(),
               scheme == "ftp" || scheme == "sftp",
@@ -329,12 +348,15 @@ final class FtpClient: NSObject {
         }
         let remotePath = decodePercent(uri.path.isEmpty ? "/" : uri.path)
         let server = try FtpClient.shared.resolveServer(serverId)
+        Self.logStatic("makeByteRangeSource scheme=\(scheme) serverId=\(serverId) remotePath=\(remotePath) host=\(server.host):\(server.port)")
 
         if scheme == "sftp" {
             let session = try await SftpSession.connect(
                 host: server.host, port: server.port,
                 username: server.username, password: server.password)
+            Self.logStatic("makeByteRangeSource SFTP connected, opening handle...")
             let source = try await FtpByteRangeSource(sftp: session, path: remotePath)
+            Self.logStatic("makeByteRangeSource SFTP source ready byteSize=\(source.byteSize)")
             return BufferedSMBReader(source: source, ownsSource: true)
         }
 
@@ -342,6 +364,7 @@ final class FtpClient: NSObject {
         try await conn.connectAndLogin(username: server.username, password: server.password)
         try await conn.setTypeI()
         let totalSize = try await conn.fileSize(path: remotePath)
+        Self.logStatic("makeByteRangeSource FTP source ready size=\(totalSize)")
         let source = FtpByteRangeSource(ftp: conn, path: remotePath, size: totalSize)
         return BufferedSMBReader(source: source, ownsSource: true)
     }
@@ -930,10 +953,25 @@ final class FtpByteRangeSource: ByteRangeSource, @unchecked Sendable {
 
     func read(at offset: Int64, length: Int) async throws -> Data {
         if let sftpFile {
-            let buffer = try await sftpFile.read(
-                from: UInt64(max(0, offset)),
-                length: UInt32(clamping: max(1, length)))
-            return Data(buffer.readableBytesView)
+            // OpenSSH's sftp-server caps a single read at 256 KiB (MAX_READ_SIZE);
+            // a larger request is either rejected or truncated, which trips the
+            // ring-buffer's contiguous-frontier logic. Loop in 256 KiB slices so
+            // the source always returns the full requested length (except at EOF).
+            var result = Data()
+            var off = max(0, offset)
+            var remaining = length
+            while remaining > 0 {
+                let chunkLen = min(remaining, 256 * 1024)
+                let buffer = try await sftpFile.read(
+                    from: UInt64(off),
+                    length: UInt32(chunkLen))
+                let data = Data(buffer.readableBytesView)
+                if data.isEmpty { break }
+                result.append(data)
+                off += Int64(data.count)
+                remaining -= data.count
+            }
+            return result
         }
         guard let ftpConn, let ftpPath else {
             throw FtpError.badRequest("Source closed")
