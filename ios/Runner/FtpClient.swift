@@ -38,11 +38,16 @@ final class FtpClient: NSObject {
 
     // MARK: - Channel
 
+    private func log(_ msg: String) {
+        NSLog("[FTP] %@", msg)
+    }
+
     private func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         let args = call.arguments as? [String: Any]
+        log("handle \(call.method) args=\(args ?? [:])")
         switch call.method {
         case "saveServer":
-            result(saveServer(
+            let r = saveServer(
                 id: args?["id"] as? String,
                 name: args?["name"] as? String ?? "",
                 host: args?["host"] as? String ?? "",
@@ -51,9 +56,13 @@ final class FtpClient: NSObject {
                 username: args?["username"] as? String ?? "",
                 password: args?["password"] as? String ?? "",
                 isSftp: args?["isSftp"] as? Bool ?? false
-            ))
+            )
+            log("saveServer → \(r)")
+            result(r)
         case "listServers":
-            result(listServers())
+            let r = listServers()
+            log("listServers → \(r.count) servers")
+            result(r)
         case "deleteServer":
             if let id = args?["id"] as? String { deleteServer(id) }
             result(nil)
@@ -64,27 +73,33 @@ final class FtpClient: NSObject {
             let username = args?["username"] as? String ?? ""
             let password = args?["password"] as? String ?? ""
             let isSftp = args?["isSftp"] as? Bool ?? false
+            log("testConnection \(isSftp ? "SFTP" : "FTP") \(host):\(port) user=\(username) path=\(path)")
             Task {
                 do {
                     try await Self.probe(
                         host: host, port: port, path: path,
                         username: username, password: password, isSftp: isSftp)
+                    log("testConnection OK")
                     await MainActor.run { result(["ok": true]) }
                 } catch {
                     let msg = Self.friendlyError(error)
+                    log("testConnection FAILED: \(msg)")
                     await MainActor.run { result(["ok": false, "error": msg]) }
                 }
             }
         case "listDirectory":
             let id = args?["id"] as? String
             let path = args?["path"] as? String ?? "/"
+            log("listDirectory id=\(id ?? "nil") path=\(path)")
             Task {
                 do {
                     guard let id else { throw FtpError.badRequest("Missing server id") }
                     let entries = try await Self.listDirectory(serverId: id, requestedPath: path)
+                    log("listDirectory OK: \(entries.count) entries")
                     await MainActor.run { result(entries) }
                 } catch {
                     let err = FlutterError(code: "ftp", message: Self.friendlyError(error), details: nil)
+                    log("listDirectory FAILED: \(Self.friendlyError(error))")
                     await MainActor.run { result(err) }
                 }
             }
@@ -232,20 +247,29 @@ final class FtpClient: NSObject {
     // MARK: - Probe / listing (shared by channel + playback)
 
     static func probe(host: String, port: Int, path: String, username: String, password: String, isSftp: Bool) async throws {
+        NSLog("[FTP] probe host=%@ port=%d isSftp=%d", host, port, isSftp)
         if host.trimmingCharacters(in: .whitespaces).isEmpty {
             throw FtpError.badRequest("Host is required")
         }
         if isSftp {
+            NSLog("[FTP] probe SFTP connect...")
             let session = try await SftpSession.connect(
                 host: host, port: port, username: username, password: password)
             defer { Task { await session.close() } }
+            NSLog("[FTP] probe SFTP connected, checking path...")
             _ = try await session.attributes(path: normalized(path))
+            NSLog("[FTP] probe SFTP OK")
         } else {
+            NSLog("[FTP] probe FTP creating FtpControlConnection...")
             let conn = FtpControlConnection(host: host, port: port)
+            NSLog("[FTP] probe FTP calling connectAndLogin...")
             try await conn.connectAndLogin(username: username, password: password)
+            NSLog("[FTP] probe FTP logged in, setTypeI...")
             defer { Task { await conn.quit() } }
             try await conn.setTypeI()
+            NSLog("[FTP] probe FTP verifyPath...")
             try await conn.verifyPath(normalized(path))
+            NSLog("[FTP] probe FTP OK")
         }
     }
 
@@ -447,13 +471,18 @@ actor FtpControlConnection {
     struct RawEntry { let name: String; let isDir: Bool; let size: Int64 }
 
     func connectAndLogin(username: String, password: String) async throws {
+        NSLog("[FTP] connectAndLogin host=%@ port=%d user=%@", host, port, username)
         let conn = TcpConnection(host: host, port: port)
+        NSLog("[FTP] connectAndLogin calling TcpConnection.connect()...")
         try await conn.connect()
+        NSLog("[FTP] connectAndLogin TCP connected, reading greeting...")
         control = conn
         let greeting = try await reply()
+        NSLog("[FTP] connectAndLogin greeting=%d %@", greeting.code, greeting.text)
         guard greeting.code == 220 else { throw FtpError.protocolError("Unexpected server greeting") }
         try await send("USER \(username.isEmpty ? "anonymous" : username)")
         let userReply = try await reply()
+        NSLog("[FTP] connectAndLogin USER reply=%d %@", userReply.code, userReply.text)
         if userReply.code == 230 {
             loggedIn = true
             return
@@ -464,11 +493,13 @@ actor FtpControlConnection {
         }
         try await send("PASS \(password)")
         let passReply = try await reply()
+        NSLog("[FTP] connectAndLogin PASS reply=%d %@", passReply.code, passReply.text)
         guard passReply.code == 230 || passReply.code == 202 else {
             if passReply.code == 530 { throw FtpError.authFailed }
             throw FtpError.protocolError("Login rejected (\(passReply.code))")
         }
         loggedIn = true
+        NSLog("[FTP] connectAndLogin SUCCESS")
     }
 
     func quit() {
@@ -632,11 +663,13 @@ final class TcpConnection: @unchecked Sendable {
     }
 
     func connect() async throws {
-        try await withCheckedThrowingContinuation { cont in
+        NSLog("[FTP] TcpConnection.connect host=%@ port=%d", connection.endpoint.debugDescription, port)
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             queue.async { [self] in
                 connectedContinuation = cont
                 connection.stateUpdateHandler = { [weak self] state in
                     guard let self else { return }
+                    NSLog("[FTP] TcpConnection state=%@", "\(state)")
                     self.queue.async { self.handleState(state) }
                 }
                 connection.start(queue: queue)
