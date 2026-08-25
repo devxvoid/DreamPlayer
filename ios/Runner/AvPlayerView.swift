@@ -1234,46 +1234,86 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         let bytes = [UInt8](data)
         var foundPlus = false
         var found10 = false
-        // Linear scan for HEVC SEI NAL headers (39 prefix / 40 suffix). Each
-        // NAL header is 2 bytes: ((nalType <<1) & 0x7E) in the first byte.
-        for i in 0..<(bytes.count - 6) {
-            let nalType = (Int(bytes[i]) >> 1) & 0x3F
-            if nalType != 39 && nalType != 40 { continue }
-            // Parse SEI payloads starting after the 2-byte header.
-            let end = bytes.count
-            var pos = i + 2
+
+        // Strict NAL-structure scan. The old version treated every byte
+        // offset as a candidate NAL header and had a raw `B5 00 3C`
+        // fallback — both matched random compressed bytes, so ordinary SDR
+        // files showed the HDR10+ badge. Now an SEI is accepted only when
+        // the stream structure vouches for it:
+        //   Annex-B (MKV/TS):  00 00 01 start code directly before the NAL.
+        //   AVCC    (MP4/MOV): 4-byte BE length prefix whose chain walks
+        //                      cleanly to the next segment.
+        // Container chunks can split a NAL, but SEIs are tiny — missing one
+        // split NAL costs nothing; dozens more follow unsplit.
+
+        func inspectNal(start: Int, end: Int) {
+            let nalType = (Int(bytes[start]) >> 1) & 0x3F
+            guard nalType == 39 || nalType == 40 else { return }
+            var pos = start + 2
             while pos + 1 < end {
-                var payloadType = 0
-                while pos < end && bytes[pos] == 0xFF { payloadType += 255; pos += 1 }
+                var ptype = 0
+                while pos < end && bytes[pos] == 0xFF { ptype += 255; pos += 1 }
                 if pos >= end { break }
-                payloadType += Int(bytes[pos]); pos += 1
-                var payloadSize = 0
-                while pos < end && bytes[pos] == 0xFF { payloadSize += 255; pos += 1 }
+                ptype += Int(bytes[pos]); pos += 1
+                var psize = 0
+                while pos < end && bytes[pos] == 0xFF { psize += 255; pos += 1 }
                 if pos >= end { break }
-                payloadSize += Int(bytes[pos]); pos += 1
-                // T.35 HDR10+ → payloadType 4, then 0xB5 0x00 0x3C.
-                if payloadType == 4, payloadSize >= 3, pos + 3 <= end,
+                psize += Int(bytes[pos]); pos += 1
+                if pos + psize > end { break } // must fit inside this NAL
+                // T.35 HDR10+ ST 2094-40 → payloadType 4, country 0xB5,
+                // provider 0x003C.
+                if ptype == 4, psize >= 4,
                    bytes[pos] == 0xB5, bytes[pos + 1] == 0x00, bytes[pos + 2] == 0x3C {
                     foundPlus = true
+                } else if ptype == 137 || ptype == 144 {
+                    found10 = true
                 }
-                // Static HDR10 → payloadType 137 or 144.
-                if payloadType == 137 || payloadType == 144 { found10 = true }
-                if foundPlus && found10 { return (true, true) }
-                pos += payloadSize
-                // Stay within this NAL; next SEI NAL will be found by outer scan.
-                // Heuristic: if we consumed past the next NAL header guard, break.
-                if pos + 2 >= end { break }
-                // Peek if next byte looks like start of another NAL header inside
-                // the same buffer isn't reliable — just continue parsing this SEI.
-                if pos > i + 512 { break } // cap per-NAL parse length
+                pos += psize
+                if foundPlus && found10 { return }
             }
-            if foundPlus && found10 { break }
         }
-        // Fallback: raw signature search for files where NAL alignment slipped.
-        if !foundPlus, bytes.count >= 3 {
-            for i in 0..<(bytes.count - 3) where !foundPlus {
-                if bytes[i] == 0xB5, bytes[i+1] == 0x00, bytes[i+2] == 0x3C { foundPlus = true }
+
+        func be32(_ i: Int) -> Int {
+            (Int(bytes[i]) << 24) | (Int(bytes[i + 1]) << 16)
+                | (Int(bytes[i + 2]) << 8) | Int(bytes[i + 3])
+        }
+
+        var i = 0
+        let limit = bytes.count - 6
+        while i < limit {
+            if bytes[i] == 0, bytes[i + 1] == 0, bytes[i + 2] == 1 {
+                // Annex-B NAL begins after the 3-byte start code; ends at
+                // the next start code (capped — real SEIs are < 4 KB).
+                let s = i + 3
+                var e = s
+                while e < limit {
+                    if bytes[e] == 0, bytes[e + 1] == 0, bytes[e + 2] == 1 { break }
+                    if e - s > 256 * 1024 { break }
+                    e += 1
+                }
+                inspectNal(start: s, end: e)
+                i = s
+                continue
             }
+            // AVCC: u32 length at i-4, NAL header at i, and the NEXT
+            // segment's length field lands exactly at i+len with another
+            // sane length — three-way agreement that random bytes fail.
+            if i >= 8 {
+                let len = be32(i - 4)
+                if len > 2, len <= bytes.count - i {
+                    let nt = (Int(bytes[i]) >> 1) & 0x3F
+                    if nt == 39 || nt == 40 {
+                        let next = i + len
+                        if next + 4 <= bytes.count {
+                            let nl = be32(next)
+                            if nl > 2, next + nl <= bytes.count + 4 {
+                                inspectNal(start: i, end: min(next, bytes.count))
+                            }
+                        }
+                    }
+                }
+            }
+            i += 1
         }
         return (foundPlus, found10)
     }
