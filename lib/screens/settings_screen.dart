@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,6 +11,7 @@ import '../services/decoder_mode.dart';
 import '../services/exo_player.dart';
 import '../services/support_links.dart';
 import '../services/trakt_client.dart';
+import '../services/trakt_sync.dart';
 import '../services/tmdb_client.dart';
 import '../services/watched_store.dart';
 import '../utils/tv_helper.dart';
@@ -614,6 +616,8 @@ class _TraktConnectDialogState extends State<_TraktConnectDialog> {
         _status = ok ? 'Connected!' : 'Timed out — try again.';
       });
       if (ok) {
+        // First pull right after connecting so watched checks appear fast.
+        unawaited(TraktSync.pullWatched(force: true));
         await Future<void>.delayed(const Duration(milliseconds: 800));
         if (mounted) Navigator.of(context).pop();
       }

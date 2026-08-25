@@ -81,6 +81,28 @@ class TraktException implements Exception {
 /// The access token is a session credential (like Jellyfin's) and is stored in
 /// shared_preferences under `dreamplayer.trakt`; it is refreshed automatically
 /// on 401.
+/// Watched state pulled from Trakt. Movies are a flat id set; TV shows
+/// report per-season watched episode *counts* (Trakt semantics: the first N
+/// episodes of a season are watched), not per-episode flags.
+class TraktWatched {
+  const TraktWatched({
+    this.movieIds = const {},
+    this.showSeasons = const {},
+  });
+
+  final Set<int> movieIds;
+
+  /// tmdbShowId -> (seasonNumber -> watched episode count)
+  final Map<int, Map<int, int>> showSeasons;
+
+  bool isEpisodeWatched(int showId, int season, int episode) {
+    final seasons = showSeasons[showId];
+    if (seasons == null) return false;
+    final count = seasons[season];
+    return count != null && episode > 0 && episode <= count;
+  }
+}
+
 class TraktClient {
   TraktClient([this._prefs]);
 
@@ -331,6 +353,34 @@ class TraktClient {
       if (tmdb != null) result.add(tmdb);
     }
     return result;
+  }
+
+  /// Full watched snapshot with TV season granularity (see [TraktWatched]).
+  Future<TraktWatched> fetchWatched() async {
+    final movieIds = <int>{};
+    final movies = await _get('/sync/watched/movies', auth: true);
+    for (final m in (movies as List? ?? const [])) {
+      final ids = (m as Map<String, dynamic>)['movie']?['ids'] as Map<String, dynamic>?;
+      final tmdb = (ids?['tmdb'] as num?)?.toInt();
+      if (tmdb != null) movieIds.add(tmdb);
+    }
+    final showSeasons = <int, Map<int, int>>{};
+    final shows = await _get('/sync/watched/shows', auth: true);
+    for (final s in (shows as List? ?? const [])) {
+      final show = s as Map<String, dynamic>;
+      final ids = show['show']?['ids'] as Map<String, dynamic>?;
+      final tmdb = (ids?['tmdb'] as num?)?.toInt();
+      if (tmdb == null) continue;
+      final seasons = <int, int>{};
+      for (final sn in (show['seasons'] as List? ?? const [])) {
+        final data = sn as Map<String, dynamic>;
+        final number = (data['number'] as num?)?.toInt();
+        final episodes = (data['episodes'] as num?)?.toInt() ?? 0;
+        if (number != null) seasons[number] = episodes;
+      }
+      showSeasons[tmdb] = seasons;
+    }
+    return TraktWatched(movieIds: movieIds, showSeasons: showSeasons);
   }
 
   Future<void> _markSynced() async {

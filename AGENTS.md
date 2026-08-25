@@ -528,9 +528,17 @@ history (token-renewal retries, auth error messages, NPE fixes) shows the
 sharp edges to design for up front.
 
 Phases (each verified on-device before the next):
-1. **Pull watched → WatchedStore** — map `getWatchedTmdbIds` against
-   TMDB-resolved files; green checks follow you across devices. Cheapest win;
-   reuse existing client + TmdStore identity keys.
+1. ~~Pull watched → WatchedStore~~ — DONE (2026-08-25): `TraktSync`
+   (`lib/services/trakt_sync.dart`) pulls a `TraktWatched` snapshot
+   (`fetchWatched()` = movies id set + shows as tmdbId→{season→watchedCount};
+   Trakt semantics: first N episodes of a season are watched) and marks
+   matching identity keys in `WatchedStore`. Matching is pure/unit-tested
+   (`matchKeys`, `test/trakt_sync_test.dart`): movies exact-id; episodes
+   parse SxxEyy from the key's filename tail; folder keys & unresolved ids
+   skipped. One-way mark-only by design (never clears local marks). Triggered
+   fire-and-forget at home-screen init (6 h throttle via
+   `dreamplayer.traktLastPullAt`) and force-pulled right after sign-in
+   succeeds in Settings.
 2. **Real scrobble** — start/pause/stop at playback transitions instead of
    completion-only; keep completion push as fallback.
 3. **Resume points** — push/pull `ResumeStore` positions through Trakt

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
@@ -18,6 +19,7 @@ import '../widgets/video_card.dart';
 import '../utils/tv_helper.dart';
 import 'file_browser_screen.dart';
 import 'jellyfin_screen.dart';
+import '../services/trakt_sync.dart';
 import 'smb_screen.dart';
 import 'tmd_details_screen.dart';
 import 'upnp_screen.dart';
@@ -65,6 +67,9 @@ class _HomeScreenState extends State<HomeScreen>
     // Update cards when TMDB metadata resolves for a visible entry.
     TmdService.instance.addListener(_onMetadataChanged);
     _loadLibrary();
+    // Phase-1 Trakt sync: pull watched state into WatchedStore (throttled,
+    // silent, marks show up as green checks as stores fill).
+    unawaited(TraktSync.pullWatched());
   }
 
   void _onMetadataChanged() {
