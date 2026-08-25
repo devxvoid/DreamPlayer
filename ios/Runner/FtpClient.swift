@@ -548,9 +548,13 @@ actor FtpControlConnection {
     func fileSize(path: String) async throws -> Int64 {
         try await send("SIZE \(path)")
         let r = try await reply()
-        if r.code == 213, let n = Int64(r.text.trimmingCharacters(in: .whitespaces)) {
-            return n
+        guard r.code == 213 else {
+            throw FtpError.protocolError("Server did not report file size (\(r.code))")
         }
+        // `reply()` returns the whole line ("213 30042485") — drop the
+        // 3-char code prefix before parsing the payload.
+        let payload = r.text.dropFirst(3).trimmingCharacters(in: .whitespaces)
+        if let n = Int64(payload) { return n }
         throw FtpError.protocolError("Server did not report file size")
     }
 
