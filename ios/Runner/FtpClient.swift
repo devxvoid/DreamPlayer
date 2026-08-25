@@ -1119,11 +1119,16 @@ final class FtpByteRangeSource: ByteRangeSource, @unchecked Sendable {
         guard let ftpConn, let ftpPath else {
             throw FtpError.badRequest("Source closed")
         }
+        // Reads at/past EOF: answer empty without a server round-trip — a
+        // RETR from REST >= fileSize is rejected by servers (4xx), which
+        // would surface an end-of-stream playback error.
+        let off = max(0, offset)
+        if byteSize > 0, off >= byteSize { return Data() }
         do {
             // One REST/RETR transfer at a time on the shared control
             // connection (see AsyncSemaphore above).
             return try await ftpGate.withLock {
-                try await ftpConn.retrieve(path: ftpPath, offset: max(0, offset), maxLength: length)
+                try await ftpConn.retrieve(path: ftpPath, offset: off, maxLength: length)
             }
         } catch {
             FtpClient.logStatic("FTP read off=\(offset) len=\(length) failed: \(error)")

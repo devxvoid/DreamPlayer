@@ -750,6 +750,8 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                         }
                     }
                 }
+            } catch is CancellationError {
+                // Load superseded by a newer open/reload — not a playback failure.
             } catch {
                 self.lastError = String(describing: error)
                 self.emit()
@@ -763,7 +765,16 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     /// pull-back after the end card reloads the session instead.
     /// For WebDAV custom sources the underlying IOReader is consumed and
     /// can't rewind, so we re-resolve a fresh source instead of reusing `lastSource`.
+    private var reloadInFlight = false
+
     private func reloadSession(at position: Double) async {
+        // The Dart replay button sends seekTo(0) AND play() back-to-back; each
+        // triggers a reload here. A second engine.load supersedes the first,
+        // which then throws CancellationError — so coalesce duplicates and let
+        // one reload run at a time.
+        guard !reloadInFlight else { return }
+        reloadInFlight = true
+        defer { reloadInFlight = false }
         guard let engine else { return }
         let activeSub = engine.activeSubtitleTrackIndex
         do {
@@ -783,6 +794,8 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             }
             // Fresh AVPlayer instance after reload — re-apply the saved rate.
             applySpeed(pendingSpeed)
+        } catch is CancellationError {
+            // Superseded by a newer load elsewhere — not a playback failure.
         } catch {
             lastError = String(describing: error)
         }
