@@ -508,6 +508,38 @@ Run DreamPlayer on an Android TV box/panel as a real 10-foot app. **Status: Phas
 
 **Rejected by user**: Picture-in-Picture (2026-08-22) — do not re-propose.
 
+### Trakt sync upgrade — two-way service (researched 2026-08-25)
+
+Current state: device-code auth (Settings), push-on-completion `addToHistory`
+with TMDB ids incl. S/E (`_pushTraktHistory` in player_screen.dart),
+batch `syncWatched` + `getWatchedTmdbIds` exist in `trakt_client.dart`. No
+pull-into-UI, no scrobble, no resume-point sync.
+
+Reference = **Nova Video Player** (aos-MediaLib `Trakt.java`/`TraktService`,
+`com.uwetrottmann.trakt5:trakt-java` self-forked): full two-way background
+sync — real-time **scrobble** (start/pause/stop during playback),
+**bidirectional watched** (pull Trakt history → mark rows; push local marks),
+**resume-point sync** across devices via `paused_at`, incremental engine
+keyed off Trakt `/sync/last_activities` timestamps (full sync on first login,
+>24 h stale, or NAS-share refresh), manual "Sync now", sync status/skip
+reasons in Settings, min-resume threshold to skip accidental short plays.
+Documented limit: history pull reads only last ~100 plays. Their hardening
+history (token-renewal retries, auth error messages, NPE fixes) shows the
+sharp edges to design for up front.
+
+Phases (each verified on-device before the next):
+1. **Pull watched → WatchedStore** — map `getWatchedTmdbIds` against
+   TMDB-resolved files; green checks follow you across devices. Cheapest win;
+   reuse existing client + TmdStore identity keys.
+2. **Real scrobble** — start/pause/stop at playback transitions instead of
+   completion-only; keep completion push as fallback.
+3. **Resume points** — push/pull `ResumeStore` positions through Trakt
+   playback endpoints; cross-device continue-watching. Needs the same
+   min-threshold guard Nova added (>~5 min or >10 % played).
+4. **Sync-now button + status row** in Settings (last-sync time, skip
+   reasons); incremental sync via `last_activities`; 100-play pull cap like
+   Nova.
+
 ### Competitor-gap roadmap, phased (2026-08)
 
 Gap analysis vs Infuse / Just Player / Nova / VLC produced a phased plan. Later
