@@ -1030,7 +1030,7 @@ final class AsyncSemaphore: @unchecked Sendable {
     init(value: Int) { self.value = value }
 
     func acquire() async {
-        await withCheckedSuspension { (cont: CheckedContinuation<Void, Never>) in
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             lock.lock()
             if value > 0 {
                 value -= 1
