@@ -139,8 +139,9 @@ class _HomeScreenState extends State<HomeScreen>
       final itemId = folder.jellyfinItemId;
       if (itemId == null || itemId.isEmpty) continue;
       try {
-        final server =
-            await _client.serverForUrl(folder.jellyfinServerUrl ?? '');
+        final server = await _client.serverForUrl(
+          folder.jellyfinServerUrl ?? '',
+        );
         if (server == null || !server.isAuthenticated) continue;
         final info = await _client.getPrimaryPosterInfo(server, itemId);
         if (info == null) continue;
@@ -195,7 +196,8 @@ class _HomeScreenState extends State<HomeScreen>
     }
     if (picked == null || !mounted) return;
     final folder = LibraryFolder(
-      id: picked.bookmarkId ??
+      id:
+          picked.bookmarkId ??
           'folder_${DateTime.now().millisecondsSinceEpoch}',
       name: picked.name,
       path: picked.path,
@@ -353,9 +355,10 @@ class _HomeScreenState extends State<HomeScreen>
     if (key == null || !key.startsWith('webdav_')) return video;
     final rest = key.substring('webdav_'.length);
     // Server id = leading UUID (or legacy integer id), the rest is the path.
-    final id = RegExp('^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}')
-            .firstMatch(rest)
-            ?.group(0) ??
+    final id =
+        RegExp(
+          '^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}',
+        ).firstMatch(rest)?.group(0) ??
         RegExp(r'^\d+').firstMatch(rest)?.group(0);
     if (id == null || rest.length <= id.length) return video;
     try {
@@ -417,7 +420,10 @@ class _HomeScreenState extends State<HomeScreen>
     final refreshedSubs = video.externalSubtitles.map((s) {
       var u = s.uri;
       if (u.contains('api_key=')) {
-        u = u.replaceAll(RegExp(r'api_key=[^&]*'), 'api_key=${server!.token ?? ''}');
+        u = u.replaceAll(
+          RegExp(r'api_key=[^&]*'),
+          'api_key=${server!.token ?? ''}',
+        );
       }
       return VideoExternalSub(
         uri: u,
@@ -448,107 +454,105 @@ class _HomeScreenState extends State<HomeScreen>
     return Scaffold(
       body: TvOverscan(
         child: CustomScrollView(
-        controller: _scrollController,
-        slivers: [
-          SliverAppBar(
-            title: const Text('DreamPlayer'),
-            pinned: true,
-          ),
-          // ---- Your library: user-added folders (e.g. TV-show folders) ----
-          if (_folders.isEmpty)
-            SliverToBoxAdapter(
+          controller: _scrollController,
+          slivers: [
+            SliverAppBar(title: const Text('DreamPlayer'), pinned: true),
+            // ---- Your library: user-added folders (e.g. TV-show folders) ----
+            if (_folders.isEmpty)
+              SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
                   child: Text(
                     tv
                         ? 'No folders yet. Use the buttons above to add one.'
                         : 'No folders yet. Tap + to add one.',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              )
+            else ...[
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                sliver: SliverToBoxAdapter(
+                  child: Text(
+                    'Your library',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
               ),
-            )
-          else ...[
+              _folderGridSliver(
+                count: _folders.length,
+                itemBuilder: (context, index) {
+                  final folder = _folders[index];
+                  return FolderCard(
+                    key: ValueKey(folder.id),
+                    folder: folder,
+                    tmdbMeta: TmdService.instance.metaFor(folder.metadataKey),
+                    jellyfinInfo: _jellyfinMeta[folder.id],
+                    onTap: () => _openFolder(folder),
+                    onLongPress: () => _removeFolder(folder),
+                  );
+                },
+              ),
+            ],
+            // ---- Continue watching ----
             SliverPadding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
               sliver: SliverToBoxAdapter(
                 child: Text(
-                  'Your library',
+                  'Continue watching',
                   style: theme.textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w600,
                   ),
                 ),
               ),
             ),
-            _folderGridSliver(
-              count: _folders.length,
-              itemBuilder: (context, index) {
-                final folder = _folders[index];
-                return FolderCard(
-                  key: ValueKey(folder.id),
-                  folder: folder,
-                  tmdbMeta: TmdService.instance.metaFor(folder.metadataKey),
-                  jellyfinInfo: _jellyfinMeta[folder.id],
-                  onTap: () => _openFolder(folder),
-                  onLongPress: () => _removeFolder(folder),
-                );
-              },
-            ),
-          ],
-          // ---- Continue watching ----
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-            sliver: SliverToBoxAdapter(
-              child: Text(
-                'Continue watching',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
+            if (_entries.isEmpty)
+              const SliverFillRemaining(
+                hasScrollBody: false,
+                child: _EmptyLibrary(),
+              )
+            else
+              _videoGridSliver(
+                count: _entries.length,
+                itemBuilder: (context, index) {
+                  final entry = _entries[index];
+                  final video = entry.video;
+                  final progress = video.duration > Duration.zero
+                      ? (entry.position.inMilliseconds /
+                                video.duration.inMilliseconds)
+                            .clamp(0.0, 1.0)
+                      : null;
+                  final parsed = ParsedFileName.parse(video.title);
+                  final continueLabel =
+                      'Continue from ${_positionLabel(entry.position)}';
+                  return VideoCard(
+                    key: ValueKey(video.resumeKey ?? video.uri ?? video.title),
+                    video: video,
+                    tmdbMeta: TmdService.instance.metaFor(
+                      TmdStore.identityKeyFor(video),
+                    ),
+                    progress: progress,
+                    subtitle: parsed.isEpisode
+                        ? '${parsed.episodeLabel} · $continueLabel'
+                        : continueLabel,
+                    onTap: () => _openVideo(entry),
+                    onLongPress: () => _removeVideo(entry),
+                  );
+                },
               ),
-            ),
-          ),
-          if (_entries.isEmpty)
-            const SliverFillRemaining(
-              hasScrollBody: false,
-              child: _EmptyLibrary(),
-            )
-          else
-            _videoGridSliver(
-              count: _entries.length,
-              itemBuilder: (context, index) {
-                final entry = _entries[index];
-                final video = entry.video;
-                final progress = video.duration > Duration.zero
-                    ? (entry.position.inMilliseconds /
-                          video.duration.inMilliseconds)
-                        .clamp(0.0, 1.0)
-                    : null;
-                final parsed = ParsedFileName.parse(video.title);
-                final continueLabel =
-                    'Continue from ${_positionLabel(entry.position)}';
-                return VideoCard(
-                  key: ValueKey(video.resumeKey ?? video.uri ?? video.title),
-                  video: video,
-                  tmdbMeta: TmdService.instance
-                      .metaFor(TmdStore.identityKeyFor(video)),
-                  progress: progress,
-                  subtitle: parsed.isEpisode
-                      ? '${parsed.episodeLabel} · $continueLabel'
-                      : continueLabel,
-                  onTap: () => _openVideo(entry),
-                  onLongPress: () => _removeVideo(entry),
-                );
-              },
-            ),
-        ],
+          ],
         ),
       ),
       floatingActionButton: FloatingActionButton(
-              onPressed: _showAddMenu,
-              tooltip: 'Add a source',
-              child: const Icon(Icons.add),
-            ),
+        onPressed: _showAddMenu,
+        tooltip: 'Add a source',
+        child: const Icon(Icons.add),
+      ),
     );
   }
 
@@ -619,62 +623,76 @@ class _HomeScreenState extends State<HomeScreen>
   Future<void> _showAddMenu() async {
     final action = await showModalBottomSheet<String>(
       context: context,
+      // Default sheets cap at 9/16 of screen height — in phone landscape that
+      // clips the tail of the list. Scroll-controlled + height-capped so all
+      // entries stay reachable on any orientation.
+      isScrollControlled: true,
       builder: (context) => SafeArea(
-        child: Wrap(
-          children: [
-            ListTile(
-              leading: const Icon(Icons.cloud_outlined),
-              title: const Text('WebDAV'),
-              subtitle: const Text('Add a WebDAV server'),
-              onTap: () => Navigator.of(context).pop('webdav'),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * 0.9,
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.cloud_outlined),
+                  title: const Text('WebDAV'),
+                  subtitle: const Text('Add a WebDAV server'),
+                  onTap: () => Navigator.of(context).pop('webdav'),
+                ),
+                // FTP/SFTP browse + playback on every platform (iOS via the
+                // Network.framework FTP client / Citadel SFTP in FtpClient.swift).
+                ListTile(
+                  leading: const Icon(Icons.folder_outlined),
+                  title: const Text('FTP / SFTP'),
+                  subtitle: const Text('FTP or SFTP file server'),
+                  onTap: () => Navigator.of(context).pop('ftp'),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.live_tv_outlined),
+                  title: const Text('Jellyfin'),
+                  subtitle: const Text('Jellyfin / Emby media server'),
+                  onTap: () => Navigator.of(context).pop('jellyfin'),
+                ),
+                if (Platform.isAndroid)
+                  ListTile(
+                    leading: const Icon(Icons.folder_shared_outlined),
+                    title: const Text('Network shares'),
+                    subtitle: const Text('SMB / NAS shares'),
+                    onTap: () => Navigator.of(context).pop('smb'),
+                  )
+                else
+                  ListTile(
+                    leading: const Icon(Icons.folder_shared_outlined),
+                    title: const Text('Network shares'),
+                    subtitle: const Text('SMB via the Files app'),
+                    onTap: () => Navigator.of(context).pop('smb-ios'),
+                  ),
+                ListTile(
+                  leading: const Icon(Icons.cast_connected_outlined),
+                  title: const Text('DLNA'),
+                  subtitle: const Text('DLNA / UPnP servers on this network'),
+                  onTap: () => Navigator.of(context).pop('upnp'),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.video_library_outlined),
+                  title: const Text('Add folder to library'),
+                  subtitle: const Text(
+                    'A TV-show folder, a movie folder\u2026',
+                  ),
+                  onTap: () => Navigator.of(context).pop('add-folder'),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.storage_outlined),
+                  title: const Text('Internal storage'),
+                  subtitle: const Text('Browse files on this device'),
+                  onTap: () => Navigator.of(context).pop('storage'),
+                ),
+              ],
             ),
-            // FTP/SFTP browse + playback on every platform (iOS via the
-            // Network.framework FTP client / Citadel SFTP in FtpClient.swift).
-            ListTile(
-              leading: const Icon(Icons.folder_outlined),
-              title: const Text('FTP / SFTP'),
-              subtitle: const Text('FTP or SFTP file server'),
-              onTap: () => Navigator.of(context).pop('ftp'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.live_tv_outlined),
-              title: const Text('Jellyfin'),
-              subtitle: const Text('Jellyfin / Emby media server'),
-              onTap: () => Navigator.of(context).pop('jellyfin'),
-            ),
-            if (Platform.isAndroid)
-              ListTile(
-                leading: const Icon(Icons.folder_shared_outlined),
-                title: const Text('Network shares'),
-                subtitle: const Text('SMB / NAS shares'),
-                onTap: () => Navigator.of(context).pop('smb'),
-              )
-            else
-              ListTile(
-                leading: const Icon(Icons.folder_shared_outlined),
-                title: const Text('Network shares'),
-                subtitle: const Text('SMB via the Files app'),
-                onTap: () => Navigator.of(context).pop('smb-ios'),
-              ),
-            ListTile(
-              leading: const Icon(Icons.cast_connected_outlined),
-              title: const Text('DLNA'),
-              subtitle: const Text('DLNA / UPnP servers on this network'),
-              onTap: () => Navigator.of(context).pop('upnp'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.video_library_outlined),
-              title: const Text('Add folder to library'),
-              subtitle: const Text('A TV-show folder, a movie folder\u2026'),
-              onTap: () => Navigator.of(context).pop('add-folder'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.storage_outlined),
-              title: const Text('Internal storage'),
-              subtitle: const Text('Browse files on this device'),
-              onTap: () => Navigator.of(context).pop('storage'),
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -688,21 +706,21 @@ class _HomeScreenState extends State<HomeScreen>
   Future<void> _openSource(String action) async {
     switch (action) {
       case 'webdav':
-        await Navigator.of(context).push(
-          MaterialPageRoute<void>(builder: (_) => const WebDavScreen()),
-        );
+        await Navigator.of(
+          context,
+        ).push(MaterialPageRoute<void>(builder: (_) => const WebDavScreen()));
       case 'ftp':
-        await Navigator.of(context).push(
-          MaterialPageRoute<void>(builder: (_) => const FtpScreen()),
-        );
+        await Navigator.of(
+          context,
+        ).push(MaterialPageRoute<void>(builder: (_) => const FtpScreen()));
       case 'jellyfin':
-        await Navigator.of(context).push(
-          MaterialPageRoute<void>(builder: (_) => const JellyfinScreen()),
-        );
+        await Navigator.of(
+          context,
+        ).push(MaterialPageRoute<void>(builder: (_) => const JellyfinScreen()));
       case 'smb':
-        await Navigator.of(context).push(
-          MaterialPageRoute<void>(builder: (_) => const SmbScreen()),
-        );
+        await Navigator.of(
+          context,
+        ).push(MaterialPageRoute<void>(builder: (_) => const SmbScreen()));
         break;
       case 'smb-ios':
         // iOS: SMB goes through the Files app. Picking a folder from the
@@ -712,9 +730,9 @@ class _HomeScreenState extends State<HomeScreen>
         await _addFolderToLibrary();
         break;
       case 'upnp':
-        await Navigator.of(context).push(
-          MaterialPageRoute<void>(builder: (_) => const UpnpScreen()),
-        );
+        await Navigator.of(
+          context,
+        ).push(MaterialPageRoute<void>(builder: (_) => const UpnpScreen()));
         break;
       case 'storage':
         await Navigator.of(context).push(

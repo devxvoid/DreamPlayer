@@ -287,63 +287,79 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 TvTile(
                   leading: const Icon(Icons.volume_up),
                   title: const Text('Volume Boost'),
-                  subtitle: Text(_audioBoost > 1.01 ? '${_audioBoost.toStringAsFixed(1)}× (LoudnessEnhancer)' : 'Off — 1.0×'),
-                onTap: () async {
-                  double temp = _audioBoost;
-                  final picked = await showDialog<double>(
-                    context: context,
-                    builder: (context) => AlertDialog(
-                      title: const Text('Volume Boost'),
-                      content: StatefulBuilder(
-                        builder: (context, setD) => Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Slider(
-                              value: temp.clamp(1.0, 3.0),
-                              min: 1.0,
-                              max: 3.0,
-                              divisions: 20,
-                              label: '${temp.toStringAsFixed(1)}×',
-                              onChanged: (v) => setD(() => temp = double.parse(v.toStringAsFixed(1))),
-                            ),
-                            Text('${temp.toStringAsFixed(1)}×', style: Theme.of(context).textTheme.bodySmall),
-                          ],
+                  subtitle: Text(
+                    _audioBoost > 1.01
+                        ? '${_audioBoost.toStringAsFixed(1)}× (LoudnessEnhancer)'
+                        : 'Off — 1.0×',
+                  ),
+                  onTap: () async {
+                    double temp = _audioBoost;
+                    final picked = await showDialog<double>(
+                      context: context,
+                      builder: (context) => AlertDialog(
+                        title: const Text('Volume Boost'),
+                        content: StatefulBuilder(
+                          builder: (context, setD) => Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Slider(
+                                value: temp.clamp(1.0, 3.0),
+                                min: 1.0,
+                                max: 3.0,
+                                divisions: 20,
+                                label: '${temp.toStringAsFixed(1)}×',
+                                onChanged: (v) => setD(
+                                  () =>
+                                      temp = double.parse(v.toStringAsFixed(1)),
+                                ),
+                              ),
+                              Text(
+                                '${temp.toStringAsFixed(1)}×',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            ],
+                          ),
                         ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context),
+                            child: const Text('Cancel'),
+                          ),
+                          TextButton(
+                            onPressed: () => Navigator.pop(context, temp),
+                            child: const Text('Save'),
+                          ),
+                        ],
                       ),
-                      actions: [
-                        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-                        TextButton(onPressed: () => Navigator.pop(context, temp), child: const Text('Save')),
-                      ],
-                    ),
-                  );
-                  if (picked != null) {
-                    await PlaybackBoostStore.save(picked);
-                    if (mounted) setState(() => _audioBoost = picked);
-                  }
-                },
-              ),
-              SwitchListTile(
-                secondary: const Icon(Icons.nights_stay),
-                title: const Text('Night Mode'),
-                subtitle: const Text('Compress dynamic range for quiet listening'),
-                value: _nightMode,
-                onChanged: (value) async {
-                  await NightModeStore.save(value);
-                  if (mounted) setState(() => _nightMode = value);
-                },
-              ),
+                    );
+                    if (picked != null) {
+                      await PlaybackBoostStore.save(picked);
+                      if (mounted) setState(() => _audioBoost = picked);
+                    }
+                  },
+                ),
+                SwitchListTile(
+                  secondary: const Icon(Icons.nights_stay),
+                  title: const Text('Night Mode'),
+                  subtitle: const Text(
+                    'Compress dynamic range for quiet listening',
+                  ),
+                  value: _nightMode,
+                  onChanged: (value) async {
+                    await NightModeStore.save(value);
+                    if (mounted) setState(() => _nightMode = value);
+                  },
+                ),
               ],
               if (defaultTargetPlatform == TargetPlatform.android)
                 TvTile(
                   leading: const Icon(Icons.memory),
                   title: const Text('Video decoder'),
-                  subtitle: Text(
-                    switch (_decoderMode) {
-                      DecoderMode.hw => 'Hardware — fastest, HDR passthrough',
-                      DecoderMode.sw => 'Software — compatibility fallback',
-                      _ => 'Auto — hardware when available',
-                    },
-                  ),
+                  subtitle: Text(switch (_decoderMode) {
+                    DecoderMode.hw => 'Hardware — fastest, HDR passthrough',
+                    DecoderMode.sw => 'Software — compatibility fallback',
+                    _ => 'Auto — hardware when available',
+                  }),
                   onTap: () async {
                     final picked = await showDialog<DecoderMode>(
                       context: context,
@@ -361,9 +377,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     value: m,
                                     title: Text(m.label),
                                     subtitle: Text(switch (m) {
-                                      DecoderMode.hw => 'Force hardware decoders',
-                                      DecoderMode.sw => 'Prefer software decoders',
-                                      _ => 'Let the system choose (recommended)',
+                                      DecoderMode.hw =>
+                                        'Force hardware decoders',
+                                      DecoderMode.sw =>
+                                        'Prefer software decoders',
+                                      _ =>
+                                        'Let the system choose (recommended)',
                                     }),
                                   ),
                               ],
@@ -377,7 +396,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       if (mounted) setState(() => _decoderMode = picked);
                       if (!context.mounted) return;
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Takes effect on next video')),
+                        const SnackBar(
+                          content: Text('Takes effect on next video'),
+                        ),
                       );
                     }
                   },
@@ -620,43 +641,47 @@ class _TraktConnectDialogState extends State<_TraktConnectDialog> {
     final theme = Theme.of(context);
     return AlertDialog(
       title: const Text('Connect Trakt'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('Go to the address below and enter this code:'),
-          const SizedBox(height: 12),
-          Center(
-            child: Text(
-              widget.code.userCode,
-              style: theme.textTheme.headlineMedium?.copyWith(
-                letterSpacing: 4,
-                fontWeight: FontWeight.bold,
+      // Scroll-wrapped: a fixed Column here sat within ~5% of the dialog
+      // height ceiling at the app's 1.3x text-scale clamp in phone landscape.
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Go to the address below and enter this code:'),
+            const SizedBox(height: 12),
+            Center(
+              child: Text(
+                widget.code.userCode,
+                style: theme.textTheme.headlineMedium?.copyWith(
+                  letterSpacing: 4,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
-          ),
-          const SizedBox(height: 12),
-          Center(
-            child: Text(
-              widget.code.verificationUrl,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.primary,
+            const SizedBox(height: 12),
+            Center(
+              child: Text(
+                widget.code.verificationUrl,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.primary,
+                ),
               ),
             ),
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              const SizedBox(
-                width: 16,
-                height: 16,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-              const SizedBox(width: 12),
-              Expanded(child: Text(_status)),
-            ],
-          ),
-        ],
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+                const SizedBox(width: 12),
+                Expanded(child: Text(_status)),
+              ],
+            ),
+          ],
+        ),
       ),
       actions: [
         TextButton(

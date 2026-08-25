@@ -148,6 +148,40 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('+ menu shows every entry in phone landscape', (tester) async {
+    // Default modal bottom sheets cap at 9/16 of screen height; in phone
+    // landscape that clipped the tail of the + menu (regression: the sheet
+    // used a non-scrollable Wrap). The sheet is now scroll-controlled.
+    tester.view.physicalSize = const Size(800 * 2, 360 * 2);
+    tester.view.devicePixelRatio = 2;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(const DreamPlayerApp());
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(FloatingActionButton));
+    await tester.pumpAndSettle();
+
+    expect(find.text('WebDAV'), findsOneWidget);
+    expect(find.text('FTP / SFTP'), findsOneWidget);
+    expect(find.text('Jellyfin'), findsOneWidget);
+    expect(find.text('Network shares'), findsOneWidget);
+    expect(find.text('DLNA'), findsOneWidget);
+    // Tail entries live below the fold at this height — scroll to them.
+    await tester.scrollUntilVisible(
+      find.text('Add folder to library'),
+      120,
+      scrollable: find.byType(Scrollable).last,
+    );
+    expect(find.text('Add folder to library'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('Internal storage'),
+      120,
+      scrollable: find.byType(Scrollable).last,
+    );
+    expect(find.text('Internal storage'), findsOneWidget);
+  });
+
   testWidgets('No overflow with large text scale', (tester) async {
     tester.platformDispatcher.textScaleFactorTestValue = 2.0;
     addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);

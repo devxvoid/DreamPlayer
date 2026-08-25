@@ -875,7 +875,13 @@ class _PlayerScreenState extends State<PlayerScreen>
       _onScreenTap();
       return;
     }
-    if (_touchLocked) return;
+    if (_touchLocked) {
+      // Locked: reveal the bars so the amber Unlock button is reachable.
+      // This tap must not toggle play/pause nor hide the controls — without
+      // it a locked player is unrecoverable once the auto-hide fires.
+      if (!_controlsVisible) _showControls();
+      return;
+    }
     _singleTapTimer?.cancel();
     _singleTapTimer = Timer(const Duration(milliseconds: 260), _onScreenTap);
   }
@@ -1093,6 +1099,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   Future<void> _toggleFullscreen() async {
+    if (_touchLocked) return;
     final landscape = !_fullscreen;
     if (landscape) {
       await SystemChrome.setPreferredOrientations([
@@ -1127,6 +1134,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   Future<void> _openAudioTrackSheet() async {
+    if (_touchLocked) return;
     _showControls();
     final tracks = _audioTracks;
     if (tracks.isEmpty) return;
@@ -1210,6 +1218,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// plus auto-paired sidecar files) plus an Off option and a manual
   /// "Load subtitle file..." entry (system picker for CX / any source).
   Future<void> _openSubtitleSheet() async {
+    if (_touchLocked) return;
     _showControls();
     final tracks = _subtitleTracks;
     final selected = _selectedSubtitleTrack;
@@ -1761,6 +1770,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// one place to keep the bar uncluttered). Aspect/speed taps apply
   /// immediately and stay in the sheet; chapter taps seek and close.
   Future<void> _openMoreSheet() async {
+    if (_touchLocked) return;
     _showControls();
     const speeds = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
     const fitOrder = VideoFitMode.values;
@@ -2123,11 +2133,13 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   void _seekBy(Duration delta) {
+    if (_touchLocked) return;
     _exo?.seekTo(_position + delta);
     _showControls();
   }
 
   void _onSeekStart(double value) {
+    if (_touchLocked) return;
     _dragging = true;
     _dragValue = value;
     _hideTimer?.cancel();
@@ -2135,11 +2147,13 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   void _onSeekUpdate(double value) {
+    if (_touchLocked || !_dragging) return;
     _dragValue = value;
     setState(() {});
   }
 
   void _onSeekEnd(double value) {
+    if (_touchLocked) return;
     final target = Duration(milliseconds: value.round());
     _exo?.seekTo(target);
     _dragging = false;
@@ -2153,6 +2167,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   void _togglePlayPause() {
+    if (_touchLocked) return;
     final exo = _exo;
     if (exo == null) return;
     if (_completed) {
