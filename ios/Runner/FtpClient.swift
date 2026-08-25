@@ -721,7 +721,7 @@ final class TcpConnection: @unchecked Sendable {
         defer { freeaddrinfo(result) }
 
         var lastErr = "connect failed"
-        for addr in sequence(first, { $0.pointee.ai_next }) {
+        for addr in sequence(first: first, next: { $0.pointee.ai_next }) {
             let sock = socket(addr.pointee.ai_family, addr.pointee.ai_socktype, addr.pointee.ai_protocol)
             guard sock >= 0 else {
                 lastErr = String(cString: strerror(errno))
@@ -731,7 +731,7 @@ final class TcpConnection: @unchecked Sendable {
             // seconds instead of hanging on the default TCP timeout (~75 s).
             let flags = fcntl(sock, F_GETFL, 0)
             _ = fcntl(sock, F_SETFL, flags | O_NONBLOCK)
-            if connect(sock, addr.pointee.ai_addr, addr.pointee.ai_addrlen) == 0 {
+            if Darwin.connect(sock, addr.pointee.ai_addr, addr.pointee.ai_addrlen) == 0 {
                 _ = fcntl(sock, F_SETFL, flags)
                 fd = sock
                 return
@@ -755,7 +755,7 @@ final class TcpConnection: @unchecked Sendable {
             } else {
                 lastErr = String(cString: strerror(errno))
             }
-            close(sock)
+            Darwin.close(sock)
         }
         throw FtpError.badRequest("Can't reach \(host):\(port) — \(lastErr)")
     }
@@ -829,7 +829,7 @@ final class TcpConnection: @unchecked Sendable {
             while sent < data.count {
                 let n = data.withUnsafeBytes { raw -> Int in
                     guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return -1 }
-                    return send(sock, base + sent, data.count - sent, 0)
+                    return Darwin.send(sock, base + sent, data.count - sent, 0)
                 }
                 if n > 0 { sent += n; continue }
                 if n < 0 && errno == EINTR { continue }
@@ -843,7 +843,7 @@ final class TcpConnection: @unchecked Sendable {
         guard sock >= 0 else { return }
         _ = data.withUnsafeBytes { raw -> Int in
             guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return -1 }
-            return send(sock, base, data.count, 0)
+            return Darwin.send(sock, base, data.count, 0)
         }
     }
 
@@ -926,7 +926,7 @@ final class TcpConnection: @unchecked Sendable {
                 // shutdown() first: it wakes a recv() blocked on another
                 // thread; plain close() does not.
                 shutdown(fd, SHUT_RDWR)
-                close(fd)
+                Darwin.close(fd)
                 fd = -1
             }
             eof = true
