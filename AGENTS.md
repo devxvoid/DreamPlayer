@@ -558,6 +558,51 @@ Phases (each verified on-device before the next):
    reasons); incremental sync via `last_activities`; 100-play pull cap like
    Nova.
 
+### iOS monetization — Apple Developer + IAP paywall (planned, 2026-08-25)
+
+User is buying the $99/yr Apple Developer Program; DreamPlayer gets a paid
+tier once it's active. Research summary so implementation starts cold:
+
+**Model decision**: single **non-consumable lifetime unlock**
+(`com.dreamplayer.app.advanced`) — OutPlayer-style freemium ("Advanced"),
+no subscription for v1. Optionally a yearly sub later; never double-gate the
+same feature.
+
+**Policy constraints (App Store Review)**:
+- Guideline 3.1.1: in-app feature unlocks MUST use Apple IAP — no external
+  (Razorpay/UPI) links that gate functionality. Existing Support donations
+  are fine as long as they unlock nothing.
+- Revenue: 30% cut, **85% under the Small Business Program** (apply in ASC
+  immediately; free if revenue < $1M).
+- Mandatory: Paid Apps Agreement + bank/tax forms before products can be
+  created; **Restore Purchases button** wherever a paywall exists; privacy
+  policy URL at submission.
+- Prices configured in App Store Connect (localized currencies/taxes handled
+  by Apple); receipts validated on-device via StoreKit 2 signed transactions
+  (no server needed).
+
+**Implementation sketch**:
+- Official `in_app_purchase` Flutter plugin (StoreKit 2 + Play Billing behind
+  one API). New `Entitlements` ChangeNotifier service: loads
+  `Transaction.currentEntitlements`, caches locally for instant UI, exposes
+  `advanced` bool; `buy()` → `buyNonConsumable` + `completePurchase`.
+- Paywall sheet widget reads localized price from `Product.products(for:)`.
+- Gate NEW premium features only (never strip existing free behavior):
+  candidates = Bass Boost/EQ presets, subtitle extras (custom fonts/dual subs),
+  themes/accents, future skip-intro/cloud sync.
+
+**Android reality check**: current GitHub-Releases sideloading means Google
+Play Billing does NOT work there (needs Play distribution). Options: keep
+Android free + donations (recommended v1), publish to Play and mirror IAP,
+or self-hosted Razorpay license keys (high effort). Phase: iOS first.
+
+**Testing**: sandbox testers (ASC), `.storekit` configuration file for local/
+CI testing without money, TestFlight for production products in sandbox.
+
+**Order of ops when account clears**: agreements/bank/tax -> Small Business
+Program -> create product (~₹299/$4.99 tier) -> Entitlements + paywall (1–2
+days) -> gate features + Restore button -> sandbox verify -> submit.
+
 ### Competitor-gap roadmap, phased (2026-08)
 
 Gap analysis vs Infuse / Just Player / Nova / VLC produced a phased plan. Later
