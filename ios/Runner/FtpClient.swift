@@ -663,7 +663,7 @@ final class TcpConnection: @unchecked Sendable {
     }
 
     func connect() async throws {
-        NSLog("[FTP] TcpConnection.connect host=%@ port=%d", connection.endpoint.debugDescription, port)
+        NSLog("[FTP] TcpConnection.connect endpoint=%@", connection.endpoint.debugDescription)
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             queue.async { [self] in
                 connectedContinuation = cont
