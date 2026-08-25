@@ -2,7 +2,6 @@ import AetherEngineSMB
 import Citadel
 import Flutter
 import Foundation
-import Network
 import NIOCore
 
 /// iOS FTP/SFTP client (channel `dreamplayer/ftp`), mirroring `FtpClient.kt`.
@@ -265,29 +264,27 @@ final class FtpClient: NSObject {
     // MARK: - Probe / listing (shared by channel + playback)
 
     static func probe(host: String, port: Int, path: String, username: String, password: String, isSftp: Bool) async throws {
-        NSLog("[FTP] probe host=%@ port=%d isSftp=%d", host, port, isSftp)
+        logStatic("probe host=\(host) port=\(port) isSftp=\(isSftp)")
         if host.trimmingCharacters(in: .whitespaces).isEmpty {
             throw FtpError.badRequest("Host is required")
         }
         if isSftp {
-            NSLog("[FTP] probe SFTP connect...")
+            logStatic("probe SFTP connect...")
             let session = try await SftpSession.connect(
                 host: host, port: port, username: username, password: password)
             defer { Task { await session.close() } }
-            NSLog("[FTP] probe SFTP connected, checking path...")
+            logStatic("probe SFTP connected, checking path...")
             _ = try await session.attributes(path: normalized(path))
-            NSLog("[FTP] probe SFTP OK")
+            logStatic("probe SFTP OK")
         } else {
-            NSLog("[FTP] probe FTP creating FtpControlConnection...")
+            logStatic("probe FTP creating control connection...")
             let conn = FtpControlConnection(host: host, port: port)
-            NSLog("[FTP] probe FTP calling connectAndLogin...")
             try await conn.connectAndLogin(username: username, password: password)
-            NSLog("[FTP] probe FTP logged in, setTypeI...")
             defer { Task { await conn.quit() } }
             try await conn.setTypeI()
-            NSLog("[FTP] probe FTP verifyPath...")
+            logStatic("probe FTP verifyPath \(normalized(path))...")
             try await conn.verifyPath(normalized(path))
-            NSLog("[FTP] probe FTP OK")
+            logStatic("probe FTP OK")
         }
     }
 
@@ -494,18 +491,16 @@ actor FtpControlConnection {
     struct RawEntry { let name: String; let isDir: Bool; let size: Int64 }
 
     func connectAndLogin(username: String, password: String) async throws {
-        NSLog("[FTP] connectAndLogin host=%@ port=%d user=%@", host, port, username)
+        FtpClient.logStatic("connectAndLogin host=\(host) port=\(port) user=\(username)")
         let conn = TcpConnection(host: host, port: port)
-        NSLog("[FTP] connectAndLogin calling TcpConnection.connect()...")
         try await conn.connect()
-        NSLog("[FTP] connectAndLogin TCP connected, reading greeting...")
         control = conn
         let greeting = try await reply()
-        NSLog("[FTP] connectAndLogin greeting=%d %@", greeting.code, greeting.text)
+        FtpClient.logStatic("connectAndLogin greeting=\(greeting.code) \(greeting.text)")
         guard greeting.code == 220 else { throw FtpError.protocolError("Unexpected server greeting") }
         try await send("USER \(username.isEmpty ? "anonymous" : username)")
         let userReply = try await reply()
-        NSLog("[FTP] connectAndLogin USER reply=%d %@", userReply.code, userReply.text)
+        FtpClient.logStatic("connectAndLogin USER reply=\(userReply.code)")
         if userReply.code == 230 {
             loggedIn = true
             return
@@ -516,13 +511,12 @@ actor FtpControlConnection {
         }
         try await send("PASS \(password)")
         let passReply = try await reply()
-        NSLog("[FTP] connectAndLogin PASS reply=%d %@", passReply.code, passReply.text)
+        FtpClient.logStatic("connectAndLogin PASS reply=\(passReply.code)")
         guard passReply.code == 230 || passReply.code == 202 else {
             if passReply.code == 530 { throw FtpError.authFailed }
             throw FtpError.protocolError("Login rejected (\(passReply.code))")
         }
         loggedIn = true
-        NSLog("[FTP] connectAndLogin SUCCESS")
     }
 
     func quit() {
@@ -663,60 +657,143 @@ actor FtpControlConnection {
 
 // MARK: - Minimal async TCP wrapper
 
-/// A tiny NWConnection wrapper exposing line/partial reads through
-/// continuations. Not an actor: all callbacks run on its own queue and the
-/// inbox is confined there; public API is async.
+/// A tiny BSD-socket (POSIX) TCP wrapper exposing line/partial reads through
+/// continuations. POSIX sockets are used instead of Network.framework's
+/// `NWConnection` deliberately: on-device verification showed NWConnection
+/// silently never dialing local-network IPs (state stuck before `.ready`, the
+/// continuation hanging forever), while this app's BSD-socket traffic
+/// (swift-nio / Citadel SFTP) connects fine to the same hosts. Reads run on a
+/// dedicated background thread; the inbox/waiters are confined to `queue`.
 final class TcpConnection: @unchecked Sendable {
 
-    private let connection: NWConnection
+    private let host: String
+    private let port: UInt16
     private let queue = DispatchQueue(label: "dreamplayer.ftp.tcp")
 
     // Confined to `queue`.
+    private var fd: Int32 = -1
     private var inbox = Data()
     private var eof = false
     private var error: Error?
     private var waiters: [(Data?) -> Void] = []
     private var connectedContinuation: CheckedContinuation<Void, Error>?
+    private var readerThread: Thread?
 
     init(host: String, port: UInt16) {
-        connection = NWConnection(
-            host: NWEndpoint.Host(host),
-            port: NWEndpoint.Port(rawValue: port) ?? 21,
-            using: NWParameters())
+        self.host = host
+        self.port = port
     }
 
     func connect() async throws {
-        NSLog("[FTP] TcpConnection.connect endpoint=%@", connection.endpoint.debugDescription)
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             queue.async { [self] in
                 connectedContinuation = cont
-                connection.stateUpdateHandler = { [weak self] state in
-                    guard let self else { return }
-                    NSLog("[FTP] TcpConnection state=%@", "\(state)")
-                    self.queue.async { self.handleState(state) }
+                do {
+                    try openSocket()
+                    startReaderThread()
+                    FtpClient.logStatic("TcpConnection connected \(host):\(port)")
+                    connectedContinuation?.resume(returning: ())
+                } catch {
+                    FtpClient.logStatic("TcpConnection connect FAILED \(host):\(port): \(error)")
+                    connectedContinuation?.resume(throwing: error)
                 }
-                connection.start(queue: queue)
+                connectedContinuation = nil
             }
         }
     }
 
-    private func handleState(_ state: NWConnection.State) {
-        switch state {
-        case .ready:
-            pump()
-            connectedContinuation?.resume(returning: ())
-            connectedContinuation = nil
-        case .failed(let err):
-            failAll(err)
-            connectedContinuation?.resume(throwing: err)
-            connectedContinuation = nil
-        case .cancelled:
-            failAll(URLError(.networkConnectionLost))
-            connectedContinuation?.resume(throwing: URLError(.cancelled))
-            connectedContinuation = nil
-        default:
-            break
+    /// Blocking DNS + TCP connect with a 10 s budget. Runs on `queue`; no reads
+    /// are possible before it returns, so blocking there is safe.
+    private func openSocket() throws {
+        var hints = addrinfo(
+            ai_flags: 0,
+            ai_family: AF_UNSPEC,
+            ai_socktype: SOCK_STREAM,
+            ai_protocol: IPPROTO_TCP,
+            ai_addrlen: 0,
+            ai_canonname: nil,
+            ai_addr: nil,
+            ai_next: nil)
+        var result: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, String(port), &hints, &result) == 0, let first = result else {
+            throw FtpError.badRequest("Can't resolve \(host)")
         }
+        defer { freeaddrinfo(result) }
+
+        var lastErr = "connect failed"
+        for addr in sequence(first, { $0.pointee.ai_next }) {
+            let sock = socket(addr.pointee.ai_family, addr.pointee.ai_socktype, addr.pointee.ai_protocol)
+            guard sock >= 0 else {
+                lastErr = String(cString: strerror(errno))
+                continue
+            }
+            // Non-blocking connect + poll so an unreachable host fails in
+            // seconds instead of hanging on the default TCP timeout (~75 s).
+            let flags = fcntl(sock, F_GETFL, 0)
+            _ = fcntl(sock, F_SETFL, flags | O_NONBLOCK)
+            if connect(sock, addr.pointee.ai_addr, addr.pointee.ai_addrlen) == 0 {
+                _ = fcntl(sock, F_SETFL, flags)
+                fd = sock
+                return
+            }
+            if errno == EINPROGRESS {
+                var pfd = pollfd(fd: sock, events: Int16(POLLOUT), revents: 0)
+                let prc = poll(&pfd, 1, 10_000)
+                if prc > 0 {
+                    var soerr: Int32 = 0
+                    var len = socklen_t(MemoryLayout<Int32>.size)
+                    getsockopt(sock, SOL_SOCKET, SO_ERROR, &soerr, &len)
+                    if soerr == 0 {
+                        _ = fcntl(sock, F_SETFL, flags)
+                        fd = sock
+                        return
+                    }
+                    lastErr = String(cString: strerror(soerr))
+                } else {
+                    lastErr = prc == 0 ? "timed out" : String(cString: strerror(errno))
+                }
+            } else {
+                lastErr = String(cString: strerror(errno))
+            }
+            close(sock)
+        }
+        throw FtpError.badRequest("Can't reach \(host):\(port) — \(lastErr)")
+    }
+
+    /// Dedicated thread running a blocking recv() loop; chunks are marshalled
+    /// onto `queue` where the inbox/waiters live.
+    private func startReaderThread() {
+        let sock = fd
+        let thread = Thread { [weak self] in
+            var buf = [UInt8](repeating: 0, count: 64 * 1024)
+            while true {
+                let n = recv(sock, &buf, buf.count, 0)
+                if n > 0 {
+                    let data = Data(buf[0..<n])
+                    self?.queue.async { [weak self] in
+                        guard let self else { return }
+                        self.inbox.append(data)
+                        self.serveWaiters()
+                    }
+                    continue
+                }
+                if n < 0 && errno == EINTR { continue }
+                let failed = n < 0 && errno != EBADF   // EBADF = closed locally
+                self?.queue.async { [weak self] in
+                    guard let self else { return }
+                    if failed && self.error == nil {
+                        self.failAll(NSError(domain: NSPOSIXErrorDomain, code: Int(errno)))
+                    } else {
+                        self.eof = true
+                        self.serveWaiters()
+                    }
+                }
+                break
+            }
+        }
+        thread.name = "dreamplayer.ftp.read"
+        readerThread = thread
+        thread.start()
     }
 
     private func failAll(_ err: Error) {
@@ -727,23 +804,15 @@ final class TcpConnection: @unchecked Sendable {
         waiters.forEach { $0(nil) }
     }
 
-    private func pump() {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, err in
-            guard let self else { return }
-            if let data, !data.isEmpty { self.inbox.append(data) }
-            if let err { self.failAll(err); return }
-            if isComplete && self.inbox.isEmpty { self.failAll(URLError(.fileDoesNotExist)); return }
-            if isComplete { self.eof = true }
-            self.serveWaiters()
-            if !self.eof { self.pump() }
-        }
-    }
-
     /// Resumes queued readers with whatever is buffered (or EOF/error).
+    /// Drains the inbox — both this and `readSome`'s fast path must hand off
+    /// exactly once, or bytes would be delivered twice.
     private func serveWaiters() {
         while !waiters.isEmpty {
             if !inbox.isEmpty {
-                waiters.removeFirst()(inbox)
+                let ready = inbox
+                inbox = Data()
+                waiters.removeFirst()(ready)
             } else if eof {
                 waiters.removeFirst()(nil)
             } else {
@@ -753,15 +822,29 @@ final class TcpConnection: @unchecked Sendable {
     }
 
     func send(_ data: Data) async throws {
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            connection.send(content: data, completion: .contentProcessed { err in
-                if let err { cont.resume(throwing: err) } else { cont.resume(returning: ()) }
-            })
-        }
+        let sock = queue.sync { fd }
+        guard sock >= 0 else { throw FtpError.badRequest("Not connected") }
+        try await Task.detached(priority: .userInitiated) {
+            var sent = 0
+            while sent < data.count {
+                let n = data.withUnsafeBytes { raw -> Int in
+                    guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return -1 }
+                    return send(sock, base + sent, data.count - sent, 0)
+                }
+                if n > 0 { sent += n; continue }
+                if n < 0 && errno == EINTR { continue }
+                throw FtpError.protocolError("Write failed (\(errno))")
+            }
+        }.value
     }
 
     func sendNow(_ data: Data) {
-        connection.send(content: data, completion: .contentProcessed { _ in })
+        let sock = queue.sync { fd }
+        guard sock >= 0 else { return }
+        _ = data.withUnsafeBytes { raw -> Int in
+            guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return -1 }
+            return send(sock, base, data.count, 0)
+        }
     }
 
     /// Returns ≥1 bytes when available, empty Data on clean EOF, throws on error.
@@ -838,7 +921,17 @@ final class TcpConnection: @unchecked Sendable {
     }
 
     func close() {
-        connection.cancel()
+        queue.async { [self] in
+            if fd >= 0 {
+                // shutdown() first: it wakes a recv() blocked on another
+                // thread; plain close() does not.
+                shutdown(fd, SHUT_RDWR)
+                close(fd)
+                fd = -1
+            }
+            eof = true
+            serveWaiters()
+        }
     }
 }
 
