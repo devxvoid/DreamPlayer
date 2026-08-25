@@ -22,6 +22,7 @@ import '../services/tmdb_client.dart';
 import '../services/trakt_client.dart';
 import '../services/watched_store.dart';
 import '../services/subtitle_style.dart';
+import 'subtitle_settings_screen.dart';
 import '../utils/codec_info.dart';
 import '../utils/tv_helper.dart';
 import '../widgets/format_chip.dart';
@@ -1867,6 +1868,23 @@ class _PlayerScreenState extends State<PlayerScreen>
                         ],
                       ),
                     ),
+                  const Divider(color: Colors.white12, height: 1),
+                  // Subtitle appearance (moved here from the app Settings
+                  // screen — it belongs next to the CC picker it configures).
+                  _tvListTile(
+                    leading: const Icon(Icons.closed_caption, color: Colors.white70),
+                    title: const Text('Subtitle settings', style: TextStyle(color: Colors.white)),
+                    subtitle: const Text('Size, color, background, delay', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                    trailing: const Icon(Icons.chevron_right, color: Colors.white54),
+                    onTap: () {
+                      Navigator.of(sheetContext).pop();
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const SubtitleSettingsScreen(),
+                        ),
+                      );
+                    },
+                  ),
                   const Divider(color: Colors.white12, height: 1),
                   if (defaultTargetPlatform == TargetPlatform.android) ...[
                     _tvListTile(

@@ -16,7 +16,6 @@ import '../utils/tv_helper.dart';
 import '../widgets/tv_overscan.dart';
 import '../widgets/tv_tile.dart';
 import 'licenses_screen.dart';
-import 'subtitle_settings_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -268,18 +267,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   if (mounted) setState(() => _autoPlayNext = value);
                 },
               ),
-              ListTile(
-                leading: const Icon(Icons.closed_caption_outlined),
-                title: const Text('Subtitles'),
-                subtitle: const Text('Size, color, background and delay'),
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => const SubtitleSettingsScreen(),
-                    ),
-                  );
-                },
-              ),
+              // Subtitle appearance settings moved into the player's ⋮ sheet
+              // (subtitle_settings_screen.dart is pushed from there now).
               // Volume Boost + Night Mode need Media3's LoudnessEnhancer
               // (Android only) — AVPlayer caps volume at 1.0 and exposes no
               // DRC, so showing these on iOS would be cosmetic no-ops.

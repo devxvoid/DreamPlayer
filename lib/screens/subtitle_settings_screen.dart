@@ -64,10 +64,10 @@ class _SubtitleSettingsScreenState extends State<SubtitleSettingsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                // Live preview over a real still (banner art) so background
-                // boxes and outlines can be judged against actual imagery.
-                // Height-capped so in landscape (short viewport) it stays a
-                // strip, not a wall.
+                // Live preview box so background boxes and outlines can be
+                // judged against a non-flat backdrop (dark gradient — no
+                // bundled photo). Height-capped so in landscape (short
+                // viewport) it stays a strip, not a wall.
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                   child: LayoutBuilder(builder: (context, _) {
@@ -95,9 +95,17 @@ class _SubtitleSettingsScreenState extends State<SubtitleSettingsScreen> {
                           child: Stack(
                             fit: StackFit.expand,
                             children: [
-                              Image.asset(
-                                'assets/preview_backdrop.jpg',
-                                fit: BoxFit.cover,
+                              const DecoratedBox(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                    colors: [
+                                      Color(0xFF455A64),
+                                      Color(0xFF0D1B20),
+                                    ],
+                                  ),
+                                ),
                               ),
                               Align(
                                 alignment: Alignment.bottomCenter,
