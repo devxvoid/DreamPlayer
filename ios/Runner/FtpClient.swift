@@ -240,7 +240,7 @@ final class FtpClient: NSObject {
         } else {
             let conn = FtpControlConnection(host: host, port: port)
             try await conn.connectAndLogin(username: username, password: password)
-            defer { conn.quit() }
+            defer { Task { await conn.quit() } }
             try await conn.setTypeI()
             try await conn.verifyPath(normalized(path))
         }
@@ -263,7 +263,7 @@ final class FtpClient: NSObject {
         } else {
             let conn = FtpControlConnection(host: server.host, port: server.port)
             try await conn.connectAndLogin(username: server.username, password: server.password)
-            defer { conn.quit() }
+            defer { Task { await conn.quit() } }
             try await conn.setTypeI()
             let lines = try await conn.list(effective)
             raw = parseListing(lines).map { line in
@@ -912,7 +912,7 @@ final class FtpByteRangeSource: ByteRangeSource, @unchecked Sendable {
         sftpFile = nil
         sftpSession?.close()
         sftpSession = nil
-        ftpConn?.quit()
+        if let c = ftpConn { Task { await c.quit() } }
         ftpConn = nil
     }
 }
