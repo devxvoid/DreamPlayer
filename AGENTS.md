@@ -499,9 +499,10 @@ Run DreamPlayer on an Android TV box/panel as a real 10-foot app. **Status: Phas
 ### Player feature backlog (prioritized 2026-08-21)
 
 1. ~~Jellyfin transcoding fallback~~ — DONE (2026-08-22): direct-play errors retry once via server-side HLS `master.m3u8` (H.264/AAC, 20 Mbps cap); Media3 HLS module added; job stopped on player close.
-2. ~~Subtitle appearance settings~~ — DONE (2026-08-22); Android delay offset still open (cue-pipeline refactor).
+2. ~~Subtitle appearance settings~~ — DONE (2026-08-22); Android delay offset still open (cue-pipeline refactor). Entry moved into the player ⋮ sheet (2026-08-25) — no longer reachable from app Settings.
 3. ~~Horizontal-swipe seek~~ — DONE (2026-08-22, time-only pill; frame thumbnails impossible for DV/HDR via MMR).
 4. Android release signing (deferred — see CI/Deployment).
+5. **Spatial audio chip (Android, future)**: the platform `Spatializer` (API 33+) is an AudioFlinger-level effect — when the user enables "Spatial audio" for their headphones, our decoded multichannel PCM (5.1/7.1 from DTS-HD/E-AC3/TrueHD via AudioTrack) is virtualized to binaural stereo **with zero app code**; Media3 routes through it transparently. Planned work (~a day): detect `AudioManager.getSpatializer()` availability + `isSpatializationEnabled` + `getSpatializerType()` (binaural= headphones / transaural= speakers) and show an amber "Spatial" chip in the player top bar like Passthrough; optionally deep-link to the system toggle. Cannot be force-enabled programmatically (system permission). iOS split: native AVPlayer path gets Apple Spatial Audio automatically for Atmos on AirPods (free); the FFmpeg custom-source path bypasses AVPlayer so it would need `AVAudioEngine` + `AVAudioEnvironmentNode` (deferred with the volume-boost iOS plumbing). Fire TV passthrough already delivers real Atmos to the AVR. **Rejected**: custom HRTF rendering (Resonance Audio etc.) — reimplements what both OSes do natively.
 
 **Rejected by user**: Picture-in-Picture (2026-08-22) — do not re-propose.
 
