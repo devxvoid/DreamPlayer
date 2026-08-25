@@ -266,6 +266,7 @@ class ExoPlayerEvent {
     this.audioPassthrough = false,
     this.audioBoost = 1.0,
     this.nightMode = false,
+    this.spatialAudio = '',
     this.chapters = const [],
     this.videoDecoderName,
     this.isHwDecoder,
@@ -323,6 +324,11 @@ class ExoPlayerEvent {
   /// True when audio passthrough is active (encoded bitstream routed to
   /// HDMI output via AudioTrack passthrough mode).
   final bool audioPassthrough;
+
+  /// Android platform Spatializer status: `on` (engaged on multichannel
+  /// content), `available` (routing supports it, toggle off / stereo track),
+  /// or `unavailable`. Empty before the first native event (iOS).
+  final String spatialAudio;
 
   /// Volume boost factor (1.0–3.0) from the native LoudnessEnhancer.
   final double audioBoost;
@@ -382,6 +388,7 @@ class ExoPlayerEvent {
       errorMessage: m['errorMessage'] as String?,
       errorCause: m['errorCause'] as String?,
       audioPassthrough: m['audioPassthrough'] == true,
+      spatialAudio: m['spatialAudio'] as String? ?? '',
       audioBoost: m['audioBoost'] is num ? (m['audioBoost'] as num).toDouble().clamp(1.0, 3.0) : 1.0,
       nightMode: m['nightMode'] == true,
       chapters: (m['chapters'] as List? ?? const [])

@@ -131,6 +131,118 @@ class ExoPlayerView(
         p.getBoolean("flutter.dreamplayer.nightMode", false)
     }
 
+    // ---- Spatial audio (Android 13+ platform Spatializer) ----
+    //
+    // The effect lives at the AudioFlinger level: when the user enables
+    // "Spatial audio" for their output device, multichannel PCM we decode
+    // (DTS-HD / E-AC3 / TrueHD -> 5.1/7.1 into AudioTrack) is virtualized to
+    // stereo automatically - Media3 routes through it with zero app code,
+    // and it cannot be force-enabled from an app. Everything here is gated
+    // to API 33+; on older devices (minSdk 21) this is a silent no-op and
+    // no chip is shown. We only DETECT and report so the player top bar can
+    // show a chip while it is engaged:
+    //   on          - enabled + available for current routing + the track's
+    //                 channel layout would actually be spatialized.
+    //   available   - routing supports it, but the user toggle is off (or
+    //                 the track is plain stereo, which stays flat).
+    //   unavailable - no platform spatializer / API < 33 / probe failed.
+
+    /// Whether the platform would virtualize a PCM stream with [channels]
+    /// channels at [sampleRate] under media/movie attributes.
+    private fun wouldBeSpatialized(channels: Int, sampleRate: Int): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
+        val mask = when {
+            channels >= 8 -> android.media.AudioFormat.CHANNEL_OUT_7POINT1_SURROUND
+            channels >= 6 -> android.media.AudioFormat.CHANNEL_OUT_5POINT1
+            channels == 1 -> android.media.AudioFormat.CHANNEL_OUT_MONO
+            else -> android.media.AudioFormat.CHANNEL_OUT_STEREO
+        }
+        return try {
+            val fmt = android.media.AudioFormat.Builder()
+                .setEncoding(android.media.AudioFormat.ENCODING_PCM_16BIT)
+                .setSampleRate(if (sampleRate > 0) sampleRate else 48_000)
+                .setChannelMask(mask)
+                .build()
+            val attrs = android.media.AudioAttributes.Builder()
+                .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MOVIE)
+                .build()
+            activity.getSystemService(android.media.AudioManager::class.java)
+                .spatializer.canBeSpatialized(attrs, fmt)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun spatialStatus(): String {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return "unavailable"
+        return try {
+            val sp = activity
+                .getSystemService(android.media.AudioManager::class.java)
+                .spatializer
+            val fmt = player.audioFormat
+            val channels = fmt?.channelCount ?: 0
+            when {
+                !sp.isAvailable || !sp.isEnabled || channels <= 2 -> "available"
+                wouldBeSpatialized(channels, fmt?.sampleRate ?: 0) -> "on"
+                else -> "available"
+            }
+        } catch (_: Exception) {
+            "unavailable"
+        }
+    }
+
+    /// Re-emits state when the system toggle flips or routing changes
+    /// (headphones plugged / unplugged) while playing. Note the callback
+    /// signatures take the Spatializer as first arg (public API differs
+    /// from the hidden SystemApi docs floating around).
+    private val spatialExecutor = java.util.concurrent.Executor { it.run() }
+    private val spatialListener: android.media.Spatializer.OnSpatializerStateChangedListener? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            object : android.media.Spatializer.OnSpatializerStateChangedListener {
+                override fun onSpatializerEnabledChanged(
+                    sp: android.media.Spatializer,
+                    enabled: Boolean,
+                ) {
+                    handler.post { emit() }
+                }
+
+                override fun onSpatializerAvailableChanged(
+                    sp: android.media.Spatializer,
+                    available: Boolean,
+                ) {
+                    handler.post { emit() }
+                }
+            }
+        } else {
+            null
+        }
+    private var spatialRegistered = false
+
+    private fun registerSpatialListenerOnce() {
+        if (spatialRegistered) return
+        spatialRegistered = true
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        try {
+            val sp = activity
+                .getSystemService(android.media.AudioManager::class.java)
+                .spatializer
+            spatialListener?.let { sp.addOnSpatializerStateChangedListener(spatialExecutor, it) }
+        } catch (_: Exception) {}
+    }
+
+    private fun unregisterSpatialListener() {
+        if (!spatialRegistered) return
+        spatialRegistered = false
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        try {
+            val sp = activity
+                .getSystemService(android.media.AudioManager::class.java)
+                .spatializer
+            spatialListener?.let { sp.removeOnSpatializerStateChangedListener(it) }
+        } catch (_: Exception) {}
+    }
+
     private fun applyAudioEffects() {
         try { loudnessEnhancer?.release() } catch (_: Exception) {}
         loudnessEnhancer = null
@@ -833,6 +945,7 @@ class ExoPlayerView(
         methodChannel.setMethodCallHandler { call: MethodCall, result: MethodChannel.Result ->
             when (call.method) {
                 "open" -> {
+                    registerSpatialListenerOnce()
                     val path = call.argument<String>("path")
                     val uri = call.argument<String>("uri")
                     val subtitleUri = call.argument<String>("subtitleUri")
@@ -1483,6 +1596,7 @@ class ExoPlayerView(
         map["audioPassthrough"] = passthroughEnabled
         map["audioBoost"] = audioBoost
         map["nightMode"] = nightModeEnabled
+        map["spatialAudio"] = spatialStatus()
         if (chapters.isNotEmpty()) {
             map["chapters"] = chapters.map {
                 mapOf(
@@ -1623,6 +1737,7 @@ class ExoPlayerView(
     override fun dispose() {
         restoreRefreshRate()
         stopPositionTicker()
+        unregisterSpatialListener()
         try { loudnessEnhancer?.release() } catch (_: Exception) {}
         loudnessEnhancer = null
         player.removeListener(listener)

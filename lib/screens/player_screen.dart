@@ -109,6 +109,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   String? _liveAudioCodec;
   int? _liveAudioChannelCount;
   bool _liveAudioPassthrough = false;
+  String _liveSpatial = '';
   String? _liveResolution;
   HdrFormat _liveHdr = HdrFormat.sdr;
   String? _liveDecoderName;
@@ -577,6 +578,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       _liveDecoderName = e.videoDecoderName;
     }
     if (e.isHwDecoder != null) _isHwDecoder = e.isHwDecoder;
+    _liveSpatial = e.spatialAudio;
     _audioTracks = e.audioTracks;
     _selectedAudioTrackIndex = e.selectedAudioTrack;
     if (e.chapters.isNotEmpty) _chapters = e.chapters;
@@ -2369,6 +2371,16 @@ class _PlayerScreenState extends State<PlayerScreen>
     final nightChip = _nightMode
         ? const FormatChip(label: 'Night', color: Color(0xFF7E57C2))
         : null;
+    // Platform spatial audio engaged (Android 13+): the system Spatializer
+    // is enabled for the current routing and the track is multichannel, so
+    // the surround mix is being virtualized to headphones/speakers.
+    final spatialChip = (Platform.isAndroid && _liveSpatial == 'on')
+        ? Tooltip(
+            message:
+                'System spatial audio is virtualizing this surround mix for your output device',
+            child: FormatChip(label: 'Spatial', color: const Color(0xFF4DB6AC)),
+          )
+        : null;
     final chips = [
       hdrChip,
       ?videoChip,
@@ -2378,6 +2390,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       ?transcodeChip,
       ?boostChip,
       ?nightChip,
+      ?spatialChip,
     ];
 
     // IMPORTANT: keep the widget-tree shape stable across casting state.
