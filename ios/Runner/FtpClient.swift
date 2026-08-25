@@ -59,30 +59,33 @@ final class FtpClient: NSObject {
             result(nil)
         case "testConnection":
             let host = args?["host"] as? String ?? ""
-            let port = args?["port"] as? Int ?? 21
+            let port = (args?["port"] as? NSNumber)?.intValue ?? (args?["port"] as? Int) ?? 21
             let path = args?["path"] as? String ?? "/"
             let username = args?["username"] as? String ?? ""
             let password = args?["password"] as? String ?? ""
             let isSftp = args?["isSftp"] as? Bool ?? false
-            Task.detached(priority: .userInitiated) {
+            Task {
                 do {
                     try await Self.probe(
                         host: host, port: port, path: path,
                         username: username, password: password, isSftp: isSftp)
-                    result(["ok": true])
+                    await MainActor.run { result(["ok": true]) }
                 } catch {
-                    result(["ok": false, "error": Self.friendlyError(error)])
+                    let msg = Self.friendlyError(error)
+                    await MainActor.run { result(["ok": false, "error": msg]) }
                 }
             }
         case "listDirectory":
             let id = args?["id"] as? String
             let path = args?["path"] as? String ?? "/"
-            Task.detached(priority: .userInitiated) {
+            Task {
                 do {
                     guard let id else { throw FtpError.badRequest("Missing server id") }
-                    result(try await Self.listDirectory(serverId: id, requestedPath: path))
+                    let entries = try await Self.listDirectory(serverId: id, requestedPath: path)
+                    await MainActor.run { result(entries) }
                 } catch {
-                    result(FlutterError(code: "ftp", message: Self.friendlyError(error), details: nil))
+                    let err = FlutterError(code: "ftp", message: Self.friendlyError(error), details: nil)
+                    await MainActor.run { result(err) }
                 }
             }
         default:
