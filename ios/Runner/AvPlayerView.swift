@@ -1235,20 +1235,33 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         var foundPlus = false
         var found10 = false
 
-        // Strict NAL-structure scan. The old version treated every byte
-        // offset as a candidate NAL header and had a raw `B5 00 3C`
-        // fallback — both matched random compressed bytes, so ordinary SDR
-        // files showed the HDR10+ badge. Now an SEI is accepted only when
-        // the stream structure vouches for it:
-        //   Annex-B (MKV/TS):  00 00 01 start code directly before the NAL.
-        //   AVCC    (MP4/MOV): 4-byte BE length prefix whose chain walks
-        //                      cleanly to the next segment.
-        // Container chunks can split a NAL, but SEIs are tiny — missing one
-        // split NAL costs nothing; dozens more follow unsplit.
+        // Strict NAL-structure scan. Random compressed bytes must never be
+        // able to fake an SEI, so every candidate has to clear four gates:
+        //   1. Structure — Annex-B start code (MKV/TS) or a chaining AVCC
+        //      length prefix (MP4/MOV).
+        //   2. Codec — the stream must show HEVC parameter sets (VPS 0x40 /
+        //      SPS 0x42 / PPS 0x44) and NO H.264 ones (SPS 0x67 / PPS 0x68 /
+        //      IDR 0x65). H.264 MP4s are full of valid length chains whose
+        //      header bytes occasionally alias HEVC types 39/40, which is how
+        //      SDR phone recordings got HDR badges before this gate.
+        //   3. Prefix SEI only — HDR10+/ST 2086/CLL ride NAL type 39.
+        //   4. Payload-size windows — mastering display ≈ 24 B, CLL = 4 B,
+        //      ST 2094-40 ≥ 4 B with the ITU-T T.35 B5 003C head.
+
+        var sawHevc = false
+        var sawH264 = false
+
+        func noteCodec(_ b: UInt8) {
+            switch b {
+            case 0x40, 0x42, 0x44, 0x46: sawHevc = true
+            case 0x65, 0x67, 0x68: sawH264 = true
+            default: break
+            }
+        }
 
         func inspectNal(start: Int, end: Int) {
             let nalType = (Int(bytes[start]) >> 1) & 0x3F
-            guard nalType == 39 || nalType == 40 else { return }
+            guard nalType == 39 else { return } // prefix SEI only
             var pos = start + 2
             while pos + 1 < end {
                 var ptype = 0
@@ -1260,13 +1273,13 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                 if pos >= end { break }
                 psize += Int(bytes[pos]); pos += 1
                 if pos + psize > end { break } // must fit inside this NAL
-                // T.35 HDR10+ ST 2094-40 → payloadType 4, country 0xB5,
-                // provider 0x003C.
                 if ptype == 4, psize >= 4,
                    bytes[pos] == 0xB5, bytes[pos + 1] == 0x00, bytes[pos + 2] == 0x3C {
-                    foundPlus = true
-                } else if ptype == 137 || ptype == 144 {
-                    found10 = true
+                    foundPlus = true // ST 2094-40 (HDR10+) via ITU-T T.35
+                } else if ptype == 137, (20...40).contains(psize) {
+                    found10 = true // ST 2086 mastering display colour volume
+                } else if ptype == 144, (3...8).contains(psize) {
+                    found10 = true // content light level
                 }
                 pos += psize
                 if foundPlus && found10 { return }
@@ -1285,12 +1298,15 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                 // Annex-B NAL begins after the 3-byte start code; ends at
                 // the next start code (capped — real SEIs are < 4 KB).
                 let s = i + 3
+                if s < bytes.count { noteCodec(bytes[s]) }
                 var e = s
                 while e < limit {
                     if bytes[e] == 0, bytes[e + 1] == 0, bytes[e + 2] == 1 { break }
                     if e - s > 256 * 1024 { break }
                     e += 1
                 }
+                // Inspect unconditionally; the end-of-scan codec verdict
+                // discards everything if the stream turns out H.264.
                 inspectNal(start: s, end: e)
                 i = s
                 continue
@@ -1301,8 +1317,9 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             if i >= 8 {
                 let len = be32(i - 4)
                 if len > 2, len <= bytes.count - i {
+                    noteCodec(bytes[i])
                     let nt = (Int(bytes[i]) >> 1) & 0x3F
-                    if nt == 39 || nt == 40 {
+                    if nt == 39 {
                         let next = i + len
                         if next + 4 <= bytes.count {
                             let nl = be32(next)
@@ -1315,6 +1332,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             }
             i += 1
         }
+        if sawH264 && !sawHevc { return (false, false) } // H.264: no HEVC SEIs exist
         return (foundPlus, found10)
     }
 
