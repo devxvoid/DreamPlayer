@@ -227,6 +227,10 @@ class _PlayerScreenState extends State<PlayerScreen>
     // view is used on every platform (phones, tablets, Android TV / Fire TV).
     if (Platform.isAndroid) {
       await Permission.videos.request();
+      // Background-playback notification needs POST_NOTIFICATIONS on 13+.
+      // Fire-and-forget: denial only hides the notification, playback and
+      // the foreground service keep working.
+      unawaited(Permission.notification.request());
     }
     try {
       final exo = ExoPlayerController();

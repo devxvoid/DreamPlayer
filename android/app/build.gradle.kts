@@ -48,6 +48,9 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-hls:1.10.1")
     implementation("androidx.media3:media3-ui:1.10.1")
     implementation("androidx.media3:media3-common:1.10.1")
+    // MediaSessionCompat + MediaStyle notification for background playback
+    // (notification transport controls, lock screen, headset/Bluetooth keys).
+    implementation("androidx.media:media:1.7.0")
     // OkHttp-backed HTTP DataSource so playback can use a permissive TLS client
     // for WebDAV servers with self-signed certificates. DefaultHttpDataSource
     // uses HttpURLConnection internally, which cannot accept custom certs.

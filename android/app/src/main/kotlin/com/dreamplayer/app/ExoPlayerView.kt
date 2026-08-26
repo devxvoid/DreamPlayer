@@ -413,6 +413,19 @@ class ExoPlayerView(
         .also { p ->
             p.repeatMode = Player.REPEAT_MODE_OFF
             p.volume = 1f
+            // Background-playback hygiene: proper audio-focus handling (pause
+            // for phone calls / other apps' audio), pause when headphones are
+            // unplugged, and CPU/Wi-Fi wake locks while playing in background
+            // (network streams keep buffering with the screen off).
+            p.setAudioAttributes(
+                androidx.media3.common.AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                    .build(),
+                /* handleAudioFocus = */ true,
+            )
+            p.setHandleAudioBecomingNoisy(true)
+            p.setWakeMode(C.WAKE_MODE_NETWORK)
             // No language preference: Media3's empty preferredAudioLanguages
             // already selects the container's DEFAULT-flagged audio track
             // (first track as last resort) — exactly the file's own default.
@@ -1117,6 +1130,14 @@ class ExoPlayerView(
                     player.prepare()
                     if (startMs > 0L) player.seekTo(startMs)
                     player.play()
+                    // Background playback: wrap the player in a media session
+                    // + foreground-service notification from the first open.
+                    PlaybackManager.attach(activity, player)
+                    PlaybackManager.setTitle(
+                        call.argument<String>("title")
+                            ?: uri?.substringAfterLast('/')
+                            ?: path?.substringAfterLast('/'),
+                    )
                     subtitleOn = currentSubtitle != null
                     probeHdr10Plus(path, uri, headers)
                     probeHdr10(path, uri, headers)
@@ -1663,6 +1684,9 @@ class ExoPlayerView(
             }
         }
         sink?.success(stateMap(name, message, errorCause))
+        // Mirror the state into the MediaSession + notification so background
+        // playback controls (lock screen / headset / notification) stay live.
+        try { PlaybackManager.sync(activity) } catch (_: Exception) {}
     }
 
     override fun getView(): View = playerView
@@ -1772,6 +1796,7 @@ class ExoPlayerView(
         restoreRefreshRate()
         stopPositionTicker()
         unregisterSpatialListener()
+        PlaybackManager.release(activity)
         try { loudnessEnhancer?.release() } catch (_: Exception) {}
         loudnessEnhancer = null
         try { bassBoostFx?.release() } catch (_: Exception) {}

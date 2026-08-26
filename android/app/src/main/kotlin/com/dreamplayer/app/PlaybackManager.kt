@@ -1,0 +1,266 @@
+package com.dreamplayer.app
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.support.v4.media.MediaMetadataCompat
+import android.support.v4.media.session.MediaSessionCompat
+import android.support.v4.media.session.PlaybackStateCompat
+import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
+import androidx.media.app.NotificationCompat.MediaStyle
+import androidx.media.session.MediaButtonReceiver
+import androidx.media3.common.C
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+
+/**
+ * MediaSession + media-notification glue for background playback.
+ *
+ * The video player lives in the Activity-scoped platform view
+ * ([ExoPlayerView]); this singleton wraps it in a MediaSessionCompat and
+ * drives [PlaybackService] (a foreground service of type mediaPlayback) so
+ * the process keeps foreground priority when the app is backgrounded or the
+ * screen locks. The MediaStyle notification shows rewind-10s / play-pause /
+ * forward-10s / close, all routed through the session callback back into the
+ * live player instance.
+ *
+ * Lifecycle:
+ *  - [attach] on `open` (lazily creates the session),
+ *  - [sync] on every player-state change (called from ExoPlayerView.emit),
+ *  - [release] when the platform view is disposed,
+ *  - [stop] when the user taps Close or swipes the (paused) notification.
+ */
+object PlaybackManager {
+
+    private const val CHANNEL_ID = "dreamplayer_playback"
+    private const val NOTIF_ID = 4210
+
+    private var session: MediaSessionCompat? = null
+    private var player: ExoPlayer? = null
+    private var title: String? = null
+
+    /// Guards redundant notification rebuilds (position ticker emits ~1/s).
+    private var lastNotifyKey: String? = null
+
+    val sessionCompatToken: MediaSessionCompat.Token?
+        get() = session?.sessionToken
+
+    /// For [MediaButtonReceiver.handleIntent] — routes headset/Bluetooth
+    /// media-button key events into the session callback.
+    fun mediaSessionForMediaButtons(): MediaSessionCompat? = session
+
+    fun attach(context: Context, exoPlayer: ExoPlayer) {
+        player = exoPlayer
+        if (session == null) {
+            session = MediaSessionCompat(context.applicationContext, "DreamPlayer").apply {
+                setCallback(object : MediaSessionCompat.Callback() {
+                    override fun onPlay() {
+                        player?.play()
+                    }
+
+                    override fun onPause() {
+                        player?.pause()
+                    }
+
+                    override fun onSeekTo(pos: Long) {
+                        player?.seekTo(pos)
+                    }
+
+                    override fun onRewind() {
+                        seekBy(-10_000L)
+                    }
+
+                    override fun onFastForward() {
+                        seekBy(10_000L)
+                    }
+
+                    override fun onStop() {
+                        player?.pause()
+                        stop(context)
+                    }
+                })
+            }
+        }
+        session!!.isActive = true
+    }
+
+    fun setTitle(value: String?) {
+        title = value?.takeIf { it.isNotBlank() }
+        lastNotifyKey = null
+    }
+
+    /**
+     * Reflects the current player state into the session + notification.
+     * Safe to call on every event: playback-state writes are cheap, and the
+     * notification itself is only rebuilt when something visible changed.
+     */
+    fun sync(context: Context) {
+        val p = player ?: return
+        val s = session ?: return
+        // Reactivate after a transient IDLE (setMediaItem resets the player
+        // to IDLE between opens) or an earlier stop().
+        s.isActive = true
+        when {
+            p.playbackState == Player.STATE_IDLE -> {
+                stop(context)
+                return
+            }
+            p.playbackState == Player.STATE_ENDED -> {
+                stop(context)
+                return
+            }
+        }
+
+        val playing = p.isPlaying
+        val duration = if (p.duration == C.TIME_UNSET) 0L else p.duration
+        val stateAction = if (playing) {
+            PlaybackStateCompat.STATE_PLAYING
+        } else if (p.playbackState == Player.STATE_BUFFERING && p.playWhenReady) {
+            PlaybackStateCompat.STATE_BUFFERING
+        } else {
+            PlaybackStateCompat.STATE_PAUSED
+        }
+
+        s.setPlaybackState(
+            PlaybackStateCompat.Builder()
+                .setActions(
+                    PlaybackStateCompat.ACTION_PLAY
+                        or PlaybackStateCompat.ACTION_PAUSE
+                        or PlaybackStateCompat.ACTION_PLAY_PAUSE
+                        or PlaybackStateCompat.ACTION_SEEK_TO
+                        or PlaybackStateCompat.ACTION_FAST_FORWARD
+                        or PlaybackStateCompat.ACTION_REWIND
+                        or PlaybackStateCompat.ACTION_STOP
+                )
+                .setState(stateAction, p.currentPosition, if (playing) p.playbackParameters.speed else 0f)
+                .build(),
+        )
+        s.setMetadata(
+            MediaMetadataCompat.Builder()
+                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title ?: "DreamPlayer")
+                .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, "DreamPlayer")
+                .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, duration)
+                .build(),
+        )
+
+        ContextCompat.startForegroundService(context, Intent(context, PlaybackService::class.java))
+
+        // Rebuild the notification only when a visible aspect changed; the
+        // lockscreen extrapolates position from state.speed between updates.
+        val key = "${p.playbackState}|$playing|$title"
+        if (key != lastNotifyKey) {
+            lastNotifyKey = key
+            notify(context)
+        }
+    }
+
+    /// User tapped Close (or dismissed a paused notification): stop playback,
+    /// drop the foreground UI, keep the player itself alive for the screen.
+    fun stop(context: Context) {
+        lastNotifyKey = null
+        context.getSystemService(NotificationManager::class.java)?.cancel(NOTIF_ID)
+        context.stopService(Intent(context, PlaybackService::class.java))
+        session?.isActive = false
+    }
+
+    /// Full teardown when the platform view goes away: the player is being
+    /// released, so the notification/service must not outlive it.
+    fun release(context: Context) {
+        stop(context)
+        player = null
+        lastNotifyKey = null
+        try {
+            session?.isActive = false
+            session?.release()
+        } catch (_: Exception) {}
+        session = null
+        title = null
+    }
+
+    /// Swipe-away while backgrounded: pause so audio doesn't keep playing
+    /// with no way back except reopening the app (safe default).
+    fun onTaskRemoved(context: Context) {
+        player?.pause()
+        stop(context)
+    }
+
+    private fun seekBy(deltaMs: Long) {
+        val p = player ?: return
+        val target = (p.currentPosition + deltaMs).coerceIn(0L, p.duration.coerceAtLeast(0L))
+        p.seekTo(target)
+    }
+
+    private fun notify(context: Context) {
+        val nm = context.getSystemService(NotificationManager::class.java) ?: return
+        nm.notify(NOTIF_ID, buildNotification(context))
+    }
+
+    fun buildNotification(context: Context): Notification {
+        ensureChannel(context)
+        val p = player
+        val playing = p?.isPlaying == true
+
+        val contentPi = PendingIntent.getActivity(
+            context,
+            0,
+            context.packageManager.getLaunchIntentForPackage(context.packageName)
+                ?: Intent(context, Class.forName("com.dreamplayer.app.MainActivity")),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        fun button(action: Long, iconRes: Int, label: String): NotificationCompat.Action =
+            NotificationCompat.Action.Builder(
+                iconRes,
+                label,
+                MediaButtonReceiver.buildMediaButtonPendingIntent(context, action),
+            ).build()
+
+        return NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentTitle(title ?: "DreamPlayer")
+            .setContentText("DreamPlayer")
+            .setContentIntent(contentPi)
+            .setOnlyAlertOnce(true)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setOngoing(playing)
+            .setDeleteIntent(
+                MediaButtonReceiver.buildMediaButtonPendingIntent(
+                    context, PlaybackStateCompat.ACTION_STOP,
+                ),
+            )
+            .addAction(button(PlaybackStateCompat.ACTION_REWIND, android.R.drawable.ic_media_rew, "Back 10s"))
+            .addAction(
+                button(
+                    PlaybackStateCompat.ACTION_PLAY_PAUSE,
+                    if (playing) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
+                    if (playing) "Pause" else "Play",
+                ),
+            )
+            .addAction(button(PlaybackStateCompat.ACTION_FAST_FORWARD, android.R.drawable.ic_media_ff, "Forward 10s"))
+            .addAction(button(PlaybackStateCompat.ACTION_STOP, android.R.drawable.ic_menu_close_clear_cancel, "Close"))
+            .setStyle(
+                MediaStyle()
+                    .setMediaSession(session?.sessionToken)
+                    .setShowActionsInCompactView(0, 1, 2),
+            )
+            .build()
+    }
+
+    private fun ensureChannel(context: Context) {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O) return
+        val nm = context.getSystemService(NotificationManager::class.java) ?: return
+        if (nm.getNotificationChannel(CHANNEL_ID) != null) return
+        nm.createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_ID,
+                "Playback",
+                NotificationManager.IMPORTANCE_LOW,
+            ).apply {
+                setShowBadge(false)
+            },
+        )
+    }
+}

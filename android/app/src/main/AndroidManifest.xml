@@ -8,6 +8,11 @@
         android:maxSdkVersion="32"/>
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
+    <!-- Background playback: foreground media service + notification controls -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <!-- Android TV: show on leanback launchers; required=false keeps the APK
          installable on phones/tablets. -->
     <uses-feature android:name="android.software.leanback" android:required="false"/>
@@ -83,6 +88,25 @@
                 <data android:mimeType="application/octet-stream"/>
             </intent-filter>
         </activity>
+        <!-- Background playback keepalive: hosts the MediaStyle notification;
+             the player itself lives in the platform view inside MainActivity. -->
+        <service
+            android:name=".PlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON"/>
+            </intent-filter>
+        </service>
+        <!-- Routes headset / Bluetooth media-button events to the session
+             (also the restart target of notification action PendingIntents). -->
+        <receiver
+            android:name="androidx.media.session.MediaButtonReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON"/>
+            </intent-filter>
+        </receiver>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
