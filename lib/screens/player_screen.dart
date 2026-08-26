@@ -2114,18 +2114,9 @@ class _PlayerScreenState extends State<PlayerScreen>
                       style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
                     ),
                   ),
-                  // Picture-in-picture (Android): floats the video over other
-                  // apps. Auto-enters on HOME while playing; this is the
-                  // manual entry.
-                  if (Platform.isAndroid)
-                    _tvListTile(
-                      leading: const Icon(Icons.picture_in_picture_alt, color: Colors.white70),
-                      title: const Text('Picture-in-picture', style: TextStyle(color: Colors.white)),
-                      onTap: () {
-                        Navigator.pop(sheetContext);
-                        _exo?.enterPip();
-                      },
-                    ),
+                  // Picture-in-picture lives in app Settings (Player section):
+                  // the toggle gates the automatic HOME/recents entry on both
+                  // platforms; there is no manual ⋮ entry.
                   // Aspect ratio dropdown
                   _tvListTile(
                     leading: const Icon(Icons.aspect_ratio, color: Colors.white70),

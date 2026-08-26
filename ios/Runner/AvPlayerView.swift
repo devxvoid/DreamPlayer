@@ -320,6 +320,21 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
 
         setupRemoteCommands()
         eventChannel.setStreamHandler(self)
+        // Keep the pip auto-inline flag in sync when the Settings toggle
+        // changes while a player is alive.
+        NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.pipController?.canStartPictureInPictureAutomaticallyFromInline =
+                Self.pipSettingEnabled()
+            // If the toggle was just turned off and a controller already
+            // exists, keep it (manual pip still works via the system UI);
+            // auto-inline is what the toggle gates. If turned off before
+            // open, ensurePipController simply won't create one.
+        }
 
         methodChannel.setMethodCallHandler { [weak self] call, result in
             Task { @MainActor in
@@ -761,19 +776,29 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                     // SEI 137/144 scan upgrades them to HDR10. Scan the first
                     // ~8 MiB for HEVC SEI NALs (prefix 39 / suffix 40, ITU-T T.35
                     // B5 00 3C for HDR10+, 137/144 for static HDR10).
-                    let hdrPath = fileURL.path
-                    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                        let res = Self.scanHdrProbe(path: hdrPath)
-                        if res.hdr10Plus || res.hdr10 {
-                            DispatchQueue.main.async { [weak self] in
-                                guard let self else { return }
-                                if res.hdr10Plus, !self.isHdr10PlusContent {
-                                    self.isHdr10PlusContent = true
+                    // Only run the byte-scan on HEVC-family codecs — an H.264
+                    // SDR file must never badge HDR10 via a random SEI alias
+                    // (the old noteCodec heuristic counted 0x40/0x42 as HEVC).
+                    let codecForHdr = (probe?.videoCodecName ?? "").lowercased()
+                    let hevcFamily = codecForHdr.contains("hevc")
+                        || codecForHdr.contains("hev1")
+                        || codecForHdr.contains("hvc1")
+                        || codecForHdr.hasPrefix("dv")
+                    if hevcFamily {
+                        let hdrPath = fileURL.path
+                        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                            let res = Self.scanHdrProbe(path: hdrPath)
+                            if res.hdr10Plus || res.hdr10 {
+                                DispatchQueue.main.async { [weak self] in
+                                    guard let self else { return }
+                                    if res.hdr10Plus, !self.isHdr10PlusContent {
+                                        self.isHdr10PlusContent = true
+                                    }
+                                    if res.hdr10, !self.isHdr10Content {
+                                        self.isHdr10Content = true
+                                    }
+                                    self.emit()
                                 }
-                                if res.hdr10, !self.isHdr10Content {
-                                    self.isHdr10Content = true
-                                }
-                                self.emit()
                             }
                         }
                     }
@@ -906,15 +931,26 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     /// the video floats.
     private var inPip = false
 
+    /// Settings toggle `dreamplayer.pipEnabled` (default true) — read
+    /// natively so HOME still works when Dart is backgrounded.
+    private static func pipSettingEnabled() -> Bool {
+        if UserDefaults.standard.object(forKey: "flutter.dreamplayer.pipEnabled") == nil {
+            return true
+        }
+        return UserDefaults.standard.bool(forKey: "flutter.dreamplayer.pipEnabled")
+    }
+
     private func ensurePipController() {
         guard pipController == nil,
+              Self.pipSettingEnabled(),
               AVPictureInPictureController.isPictureInPictureSupported(),
               let layer = findPlayerLayer(),
               layer.player != nil else { return }
         let controller = AVPictureInPictureController(playerLayer: layer)
         guard let controller else { return }
         // Pressing HOME while playing floats the video automatically (same
-        // trigger as Android's onUserLeaveHint path).
+        // trigger as Android's onUserLeaveHint path). The Settings toggle
+        // gates this — when off, pipController stays nil.
         controller.canStartPictureInPictureAutomaticallyFromInline = true
         controller.delegate = self
         pipController = controller

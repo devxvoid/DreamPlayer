@@ -267,10 +267,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   if (mounted) setState(() => _swipeGestures = value);
                 },
               ),
-              // PiP is Android-only (iOS has no auto-entry; the manual iOS
-              // path needs the native AVPlayer pip button) and pointless on
-              // TV, so the toggle hides with the other phone-only controls.
-              if (defaultTargetPlatform == TargetPlatform.android)
+              // PiP on both platforms: Android auto-enters from
+              // onUserLeaveHint (native pref read), iOS arms
+              // canStartPictureInPictureAutomaticallyFromInline from the same
+              // pref. Pointless on TV, so it hides with the other
+              // phone-only controls.
+              if (defaultTargetPlatform == TargetPlatform.android ||
+                  defaultTargetPlatform == TargetPlatform.iOS)
                 SwitchListTile(
                   secondary: const Icon(Icons.picture_in_picture),
                   title: const Text('Picture-in-picture'),
