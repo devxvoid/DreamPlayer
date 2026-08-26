@@ -272,6 +272,23 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     private var nightModeEnabled: Bool =
         UserDefaults.standard.bool(forKey: "flutter.dreamplayer.nightMode")
 
+    // ---- Background playback: lock screen / control center ----
+    /// Media title from Dart's `open` (shown on the lock screen).
+    private var mediaTitle: String?
+    /// Remote-command target tokens, removed in deinit.
+    private var remoteCommandTokens: [Any] = []
+
+    deinit {
+        let cc = MPRemoteCommandCenter.shared()
+        for token in remoteCommandTokens {
+            cc.playCommand.removeTarget(token)
+            cc.pauseCommand.removeTarget(token)
+            cc.togglePlayPauseCommand.removeTarget(token)
+            cc.changePlaybackPositionCommand.removeTarget(token)
+        }
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+    }
+
     private func applyAudioBoost() {
         // AVPlayer volume is capped at 1.0; boost >1 is clamped and night mode
         // is a flag only for UI / future DRC tap. Store and emit so chips update.
@@ -300,6 +317,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             observeEngine(engine)
         }
 
+        setupRemoteCommands()
         eventChannel.setStreamHandler(self)
 
         methodChannel.setMethodCallHandler { [weak self] call, result in
@@ -511,6 +529,8 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         let path = args?["path"] as? String
         let uri = args?["uri"] as? String
         let subtitleUri = args?["subtitleUri"] as? String
+        // Lock-screen title (same payload Android reads natively).
+        if let t = args?["title"] as? String, !t.isEmpty { mediaTitle = t }
         let startMs = (args?["startPositionMs"] as? NSNumber)?.int64Value ?? 0
         // HTTP request headers (e.g. WebDAV Basic auth) + per-server self-signed
         // opt-in, both per media item at open time (same contract as Android).
@@ -1018,6 +1038,99 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     private func emit() {
         guard let sink = eventSink else { return }
         sink(stateMap())
+        updateNowPlaying()
+    }
+
+    // MARK: - Background playback (lock screen / control center)
+
+    /// Wires lock-screen and headset transport controls to the engine. The
+    /// play/seek handlers mirror the method-channel cases (`.ended` is
+    /// terminal in AetherEngine — replay/scrub reloads the session).
+    private func setupRemoteCommands() {
+        let cc = MPRemoteCommandCenter.shared()
+        remoteCommandTokens.append(
+            cc.playCommand.addTarget { [weak self] _ in
+                guard let self else { return .commandFailed }
+                Task { @MainActor in
+                    if self.engine?.state == .ended {
+                        await self.reloadSession(at: 0)
+                    } else {
+                        self.engine?.play()
+                    }
+                    self.updateNowPlaying()
+                }
+                return .success
+            })
+        remoteCommandTokens.append(
+            cc.pauseCommand.addTarget { [weak self] _ in
+                self?.engine?.pause()
+                self?.updateNowPlaying()
+                return .success
+            })
+        remoteCommandTokens.append(
+            cc.togglePlayPauseCommand.addTarget { [weak self] _ in
+                guard let self, let engine = self.engine else { return .commandFailed }
+                if engine.state == .playing {
+                    engine.pause()
+                    self.updateNowPlaying()
+                    return .success
+                }
+                Task { @MainActor in
+                    if engine.state == .ended {
+                        await self.reloadSession(at: 0)
+                    } else {
+                        engine.play()
+                    }
+                    self.updateNowPlaying()
+                }
+                return .success
+            })
+        remoteCommandTokens.append(
+            cc.changePlaybackPositionCommand.addTarget { [weak self] event in
+                guard let self,
+                      let e = event as? MPChangePlaybackPositionCommandEvent else {
+                    return .commandFailed
+                }
+                let target = max(0, e.positionTime)
+                Task { @MainActor in
+                    if self.engine?.state == .ended {
+                        await self.reloadSession(at: target)
+                    } else {
+                        await self.engine?.seek(to: target)
+                    }
+                    self.updateNowPlaying()
+                }
+                return .success
+            })
+    }
+
+    /// Mirrors engine state into MPNowPlayingInfoCenter so the lock screen /
+    /// control center show title + position with a live scrubber. Cleared on
+    /// idle/error so a closed player doesn't linger there.
+    private func updateNowPlaying() {
+        guard let engine else { return }
+        switch engine.state {
+        case .idle, .error:
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            return
+        case .ended:
+            var info = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
+            info[MPNowPlayingInfoPropertyPlaybackRate] = 0
+            info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = engine.duration
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+            return
+        default:
+            break
+        }
+        let playing = engine.state == .playing
+        let info: [String: Any] = [
+            MPMediaItemPropertyTitle: mediaTitle ?? "DreamPlayer",
+            MPMediaItemPropertyArtist: "DreamPlayer",
+            MPMediaItemPropertyPlaybackDuration: max(0, engine.duration),
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: max(0, engine.currentTime),
+            MPNowPlayingInfoPropertyPlaybackRate: playing ? 1.0 : 0.0,
+        ]
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
 
     private func audioTrackMaps() -> [[String: Any]] {
