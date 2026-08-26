@@ -5,6 +5,8 @@ import 'package:path_provider/path_provider.dart';
 
 import '../services/downloaded_subtitles_store.dart';
 import '../services/opensubtitles_client.dart';
+import '../services/subtitle_languages.dart';
+import '../services/subtitle_prefs.dart';
 
 /// Bottom sheet for OpenSubtitles search & download (anonymous 5/day, login 20/day).
 class OpensubtitlesSheet extends StatefulWidget {
@@ -23,7 +25,7 @@ class OpensubtitlesSheet extends StatefulWidget {
 
 class _OpensubtitlesSheetState extends State<OpensubtitlesSheet> {
   late final TextEditingController _queryCtrl;
-  final _langCtrl = TextEditingController(text: 'en');
+  String _novaCode = 'eng';
   bool _searching = false;
   bool _downloading = false;
   String? _error;
@@ -35,7 +37,15 @@ class _OpensubtitlesSheetState extends State<OpensubtitlesSheet> {
   void initState() {
     super.initState();
     _queryCtrl = TextEditingController(text: widget.initialQuery);
+    _loadDownloadLang();
     _maybeHash();
+  }
+
+  Future<void> _loadDownloadLang() async {
+    try {
+      final code = await SubtitlePrefs.loadDownloadLanguage();
+      if (mounted) setState(() => _novaCode = code);
+    } catch (_) {}
   }
 
   Future<void> _maybeHash() async {
@@ -49,13 +59,42 @@ class _OpensubtitlesSheetState extends State<OpensubtitlesSheet> {
   @override
   void dispose() {
     _queryCtrl.dispose();
-    _langCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _pickLanguage() async {
+    final picked = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Download language'),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 360,
+          child: RadioGroup<String>(
+            groupValue: _novaCode,
+            onChanged: (v) => Navigator.pop(ctx, v),
+            child: ListView.builder(
+              itemCount: subtitleLanguages.length,
+              itemBuilder: (_, i) {
+                final l = subtitleLanguages[i];
+                if (l.novaCode == 'system') return const SizedBox.shrink();
+                return RadioListTile<String>(
+                  value: l.novaCode,
+                  title: Text(l.displayName),
+                );
+              },
+            ),
+          ),
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel'))],
+      ),
+    );
+    if (picked != null && mounted) setState(() => _novaCode = picked);
   }
 
   Future<void> _search() async {
     final q = _queryCtrl.text.trim();
-    final langs = _langCtrl.text.trim().isEmpty ? 'en' : _langCtrl.text.trim();
+    final langs = openSubsCodeForNovaCode(_novaCode);
     if (q.isEmpty && _hash == null) {
       setState(() => _error = 'Enter a search term');
       return;
@@ -180,7 +219,19 @@ class _OpensubtitlesSheetState extends State<OpensubtitlesSheet> {
             Padding(padding: const EdgeInsets.symmetric(horizontal: 20), child: Row(children: [
               Expanded(child: TextField(controller: _queryCtrl, decoration: const InputDecoration(hintText: 'Movie / episode name', hintStyle: TextStyle(color: Colors.white38)), style: const TextStyle(color: Colors.white), onSubmitted: (_) => _search())),
               const SizedBox(width: 8),
-              SizedBox(width: 80, child: TextField(controller: _langCtrl, decoration: const InputDecoration(hintText: 'en', hintStyle: TextStyle(color: Colors.white38)), style: const TextStyle(color: Colors.white))),
+              InkWell(
+                onTap: _pickLanguage,
+                borderRadius: BorderRadius.circular(8),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                  decoration: BoxDecoration(border: Border.all(color: Colors.white24), borderRadius: BorderRadius.circular(8)),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Text(displayNameForNovaCode(_novaCode), style: const TextStyle(color: Colors.white, fontSize: 12)),
+                    const SizedBox(width: 4),
+                    const Icon(Icons.arrow_drop_down, color: Colors.white70, size: 16),
+                  ]),
+                ),
+              ),
               const SizedBox(width: 8),
               ElevatedButton(onPressed: _searching ? null : _search, child: _searching ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('Search')),
             ])),

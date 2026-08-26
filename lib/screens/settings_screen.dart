@@ -10,6 +10,8 @@ import '../services/cache_cleaner.dart';
 import '../services/decoder_mode.dart';
 import '../services/exo_player.dart';
 import '../services/opensubtitles_client.dart';
+import '../services/subtitle_encodings.dart';
+import '../services/subtitle_languages.dart';
 import '../services/subtitle_prefs.dart';
 import '../services/support_links.dart';
 import '../services/trakt_client.dart';
@@ -43,7 +45,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? _osUsername;
   int? _osRemaining;
   bool _osLoggedIn = false;
-  String _prefSubLang = 'en';
+  String _readingLang = 'system';
+  String _downloadLang = 'eng';
+  int _subEncoding = 0;
   bool _autoFetchSubs = false;
 
   @override
@@ -97,10 +101,82 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _loadSubtitlePrefs() async {
     try {
-      final lang = await SubtitlePrefs.loadLanguage();
+      final reading = await SubtitlePrefs.loadReadingLanguage();
+      final download = await SubtitlePrefs.loadDownloadLanguage();
+      final enc = await SubtitlePrefs.loadEncoding();
       final auto = await SubtitlePrefs.loadAutoFetch();
-      if (mounted) setState(() { _prefSubLang = lang; _autoFetchSubs = auto; });
+      if (mounted) setState(() { _readingLang = reading; _downloadLang = download; _subEncoding = enc; _autoFetchSubs = auto; });
     } catch (_) {}
+  }
+
+  Future<void> _pickLanguage({required bool isReading}) async {
+    final current = isReading ? _readingLang : _downloadLang;
+    final picked = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(isReading ? 'Subtitle reading language' : 'Download language'),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 360,
+          child: RadioGroup<String>(
+            groupValue: current,
+            onChanged: (v) => Navigator.pop(ctx, v),
+            child: ListView.builder(
+              itemCount: subtitleLanguages.length,
+              itemBuilder: (_, i) {
+                final l = subtitleLanguages[i];
+                return RadioListTile<String>(
+                  value: l.novaCode,
+                  title: Text(l.displayName),
+                );
+              },
+            ),
+          ),
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel'))],
+      ),
+    );
+    if (picked != null) {
+      if (isReading) {
+        await SubtitlePrefs.saveReadingLanguage(picked);
+        if (mounted) setState(() => _readingLang = picked);
+      } else {
+        await SubtitlePrefs.saveDownloadLanguage(picked);
+        if (mounted) setState(() => _downloadLang = picked);
+      }
+    }
+  }
+
+  Future<void> _pickEncoding() async {
+    final picked = await showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Subtitle encoding'),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 360,
+          child: RadioGroup<int>(
+            groupValue: _subEncoding,
+            onChanged: (v) => Navigator.pop(ctx, v),
+            child: ListView.builder(
+              itemCount: subtitleEncodings.length,
+              itemBuilder: (_, i) {
+                final e = subtitleEncodings[i];
+                return RadioListTile<int>(
+                  value: e.codepage,
+                  title: Text(e.displayName),
+                );
+              },
+            ),
+          ),
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel'))],
+      ),
+    );
+    if (picked != null) {
+      await SubtitlePrefs.saveEncoding(picked);
+      if (mounted) setState(() => _subEncoding = picked);
+    }
   }
 
   Future<void> _loginOpensubtitles() async {
@@ -517,27 +593,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       : _loginOpensubtitles,
             ),
             TvTile(
-              leading: const Icon(Icons.language),
-              title: const Text('Preferred subtitle language'),
-              subtitle: Text(_prefSubLang.toUpperCase()),
-              onTap: () async {
-                final ctrl = TextEditingController(text: _prefSubLang);
-                final picked = await showDialog<String>(
-                  context: context,
-                  builder: (ctx) => AlertDialog(
-                    title: const Text('Preferred language'),
-                    content: TextField(controller: ctrl, decoration: const InputDecoration(hintText: 'en, es, hi…', labelText: 'ISO 639-1 code')),
-                    actions: [
-                      TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-                      TextButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim().toLowerCase()), child: const Text('Save')),
-                    ],
-                  ),
-                );
-                if (picked != null && picked.isNotEmpty) {
-                  await SubtitlePrefs.saveLanguage(picked);
-                  if (mounted) setState(() => _prefSubLang = picked);
-                }
-              },
+              leading: const Icon(Icons.closed_caption),
+              title: const Text('Subtitle reading language'),
+              subtitle: Text(displayNameForNovaCode(_readingLang)),
+              onTap: () => _pickLanguage(isReading: true),
+            ),
+            TvTile(
+              leading: const Icon(Icons.download),
+              title: const Text('Subtitle download language'),
+              subtitle: Text(displayNameForNovaCode(_downloadLang)),
+              onTap: () => _pickLanguage(isReading: false),
+            ),
+            TvTile(
+              leading: const Icon(Icons.text_fields),
+              title: const Text('Subtitle encoding'),
+              subtitle: Text(displayNameForCodepage(_subEncoding)),
+              onTap: _pickEncoding,
             ),
             SwitchListTile(
               secondary: const Icon(Icons.auto_awesome),

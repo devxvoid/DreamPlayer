@@ -27,6 +27,7 @@ import '../services/watched_store.dart';
 import '../services/subtitle_style.dart';
 import '../services/downloaded_subtitles_store.dart';
 import '../services/opensubtitles_client.dart';
+import '../services/subtitle_languages.dart';
 import '../services/subtitle_prefs.dart';
 import 'subtitle_settings_screen.dart';
 import 'opensubtitles_sheet.dart';
@@ -131,6 +132,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   bool _autoPlayFired = false;
   int _selectedSubtitleTrack = -1;
   bool _autoFetchFired = false;
+  bool _readingAutoSelected = false;
 
   /// True while the activity floats in picture-in-picture mode: every overlay
   /// (bars, transport pill, gestures) hides so the pip window shows only the
@@ -320,6 +322,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _markedWatched = false;
     _autoPlayFired = false;
     _autoFetchFired = false;
+    _readingAutoSelected = false;
     // Chips flash again for each newly opened video.
     _chipsFlashedForOpen = false;
     // A-B loop points are per-video.
@@ -707,6 +710,11 @@ class _PlayerScreenState extends State<PlayerScreen>
 
     if (wasPlaying != _playing || wasBuffering != _buffering) {
       _syncControlsForPlaybackState();
+    }
+    // Nova-style: reading language auto-select (pick track matching pref when nothing selected).
+    if (!_readingAutoSelected && e.subtitleTracks.isNotEmpty && e.selectedSubtitleTrack < 0) {
+      _readingAutoSelected = true;
+      Future.microtask(() => _maybeAutoSelectReading(e.subtitleTracks));
     }
     // Auto-fetch online subtitles once per video when no tracks exist (Nova-style).
     if (!_autoFetchFired && e.state == _nativeStateReady && _subtitleTracks.isEmpty && e.subtitleTracks.isEmpty) {
@@ -1838,7 +1846,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       final downloaded = await DownloadedSubtitlesStore.loadForVideo(resumeKey);
       if (downloaded.isNotEmpty) return;
       if (_current.subtitleUri != null && _current.subtitleUri!.isNotEmpty) return;
-      final lang = await SubtitlePrefs.loadLanguage();
+      final nova = await SubtitlePrefs.loadDownloadLanguage();
+      final lang = openSubsCodeForNovaCode(nova);
       final query = _current.title.trim().isEmpty ? _current.id : _current.title.trim();
       String? hash;
       if (_current.path != null && _current.path!.isNotEmpty) {
@@ -1877,6 +1886,19 @@ class _PlayerScreenState extends State<PlayerScreen>
       );
       await _reopenAt(pos, _duration);
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Auto-fetched: ${entry.fileName}')));
+    } catch (_) {}
+  }
+
+  Future<void> _maybeAutoSelectReading(List<ExoSubtitleTrack> tracks) async {
+    try {
+      final pref = await SubtitlePrefs.loadReadingLanguage();
+      if (pref == 'system') return;
+      for (final t in tracks) {
+        if (trackMatchesNovaCode(t.language, pref) || trackMatchesNovaCode(t.label, pref)) {
+          await _exo?.selectSubtitleTrack(t.index);
+          break;
+        }
+      }
     } catch (_) {}
   }
 
