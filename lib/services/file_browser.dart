@@ -152,4 +152,21 @@ class FileBrowserService {
     return result;
   }
 
+  /// Embedded cover-art bytes for a local video (metadata-only read — safe for
+  /// DV/HDR). Returns null when the file has no attached artwork or the source
+  /// is remote (http(s) is skipped natively).
+  Future<Uint8List?> getThumbnail({String? path, String? uri}) async {
+    try {
+      return await _channel.invokeMethod<Uint8List>('getThumbnail', {
+        'path': path,
+        'uri': uri,
+      });
+    } on PlatformException {
+      return null;
+    } on MissingPluginException {
+      // Engine not attached (tests / teardown).
+      return null;
+    }
+  }
+
 }

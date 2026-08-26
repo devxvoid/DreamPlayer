@@ -421,6 +421,10 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                     let speed = Float((args?["speed"] as? NSNumber)?.doubleValue ?? 1.0)
                     self.applySpeed(min(max(speed, 0.25), 4.0))
                     result(nil)
+                case "enterPip":
+                    self.ensurePipController()
+                    self.pipController?.startPictureInPicture()
+                    result(nil)
                 case "setBrightness":
                     let brightness = (args?["brightness"] as? NSNumber)?.floatValue ?? 0.5
                     UIScreen.main.brightness = CGFloat(max(0, min(brightness, 1)))
@@ -596,6 +600,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         isHdr10PlusContent = false
         isHdr10Content = false
         subtitleOverlay.clear()
+        invalidatePipController()
         emit()
 
         // Sidecar subtitles: an explicit `subtitleUri` wins; then external
@@ -708,6 +713,8 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                 self.pendingAutoSubtitleIndex = nil
                 // Fresh AVPlayer instance after load — re-apply the saved rate.
                 self.applySpeed(self.pendingSpeed)
+                // Fresh player layer too — (re)arm picture-in-picture.
+                self.ensurePipController()
                 // Reset any pinch-zoom from a previous session.
                 self.setZoom(1.0)
                 self.emit()
@@ -886,6 +893,42 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         container.layer.setAffineTransform(CGAffineTransform(scaleX: scale, y: scale))
     }
 
+    // MARK: - Picture-in-picture
+
+    /// Floating-video controller over the engine's `AVPlayerLayer`. Only the
+    /// native AVPlayer path supports it (local files / Apple containers) — the
+    /// FFmpeg custom-source path has no AVPlayerLayer, so [ensurePipController]
+    /// leaves the controller nil and "enterPip" is a harmless no-op there.
+    private var pipController: AVPictureInPictureController?
+
+    /// Mirrored into the event map so Dart hides its overlay controls while
+    /// the video floats.
+    private var inPip = false
+
+    private func ensurePipController() {
+        guard pipController == nil,
+              AVPictureInPictureController.isPictureInPictureSupported(),
+              let layer = findPlayerLayer(),
+              layer.player != nil else { return }
+        let controller = AVPictureInPictureController(playerLayer: layer)
+        // Pressing HOME while playing floats the video automatically (same
+        // trigger as Android's onUserLeaveHint path).
+        controller.canStartPictureInPictureAutomaticallyFromInline = true
+        controller.delegate = self
+        pipController = controller
+    }
+
+    /// The engine builds a fresh player per load; drop any controller bound to
+    /// the previous layer so the next open re-arms against the live one.
+    private func invalidatePipController() {
+        pipController = nil
+        if inPip {
+            inPip = false
+            emit()
+        }
+    }
+
+
     // MARK: - Playback speed
 
     /// Last speed requested from Dart. Applied to the AVPlayerLayer's player
@@ -1030,6 +1073,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             "chapters": chapters,
             "audioBoost": audioBoost,
             "nightMode": nightModeEnabled,
+            "inPip": inPip,
             "error": lastError ?? "",
         ]
         return map
@@ -1462,6 +1506,35 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         mpVolumeView?.removeFromSuperview()
         mpVolumeView = nil
         UIApplication.shared.isIdleTimerDisabled = false
+    }
+}
+
+// MARK: - PictureInPictureControllerDelegate
+
+extension AvPlayerView: AVPictureInPictureControllerDelegate {
+    func pictureInPictureControllerWillStart(
+        _ pictureInPictureController: AVPictureInPictureController
+    ) {
+        inPip = true
+        emit()
+    }
+
+    func pictureInPictureControllerDidStop(
+        _ pictureInPictureController: AVPictureInPictureController
+    ) {
+        inPip = false
+        emit()
+    }
+
+    /// User tapped the restore button on the pip window — the layer is back
+    /// inline; the controller is stale (bound to the same layer, but Apple
+    /// requires a fresh one for the next start).
+    func pictureInPictureController(
+        _ pictureInPictureController: AVPictureInPictureController,
+        restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void
+    ) {
+        pipController = nil
+        completionHandler(true)
     }
 }
 

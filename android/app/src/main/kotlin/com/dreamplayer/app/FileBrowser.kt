@@ -40,6 +40,8 @@ class FileBrowser(private val activity: MainActivity) {
     private var pendingFolderResult: MethodChannel.Result? = null
     private var pendingSubtitleResult: MethodChannel.Result? = null
 
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
     /// True while the open picker is a library pick ("Add folder to library"),
     /// so the picked tree is stored under the library bookmark prefix and never
     /// appears as a file-browser root.
@@ -65,6 +67,14 @@ class FileBrowser(private val activity: MainActivity) {
                 "pickFolder" -> pickFolder(result)
                 "pickLibraryFolder" -> pickLibraryFolder(result)
                 "pickSubtitle" -> pickSubtitle(result)
+                "getThumbnail" -> {
+                    val path = call.argument<String>("path")
+                    val uri = call.argument<String>("uri")
+                    Thread {
+                        val bytes = embeddedArt(path, uri)
+                        mainHandler.post { result.success(bytes) }
+                    }.start()
+                }
                 "resolveImportedPath" -> result.success(true)
                 "resolvePath" -> result.success(true)
                 "removeBookmark" -> {
@@ -84,6 +94,27 @@ class FileBrowser(private val activity: MainActivity) {
 
     private fun hasAllFilesAccess(): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()
+
+    /// Embedded cover-art bytes for a local file or content URI. This is a
+    /// METADATA-ONLY read — `MediaMetadataRetriever.getEmbeddedPicture()` never
+    /// touches the video decoder, so DV/HDR content is safe (unlike frame
+    /// extraction, which returns black frames on Qualcomm for HDR). http(s)
+    /// sources are skipped: network artwork belongs to TMDB posters instead.
+    private fun embeddedArt(path: String?, uri: String?): ByteArray? {
+        val isLocalPath = !path.isNullOrEmpty() && !path.startsWith("http")
+        val localUri = uri?.takeIf { it.startsWith("content:") || it.startsWith("file:") }
+        if (!isLocalPath && localUri == null) return null
+        val retriever = android.media.MediaMetadataRetriever()
+        return try {
+            if (localUri != null) retriever.setDataSource(activity, Uri.parse(localUri))
+            else retriever.setDataSource(path)
+            retriever.embeddedPicture
+        } catch (_: Exception) {
+            null
+        } finally {
+            try { retriever.release() } catch (_: Exception) {}
+        }
+    }
 
     private fun openAllFilesAccessSettings() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return

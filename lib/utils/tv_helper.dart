@@ -65,3 +65,15 @@ Future<bool> areSwipeGesturesEnabled() async {
   final prefs = await SharedPreferences.getInstance();
   return prefs.getBool(kSwipeGesturesKey) ?? true;
 }
+
+/// SharedPreferences key for the picture-in-picture auto-entry toggle.
+const kPipEnabledKey = 'dreamplayer.pipEnabled';
+
+/// Whether leaving the app while a video plays auto-enters picture-in-
+/// picture. Default true. Only the automatic HOME/recents entry respects
+/// this — the player ⋮-sheet row is an explicit user action and always
+/// enters.
+Future<bool> isPipEnabled() async {
+  final prefs = await SharedPreferences.getInstance();
+  return prefs.getBool(kPipEnabledKey) ?? true;
+}

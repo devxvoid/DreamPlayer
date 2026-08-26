@@ -119,6 +119,36 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    // MARK: - Picture-in-picture
+
+    /// Leaving the app (HOME / recents / app-switch) while a video plays
+    /// drops into picture-in-picture instead of plain background audio.
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        ExoPlayerView.activeView?.enterPipIfPlaying()
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: Configuration,
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        ExoPlayerView.activeView?.onPipModeChanged(isInPictureInPictureMode)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        ExoPlayerView.activeView?.onResumed()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // PiP dismissed from its window chrome: pause so audio doesn't keep
+        // playing invisibly (plain background keeps playing — handled by the
+        // foreground service; this only covers the pip-dismiss path).
+        ExoPlayerView.activeView?.onActivityStopped()
+    }
+
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         when (requestCode) {

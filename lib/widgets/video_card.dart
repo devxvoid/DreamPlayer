@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../models/hdr_format.dart';
 import '../models/video_item.dart';
+import '../services/thumbnail_store.dart';
 import '../services/tmdb_client.dart';
 import '../utils/tv_helper.dart';
 
@@ -50,10 +51,37 @@ class _VideoCardState extends State<VideoCard> {
   Timer? _holdTimer;
   bool _longPressFired = false;
 
+  /// Embedded cover-art bytes (poster stored inside the file). Null until
+  /// loaded; [_thumbChecked] distinguishes "no art" from "not looked yet".
+  Uint8List? _thumb;
+  bool _thumbChecked = false;
+
   @override
   void initState() {
     super.initState();
     _focusNode.onKeyEvent = _handleKeyEvent;
+    _loadThumb();
+  }
+
+  @override
+  void didUpdateWidget(covariant VideoCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.video.id != widget.video.id ||
+        oldWidget.video.path != widget.video.path) {
+      _thumb = null;
+      _thumbChecked = false;
+      _loadThumb();
+    }
+  }
+
+  Future<void> _loadThumb() async {
+    final bytes = await ThumbnailStore.artFor(widget.video);
+    if (mounted) {
+      setState(() {
+        _thumb = bytes;
+        _thumbChecked = true;
+      });
+    }
   }
 
   @override
@@ -164,14 +192,28 @@ class _VideoCardState extends State<VideoCard> {
                                 ],
                               ),
                             ),
-                            child: const Center(
-                              child: Icon(
-                                Icons.play_circle_outline,
-                                size: 40,
-                                color: Colors.white54,
-                              ),
+                            child: Center(
+                              // Play glyph only when there is no art at all —
+                              // embedded cover-art or TMDB backdrop replaces
+                              // it. Hidden while the art lookup is in flight.
+                              child: (!_thumbChecked ||
+                                      (_thumb == null &&
+                                          tmdbMeta?.movie.backdropUrl() ==
+                                              null))
+                                  ? const Icon(
+                                      Icons.play_circle_outline,
+                                      size: 40,
+                                      color: Colors.white54,
+                                    )
+                                  : const SizedBox.shrink(),
                             ),
                           ),
+                          if (_thumb != null)
+                            Image.memory(
+                              _thumb!,
+                              fit: BoxFit.cover,
+                              gaplessPlayback: true,
+                            ),
                           if (tmdbMeta?.movie.backdropUrl() != null)
                             Image.network(
                               tmdbMeta!.movie.backdropUrl()!,

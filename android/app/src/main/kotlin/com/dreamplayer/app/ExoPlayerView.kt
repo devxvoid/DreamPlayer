@@ -1,6 +1,7 @@
 package com.dreamplayer.app
 
 import android.app.Activity
+import android.app.PictureInPictureParams
 import android.content.Context
 import android.content.pm.ActivityInfo
 import android.media.MediaCodecInfo
@@ -450,6 +451,15 @@ class ExoPlayerView(
 
     private val handler = Handler(Looper.getMainLooper())
     private var positionTicker: Runnable? = null
+
+    /// True while MainActivity is in picture-in-picture mode (pushed via
+    /// [onPipModeChanged]); Dart hides all overlay controls when set.
+    @Volatile private var inPip = false
+
+    /// Latch so [onActivityStopped] can tell a PiP dismissal (user closed the
+    /// pip window → pause, don't keep playing invisibly) from an ordinary
+    /// background stop.
+    @Volatile private var pipSeen = false
 
     /// Display mode captured when the platform view attaches; restored on
     /// dispose so leaving playback returns the panel to the startup-selected
@@ -1227,6 +1237,10 @@ class ExoPlayerView(
                     }
                     result.success(null)
                 }
+                "enterPip" -> {
+                    enterPip()
+                    result.success(null)
+                }
                 "setAudioDelay" -> {
                     // Manual A/V sync: positive = audio later. Dynamic — the
                     // processor retunes without reconfiguring the sink.
@@ -1670,6 +1684,7 @@ class ExoPlayerView(
         map["nightMode"] = nightModeEnabled
         map["bassBoost"] = bassBoostLevel
         map["spatialAudio"] = spatialStatus()
+        map["inPip"] = inPip
         if (chapters.isNotEmpty()) {
             map["chapters"] = chapters.map {
                 mapOf(
@@ -1708,6 +1723,10 @@ class ExoPlayerView(
     }
 
     override fun getView(): View = playerView
+
+    init {
+        activeView = this
+    }
 
     /// Applies the Dart-side [VideoFitMode] to the surface. Fixed ratios
     /// (16:9 / 4:3) force the content frame's aspect ratio and zoom-crop into
@@ -1810,7 +1829,76 @@ class ExoPlayerView(
         }
     }
 
+    // MARK: - Picture-in-picture
+
+    /// Auto-enter PiP when the user leaves the app (HOME / recents) while
+    /// playing — called from MainActivity.onUserLeaveHint. No-op when paused,
+    /// on TV (no pip on leanback), below API 26, or when the Settings
+    /// "Picture-in-picture" toggle is off.
+    fun enterPipIfPlaying() = enterPipInternal(auto = true)
+
+    /// Dart-triggered entry (⋮ sheet row) — explicit user action, so the
+    /// Settings toggle does not block it; the other rules still apply.
+    fun enterPip() = enterPipInternal(auto = false)
+
+    private fun enterPipInternal(auto: Boolean) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        if (MainActivity.isTvBox(activity)) return
+        if (auto && !pipSettingEnabled()) return
+        if (!player.isPlaying) return
+        try {
+            val vs = player.videoSize
+            val raw = if (vs.width > 0 && vs.height > 0)
+                vs.width.toFloat() / vs.height.toFloat()
+            else 16f / 9f
+            // System requires roughly 0.418–2.39; clamp + scale into a Rational.
+            val clamped = raw.coerceIn(0.42f, 2.39f)
+            val params = PictureInPictureParams.Builder()
+                .setAspectRatio(android.util.Rational(Math.round(clamped * 1000), 1000))
+                .build()
+            activity.enterPictureInPictureMode(params)
+        } catch (_: Exception) {
+        }
+    }
+
+    /// The `flutter.dreamplayer.pipEnabled` pref (Settings toggle, default
+    /// true) read natively — the auto-entry decision happens in
+    /// onUserLeaveHint, before Dart could weigh in.
+    private fun pipSettingEnabled(): Boolean = try {
+        activity.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+            .getBoolean("flutter.dreamplayer.pipEnabled", true)
+    } catch (_: Exception) {
+        true
+    }
+
+    /// MainActivity.onPictureInPictureModeChanged forwarded here: re-emit so
+    /// Dart flips its controls off/on.
+    fun onPipModeChanged(v: Boolean) {
+        inPip = v
+        if (v) pipSeen = true
+        handler.post { emit() }
+    }
+
+    /// Expanded back to fullscreen from pip — clear the dismissal latch.
+    fun onResumed() {
+        pipSeen = false
+    }
+
+    /// Activity stopped: if we had shown pip, the user dismissed the pip
+    /// window — pause so audio doesn't continue invisibly. NOTE: the
+    /// dismissal delivers onStop while the system may STILL report pip mode
+    /// (window-teardown order varies by OEM), so don't gate on
+    /// isInPictureInPictureMode here — pipSeen is the source of truth
+    /// (cleared in onResumed when the user expands back to fullscreen).
+    fun onActivityStopped() {
+        if (pipSeen) {
+            pipSeen = false
+            player.pause()
+        }
+    }
+
     override fun dispose() {
+        if (activeView === this) activeView = null
         restoreRefreshRate()
         stopPositionTicker()
         unregisterSpatialListener()
@@ -1829,6 +1917,11 @@ class ExoPlayerView(
     companion object {
         private const val BUFFER_FOR_PLAYBACK_MS = 1_500
         private const val BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 2_000
+
+        /// The live platform view, if any — MainActivity forwards HOME /
+        /// picture-in-picture mode changes to it (auto-pip + dismissal pause).
+        /// Set at construction, cleared in dispose().
+        @Volatile internal var activeView: ExoPlayerView? = null
     }
 }
 

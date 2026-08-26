@@ -1,3 +1,4 @@
+import AVFoundation
 import Flutter
 import Foundation
 import UniformTypeIdentifiers
@@ -92,6 +93,14 @@ final class FileBrowser: NSObject {
         case "resolvePath":
             let path = (call.arguments as? [String: Any])?["path"] as? String ?? ""
             result(resolvePath(path))
+        case "getThumbnail":
+            let args = call.arguments as? [String: Any]
+            let path = args?["path"] as? String
+            let uri = args?["uri"] as? String
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                let data = self?.embeddedArtwork(path: path, uri: uri)
+                Task { @MainActor in result(data) }
+            }
         case "removeBookmark":
             let bookmarkId = (call.arguments as? [String: Any])?["bookmarkId"] as? String
             if let bookmarkId {
@@ -348,6 +357,29 @@ final class FileBrowser: NSObject {
     }
 
     // MARK: - Imported videos
+
+    /// Embedded cover-art bytes for a local file (metadata-only read via
+    /// AVAsset's `commonKeyArtwork` — never decodes video, so HDR content is
+    /// safe). MP4/MOV carry `covr` atoms; MKV attachments aren't readable by
+    /// AVFoundation, so those files simply return nil (TMDB poster fallback).
+    private func embeddedArtwork(path: String?, uri: String?) -> Data? {
+        var fileURL: URL?
+        if let path, FileManager.default.fileExists(atPath: path) {
+            fileURL = URL(fileURLWithPath: path)
+        } else if let uri, uri.hasPrefix("file://"), let u = URL(string: uri) {
+            fileURL = u
+        }
+        guard let url = fileURL else { return nil }
+        let asset = AVURLAsset(url: url)
+        let items = AVMetadataItem.metadataItems(
+            from: asset.commonMetadata,
+            filteredByIdentifier: .commonKeyArtwork
+        )
+        for item in items {
+            if let data = item.dataValue, !data.isEmpty { return data }
+        }
+        return nil
+    }
 
     /// Re-grants security-scoped access to an imported video's file path (the
     /// grant is remembered as a bookmark at import time). Called by the library

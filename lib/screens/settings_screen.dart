@@ -31,6 +31,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _cleared = false;
   bool _passthrough = false;
   bool _swipeGestures = true;
+  bool _pipEnabled = true;
   bool _autoPlayNext = false;
   DecoderMode _decoderMode = DecoderMode.auto;
   double _audioBoost = 1.0;
@@ -44,6 +45,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _refreshDiskSize();
     _loadPassthrough();
     _loadSwipeGestures();
+    _loadPipEnabled();
     _loadAutoPlayNext();
     _loadDecoderMode();
     _loadAudioFilters();
@@ -74,6 +76,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       final enabled = await areSwipeGesturesEnabled();
       if (mounted) setState(() => _swipeGestures = enabled);
+    } catch (_) {}
+  }
+
+  Future<void> _loadPipEnabled() async {
+    try {
+      final enabled = await isPipEnabled();
+      if (mounted) setState(() => _pipEnabled = enabled);
     } catch (_) {}
   }
 
@@ -258,6 +267,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   if (mounted) setState(() => _swipeGestures = value);
                 },
               ),
+              // PiP is Android-only (iOS has no auto-entry; the manual iOS
+              // path needs the native AVPlayer pip button) and pointless on
+              // TV, so the toggle hides with the other phone-only controls.
+              if (defaultTargetPlatform == TargetPlatform.android)
+                SwitchListTile(
+                  secondary: const Icon(Icons.picture_in_picture),
+                  title: const Text('Picture-in-picture'),
+                  subtitle: const Text(
+                    'Keep playing in a floating window when you leave the app',
+                  ),
+                  value: _pipEnabled,
+                  onChanged: (value) async {
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.setBool(kPipEnabledKey, value);
+                    if (mounted) setState(() => _pipEnabled = value);
+                  },
+                ),
               SwitchListTile(
                 secondary: const Icon(Icons.skip_next),
                 title: const Text('Auto-play next episode'),

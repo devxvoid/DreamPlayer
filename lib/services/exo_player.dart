@@ -271,6 +271,7 @@ class ExoPlayerEvent {
     this.chapters = const [],
     this.videoDecoderName,
     this.isHwDecoder,
+    this.inPip = false,
   });
 
   final int state;
@@ -351,6 +352,10 @@ class ExoPlayerEvent {
   /// True = hardware decoder, false = software, null = unknown yet.
   final bool? isHwDecoder;
 
+  /// True while the activity is in picture-in-picture mode (Dart hides all
+  /// overlay controls; only the video floats).
+  final bool inPip;
+
   Duration get position => Duration(milliseconds: positionMs);
   Duration get duration => Duration(milliseconds: durationMs);
   Duration get buffered => Duration(milliseconds: bufferedMs);
@@ -401,6 +406,7 @@ class ExoPlayerEvent {
           .toList(),
       videoDecoderName: m['videoDecoderName'] as String?,
       isHwDecoder: m['isHwDecoder'] as bool?,
+      inPip: m['inPip'] == true,
     );
   }
 }
@@ -461,6 +467,10 @@ abstract class PlaybackController {
   /// later. Android retunes a PCM AudioProcessor live; iOS is a no-op
   /// (AetherEngine exposes no audio-offset hook yet — UI hidden there).
   Future<void> setAudioDelay(int ms);
+
+  /// Enters picture-in-picture (Android only; no-op elsewhere or when
+  /// paused). Auto-entry on HOME is native (onUserLeaveHint).
+  Future<void> enterPip();
 
   /// Sets the display brightness (0.0 = dim, 1.0 = max). Per-app; reverts on
   /// player close on both platforms. Pass -1 to restore system default.
@@ -627,6 +637,9 @@ class ExoPlayerController implements PlaybackController {
 
   @override
   Future<void> setAudioDelay(int ms) => _send('setAudioDelay', {'ms': ms});
+
+  @override
+  Future<void> enterPip() => _send('enterPip');
 
   @override
   Future<void> setBrightness(double brightness) =>

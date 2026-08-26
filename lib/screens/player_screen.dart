@@ -125,6 +125,18 @@ class _PlayerScreenState extends State<PlayerScreen>
   bool _autoPlayFired = false;
   int _selectedSubtitleTrack = -1;
 
+  /// True while the activity floats in picture-in-picture mode: every overlay
+  /// (bars, transport pill, gestures) hides so the pip window shows only the
+  /// video.
+  bool _inPip = false;
+
+  /// Format chips flash for a few seconds when a video starts, then vanish —
+  /// the persistent badges used to leak into the pip window and clutter long
+  /// watching sessions. The ⓘ top-bar button re-opens them as an info sheet.
+  bool _chipsVisible = false;
+  Timer? _chipsTimer;
+  bool _chipsFlashedForOpen = false;
+
   VideoFitMode _fitMode = VideoFitMode.fit;
 
   /// Persisted playback speed, re-applied on every (re)open.
@@ -300,6 +312,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     final video = _current;
     _markedWatched = false;
     _autoPlayFired = false;
+    // Chips flash again for each newly opened video.
+    _chipsFlashedForOpen = false;
     // A-B loop points are per-video.
     _abA = null;
     _abB = null;
@@ -601,6 +615,26 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (e.isHwDecoder != null) _isHwDecoder = e.isHwDecoder;
     _liveSpatial = e.spatialAudio;
     _liveBass = e.bassBoost;
+    if (e.inPip != _inPip) {
+      _inPip = e.inPip;
+      if (_inPip) {
+        // Floating window shows ONLY the video: drop every overlay.
+        _hideTimer?.cancel();
+        _chipsTimer?.cancel();
+        _chipsVisible = false;
+        _controlsVisible = false;
+      } else {
+        // Expanding back restores the controls.
+        _controlsVisible = true;
+        _restartHideTimer();
+      }
+    }
+    // Flash the format chips once per open, when the metadata is actually
+    // known (first STATE_READY).
+    if (!_chipsFlashedForOpen && e.state == _nativeStateReady && !_inPip) {
+      _chipsFlashedForOpen = true;
+      _flashChips();
+    }
     _audioTracks = e.audioTracks;
     _selectedAudioTrackIndex = e.selectedAudioTrack;
     if (e.chapters.isNotEmpty) _chapters = e.chapters;
@@ -874,8 +908,16 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   /// Keeps the controls visible while paused or buffering, and starts the
-  /// auto-hide countdown only while playing.
+  /// auto-hide countdown only while playing. In picture-in-picture the
+  /// floating window always shows ONLY the video — never reveal anything
+  /// (a paused/ended pip would otherwise pop the whole control UI into the
+  /// tiny window).
   void _syncControlsForPlaybackState() {
+    if (_inPip) {
+      _hideTimer?.cancel();
+      _controlsVisible = false;
+      return;
+    }
     if (_playing && !_buffering) {
       _restartHideTimer();
     } else {
@@ -906,6 +948,10 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// Media3 `Player.STATE_IDLE`: the native player lost its media (e.g. the
   /// platform view was recreated while the device was locked).
   static const int _nativeStateIdle = 1;
+
+  /// Media3 `Player.STATE_READY`: media is open and metadata is known —
+  /// the per-open format-chip flash fires on the first of these.
+  static const int _nativeStateReady = 3;
 
   /// After returning to the foreground, verify the native player still has
   /// the media loaded. Android may destroy the video surface while locked and
@@ -941,6 +987,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _hideTimer?.cancel();
+    _chipsTimer?.cancel();
     _sleepTicker?.cancel();
     _swipeOverlayTimer?.cancel();
     _singleTapTimer?.cancel();
@@ -965,6 +1012,8 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// Reveals the controls (and restarts the auto-hide countdown).
   void _showControls() {
     if (!mounted) return;
+    // In picture-in-picture the floating window shows only the video.
+    if (_inPip) return;
     final wasVisible = _controlsVisible;
     if (!_controlsVisible) {
       setState(() => _controlsVisible = true);
@@ -977,6 +1026,19 @@ class _PlayerScreenState extends State<PlayerScreen>
         }
       });
     }
+  }
+
+  /// Shows the format chips for a few seconds, then fades them out. Fired
+  /// once per open on the first STATE_READY (metadata actually known); the
+  /// pip window and long sessions keep a clean picture afterwards.
+  void _flashChips() {
+    _chipsTimer?.cancel();
+    if (!mounted) return;
+    setState(() => _chipsVisible = true);
+    _chipsTimer = Timer(const Duration(seconds: 5), () {
+      _chipsTimer = null;
+      if (mounted) setState(() => _chipsVisible = false);
+    });
   }
 
   void _restartHideTimer() {
@@ -1012,6 +1074,8 @@ class _PlayerScreenState extends State<PlayerScreen>
   Timer? _dtSeekTimer;
 
   void _onTapUp(TapUpDetails details) {
+    // PiP window: taps do nothing — the floating video stays clean.
+    if (_inPip) return;
     if (_isTv) {
       _onScreenTap();
       return;
@@ -1028,7 +1092,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   void _onDoubleTapDown(TapDownDetails details) {
-    if (_isTv || !_backendReady || _touchLocked) return;
+    if (_isTv || !_backendReady || _touchLocked || _inPip) return;
     _singleTapTimer?.cancel();
     final w = MediaQuery.of(context).size.width;
     final forward = details.globalPosition.dx >= w / 2;
@@ -1052,7 +1116,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   _PanAxis? _panAxis;
 
   void _onScaleStart(ScaleStartDetails details) {
-    if (_isTv || _touchLocked) return;
+    if (_isTv || _touchLocked || _inPip) return;
     if (details.pointerCount >= 2) {
       _pinchBaseScale = _zoomScale;
       _hideTimer?.cancel();
@@ -1064,7 +1128,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   void _onScaleUpdate(ScaleUpdateDetails details) {
-    if (_isTv || _touchLocked) return;
+    if (_isTv || _touchLocked || _inPip) return;
     if (details.pointerCount >= 2) {
       if (!_backendReady) return;
       final next = (_pinchBaseScale * details.scale).clamp(1.0, 3.0);
@@ -1095,7 +1159,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   void _onScaleEnd(ScaleEndDetails details) {
-    if (_isTv || _touchLocked) return;
+    if (_isTv || _touchLocked || _inPip) return;
     if (details.pointerCount >= 2) {
       _restartHideTimer();
       return;
@@ -1340,6 +1404,108 @@ class _PlayerScreenState extends State<PlayerScreen>
       // codec/channels, which updates the top-bar audio chip automatically.
       _exo?.selectAudioTrack(choice);
     }
+  }
+
+  /// Read-only "Video info" sheet behind the top-bar ⓘ button — the format
+  /// chips only flash for a few seconds at video start, so this is where the
+  /// details stay reachable (including the full decoder component name that
+  /// used to live in a chip tooltip).
+  Future<void> _openVideoInfoSheet() async {
+    if (_touchLocked) return;
+    _showControls();
+    final video = _current;
+    final rows = <({String label, String value})>[
+      (label: 'Title', value: video.title),
+      (label: 'HDR', value: _effectiveHdr.label),
+      if (_videoCodecInfoLabel != null)
+        (label: 'Video', value: _videoCodecInfoLabel!),
+      if (_audioInfoLabel != null || _liveAudioPassthrough)
+        (
+          label: 'Audio',
+          value: _liveAudioPassthrough
+              ? '${_audioInfoLabel ?? "Audio"} · Passthrough'
+              : _audioInfoLabel!,
+        ),
+      if (_resolutionInfoLabel != null)
+        (label: 'Resolution', value: _resolutionInfoLabel!),
+      if (Platform.isAndroid && _liveDecoderName != null)
+        (
+          label: 'Decoder',
+          value: '$_liveDecoderName${(_isHwDecoder ?? true) ? " · hardware" : " · software"}',
+        ),
+      if (_transcodeActive ||
+          video.isTranscoded ||
+          JellyfinClient.isTranscodeUri(video.uri ?? ''))
+        (label: 'Stream', value: 'Server transcoding'),
+      if (Platform.isAndroid && _liveSpatial == 'on')
+        (label: 'Spatial audio', value: 'On'),
+      if (Platform.isAndroid && _audioBoost > 1.01)
+        (label: 'Volume boost', value: '${_audioBoost.toStringAsFixed(1)}×'),
+      if (Platform.isAndroid && _nightMode) (label: 'Night mode', value: 'On'),
+      if (Platform.isAndroid && _liveBass > 0)
+        (label: 'Bass boost', value: '$_liveBass/3'),
+    ];
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF1C1C1E),
+      builder: (sheetContext) => SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.6,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 16, 20, 4),
+                child: Text(
+                  'Video info',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: rows.length,
+                  itemBuilder: (context, i) {
+                    final r = rows[i];
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 20, vertical: 6),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SizedBox(
+                            width: 110,
+                            child: Text(
+                              r.label,
+                              style: const TextStyle(
+                                  color: Colors.white54, fontSize: 13),
+                            ),
+                          ),
+                          Expanded(
+                            child: SelectableText(
+                              r.value,
+                              style: const TextStyle(
+                                  color: Colors.white, fontSize: 13),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   String _subtitleTrackLabel(ExoSubtitleTrack t) {
@@ -1948,6 +2114,18 @@ class _PlayerScreenState extends State<PlayerScreen>
                       style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
                     ),
                   ),
+                  // Picture-in-picture (Android): floats the video over other
+                  // apps. Auto-enters on HOME while playing; this is the
+                  // manual entry.
+                  if (Platform.isAndroid)
+                    _tvListTile(
+                      leading: const Icon(Icons.picture_in_picture_alt, color: Colors.white70),
+                      title: const Text('Picture-in-picture', style: TextStyle(color: Colors.white)),
+                      onTap: () {
+                        Navigator.pop(sheetContext);
+                        _exo?.enterPip();
+                      },
+                    ),
                   // Aspect ratio dropdown
                   _tvListTile(
                     leading: const Icon(Icons.aspect_ratio, color: Colors.white70),
@@ -2691,6 +2869,33 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   Color get _transcodeColor => const Color(0xFFE57373);
 
+  /// Live video codec label for the chip / info sheet, or null when unknown.
+  /// For Dolby Vision the HDR chip already says "Dolby Vision", so the
+  /// duplicate codec label is suppressed.
+  String? get _videoCodecInfoLabel {
+    final label = _liveVideoCodec ?? _current.videoCodecLabel;
+    if (label == null) return null;
+    if (_effectiveHdr == HdrFormat.dolbyVision && label == 'Dolby Vision') {
+      return null;
+    }
+    return label;
+  }
+
+  /// Live audio label (codec · channels) for the chip / info sheet.
+  String? get _audioInfoLabel {
+    if (_liveAudioCodec != null) {
+      return formatLiveAudioLabel(
+        liveCodec: _liveAudioCodec,
+        liveChannels: _liveAudioChannelCount,
+        metaCodec: _current.audioCodec,
+        metaProfile: _current.audioProfile,
+      );
+    }
+    return _current.audioCodecLabel;
+  }
+
+  String? get _resolutionInfoLabel => _liveResolution ?? _current.resolution;
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -2706,23 +2911,11 @@ class _PlayerScreenState extends State<PlayerScreen>
         : _position.inMilliseconds.toDouble().clamp(0, maxMs).toDouble();
 
     final hdrChip = FormatChip(label: _effectiveHdr.label, color: _hdrColor);
-    // For Dolby Vision the HDR chip already says "Dolby Vision" (purple); skip
-    // the video codec chip so it isn't shown twice.
-    final videoCodecLabel = _liveVideoCodec ?? video.videoCodecLabel;
-    final videoChip =
-        videoCodecLabel != null &&
-            !(_effectiveHdr == HdrFormat.dolbyVision &&
-                videoCodecLabel == 'Dolby Vision')
+    final videoCodecLabel = _videoCodecInfoLabel;
+    final videoChip = videoCodecLabel != null
         ? FormatChip(label: videoCodecLabel, color: _videoColor)
         : null;
-    final audioChipLabel = _liveAudioCodec != null
-        ? formatLiveAudioLabel(
-            liveCodec: _liveAudioCodec,
-            liveChannels: _liveAudioChannelCount,
-            metaCodec: video.audioCodec,
-            metaProfile: video.audioProfile,
-          )
-        : video.audioCodecLabel;
+    final audioChipLabel = _audioInfoLabel;
     final audioChip = audioChipLabel != null || _liveAudioPassthrough
         ? FormatChip(
             label: _liveAudioPassthrough
@@ -2949,7 +3142,7 @@ class _PlayerScreenState extends State<PlayerScreen>
               return KeyEventResult.handled;
             }
             return KeyEventResult.ignored;
-          } else if (!_controlsVisible) {
+          } else if (!_controlsVisible && !_inPip) {
             // Any other key while the controls are hidden reveals them
             // (Just Player behavior).
             _showControls();
@@ -3116,16 +3309,31 @@ class _PlayerScreenState extends State<PlayerScreen>
                                 ),
                               ),
                             ),
+                            _TvControlButton(
+                              onPressed: _openVideoInfoSheet,
+                              icon: const Icon(Icons.info_outline),
+                              color: Colors.white,
+                              onFocusChange: (_) => _showControls(),
+                            ),
+                            const SizedBox(width: 4),
                           ],
                         ),
                         if (chips.isNotEmpty) ...[
                           const SizedBox(height: 4),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 8),
-                            child: Wrap(
-                              spacing: 8,
-                              runSpacing: 4,
-                              children: chips,
+                          AnimatedOpacity(
+                            duration: const Duration(milliseconds: 300),
+                            opacity: _chipsVisible ? 1 : 0,
+                            child: IgnorePointer(
+                              ignoring: !_chipsVisible,
+                              child: Padding(
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 8),
+                                child: Wrap(
+                                  spacing: 8,
+                                  runSpacing: 4,
+                                  children: chips,
+                                ),
+                              ),
                             ),
                           ),
                         ],
