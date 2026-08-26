@@ -255,21 +255,34 @@ class OpensubtitlesClient {
     if (query.trim().isEmpty && (movieHash == null || movieHash.isEmpty)) {
       throw OpensubtitlesException('Enter a search term');
     }
+    final langs = languages.trim().isEmpty ? 'en' : languages.trim();
     final params = <String, String>{
-      'languages': languages,
+      'languages': langs,
       'order_by': 'download_count',
       'order_direction': 'desc',
       'page': '$page',
     };
+    final q = query.trim();
+    if (q.isNotEmpty) params['query'] = q;
     if (movieHash != null && movieHash.isNotEmpty) {
       params['moviehash'] = movieHash;
-    } else {
-      params['query'] = query.trim();
     }
-    final uri = Uri.https(_host, '/api/v1/subtitles', params);
-    final j = await _getJson(uri, bearer: cachedToken);
-    final data = j['data'] as List? ?? const [];
-    return data.map((e) => OpensubtitlesResult.fromJson(e as Map<String, dynamic>)).where((r) => r.fileId != 0).toList();
+    Future<List<OpensubtitlesResult>> fetch(Map<String, String> p) async {
+      final uri = Uri.https(_host, '/api/v1/subtitles', p);
+      final j = await _getJson(uri, bearer: cachedToken);
+      final data = j['data'] as List? ?? const [];
+      return data.map((e) => OpensubtitlesResult.fromJson(e as Map<String, dynamic>)).where((r) => r.fileId != 0).toList();
+    }
+
+    final res = await fetch(params);
+    // Hash-exact search often returns 0 hits even though query matches exist.
+    // Fall back to query-only so the CC → Search flow never shows "No results"
+    // just because the file hash is unknown on OpenSubtitles.
+    if (res.isEmpty && params.containsKey('moviehash') && params.containsKey('query')) {
+      final fallback = Map<String, String>.from(params)..remove('moviehash');
+      return fetch(fallback);
+    }
+    return res;
   }
 
   // --- Download ---
