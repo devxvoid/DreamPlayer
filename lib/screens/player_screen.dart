@@ -108,6 +108,7 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   String? _liveVideoCodec;
   String? _liveVideoCodecRaw;
+  String? _liveVideoMimeRaw;
   String? _liveAudioCodec;
   int? _liveAudioChannelCount;
   bool _liveAudioPassthrough = false;
@@ -601,9 +602,13 @@ class _PlayerScreenState extends State<PlayerScreen>
       _liveVideoCodecRaw = e.videoCodecs;
       _liveVideoCodec = formatVideoCodec(e.videoCodecs);
     }
+    if (e.videoMime != null && e.videoMime!.isNotEmpty) {
+      _liveVideoMimeRaw = e.videoMime;
+    }
     _liveHdr = detectMedia3HdrFormat(
       colorTransfer: e.colorTransfer,
       videoCodecs: _liveVideoCodecRaw,
+      videoMime: _liveVideoMimeRaw,
       isHdr10Plus: e.isHdr10Plus,
       isHdr10: e.isHdr10,
     );
@@ -1448,7 +1453,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     final video = _current;
     final rows = <({String label, String value})>[
       (label: 'Title', value: video.title),
-      (label: 'HDR', value: _effectiveHdr.label),
+      (label: 'HDR', value: _hdrLabel),
       if (_videoCodecInfoLabel != null)
         (label: 'Video', value: _videoCodecInfoLabel!),
       if (_audioInfoLabel != null || _liveAudioPassthrough)
@@ -3051,6 +3056,20 @@ class _PlayerScreenState extends State<PlayerScreen>
     return HdrFormat.sdr;
   }
 
+  /// Dolby Vision label with profile (e.g. "Dolby Vision P8") when the codec
+  /// carries a profile number; falls back to the plain format label.
+  String get _hdrLabel {
+    if (_effectiveHdr == HdrFormat.dolbyVision) {
+      final raw = _liveVideoCodecRaw ?? _current.hdrHint ?? '';
+      final mime = _liveVideoMimeRaw;
+      // Prefer codec, fall back to mime/hint.
+      final lab = dolbyVisionLabel(raw.isNotEmpty ? raw : mime, fallbackHint: _current.hdrHint);
+      // dolbyVisionLabel returns generic when no profile; show P8 etc when known.
+      return lab;
+    }
+    return _effectiveHdr.label;
+  }
+
   Color get _hdrColor {
     switch (_effectiveHdr) {
       case HdrFormat.dolbyVision:
@@ -3086,7 +3105,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   String? get _videoCodecInfoLabel {
     final label = _liveVideoCodec ?? _current.videoCodecLabel;
     if (label == null) return null;
-    if (_effectiveHdr == HdrFormat.dolbyVision && label == 'Dolby Vision') {
+    if (_effectiveHdr == HdrFormat.dolbyVision && label.startsWith('Dolby Vision')) {
       return null;
     }
     return label;
@@ -3121,7 +3140,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         ? _dragValue
         : _position.inMilliseconds.toDouble().clamp(0, maxMs).toDouble();
 
-    final hdrChip = FormatChip(label: _effectiveHdr.label, color: _hdrColor);
+    final hdrChip = FormatChip(label: _hdrLabel, color: _hdrColor);
     final videoCodecLabel = _videoCodecInfoLabel;
     final videoChip = videoCodecLabel != null
         ? FormatChip(label: videoCodecLabel, color: _videoColor)

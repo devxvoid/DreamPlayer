@@ -7,6 +7,7 @@ import '../models/hdr_format.dart';
 import '../models/video_item.dart';
 import '../services/thumbnail_store.dart';
 import '../services/tmdb_client.dart';
+import '../utils/codec_info.dart';
 import '../utils/tv_helper.dart';
 
 class VideoCard extends StatefulWidget {
@@ -230,7 +231,7 @@ class _VideoCardState extends State<VideoCard> {
                               top: 8,
                               left: 8,
                               child: _Badge(
-                                label: _hdrShortLabel(video.hdrFormat),
+                                label: _hdrShortLabel(video.hdrFormat, video.hdrHint),
                                 background: _hdrColor(video.hdrFormat),
                               ),
                             ),
@@ -365,9 +366,11 @@ class _Badge extends StatelessWidget {
   }
 }
 
-String _hdrShortLabel(HdrFormat format) {
+String _hdrShortLabel(HdrFormat format, String? hint) {
   switch (format) {
     case HdrFormat.dolbyVision:
+      final p = dolbyVisionProfile(hint);
+      if (p != null) return 'DV P$p';
       return 'DV';
     case HdrFormat.hdr10plus:
       return 'HDR10+';

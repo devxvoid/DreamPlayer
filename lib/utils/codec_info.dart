@@ -7,6 +7,47 @@ import '../models/hdr_format.dart';
 /// `DV P8` is Dolby Vision but `Adventure.mkv` stays SDR (the old substring
 /// test would have flagged any name containing "dv"). `+` is kept glued to
 /// its number (`HDR10+`), and underscore/dash/dot/space are word separators.
+/// Returns the Dolby Vision profile number (4,5,7,8,9…) from a codec or hint
+/// string like `dvhe.08.06`, `dvh1.05.06`, `dvav.09.06`, `DV P8`, `profile 7`.
+/// Returns null when the string is not Dolby Vision.
+int? dolbyVisionProfile(String? raw) {
+  if (raw == null || raw.isEmpty) return null;
+  final s = raw.toLowerCase();
+  // Codec form: dvhe.08.06 / dvh1.05.09 / dvav.09.06 / dovi
+  final codecMatch = RegExp(r'dv(?:he|h1|av)[._\s-]*0?(\d)\b').firstMatch(s);
+  if (codecMatch != null) {
+    final n = int.tryParse(codecMatch.group(1)!);
+    if (n != null) return n;
+  }
+  // Hint form: profile 8 / profile8 / p8 / dv p8
+  final profileMatch =
+      RegExp(r'(?:profile\s*0?([45-9])|(?:^|[^a-z0-9])p0?([45-9])\b)').firstMatch(s);
+  if (profileMatch != null) {
+    final v = profileMatch.group(1) ?? profileMatch.group(2);
+    final n = int.tryParse(v!);
+    if (n != null) return n;
+  }
+  // Bare dv token (unknown profile) → treat as DV but no profile number.
+  if (s.contains('dv') || s.contains('dovi') || s.contains('dolby vision')) {
+    // Only return null to signal generic DV; caller can still treat as DV.
+    return null;
+  }
+  return null;
+}
+
+bool isDolbyVisionCodec(String? codec) {
+  if (codec == null || codec.isEmpty) return false;
+  final c = codec.toLowerCase();
+  if (c.startsWith('dv')) return true;
+  return dolbyVisionProfile(codec) != null;
+}
+
+String dolbyVisionLabel(String? codec, {String? fallbackHint}) {
+  final p = dolbyVisionProfile(codec) ?? dolbyVisionProfile(fallbackHint);
+  if (p != null) return 'Dolby Vision P$p';
+  return 'Dolby Vision';
+}
+
 HdrFormat detectHdrFormat(String? hint) {
   if (hint == null || hint.isEmpty) return HdrFormat.sdr;
   final normalized = hint.toLowerCase().replaceAll('+', ' plus ').replaceAll('_', ' ').replaceAll('-', ' ');
@@ -15,15 +56,11 @@ HdrFormat detectHdrFormat(String? hint) {
       .where((t) => t.isNotEmpty)
       .toList();
   final joined = tokens.join(' ');
-  if (tokens.any((t) => t == 'dv' || t == 'dovi' || t == 'dolby') ||
-      joined.contains('profile 5') ||
-      joined.contains('profile 7') ||
-      joined.contains('profile 8') ||
-      joined.contains('profile5') ||
-      joined.contains('profile7') ||
-      joined.contains('profile8') ||
+  // Any DV signal → Dolby Vision (profiles 4,5,7,8,9 and future).
+  if (dolbyVisionProfile(hint) != null ||
+      tokens.any((t) => t == 'dv' || t == 'dovi' || t == 'dolby') ||
       tokens.any((t) =>
-          t.startsWith('dvhe') || t.startsWith('dvh1') || t.startsWith('dvav'))) {
+          t.startsWith('dvhe') || t.startsWith('dvh1') || t.startsWith('dvav') || t.startsWith('dovi'))) {
     return HdrFormat.dolbyVision;
   }
   if (joined.contains('hdr10 plus') ||
@@ -41,8 +78,7 @@ HdrFormat detectHdrFormat(String? hint) {
 /// Dolby Vision is best signaled by the codec (`dvhe`/`dvh1`/`dvav`);
 /// otherwise the transfer function decides HDR10 vs HLG.
 HdrFormat detectLiveHdrFormat({String? videoCodec, String? gamma}) {
-  final codec = (videoCodec ?? '').toLowerCase();
-  if (codec.startsWith('dv')) return HdrFormat.dolbyVision;
+  if (isDolbyVisionCodec(videoCodec)) return HdrFormat.dolbyVision;
   final transfer = (gamma ?? '').toLowerCase();
   if (transfer.contains('smpte2084') || transfer.contains('pq')) {
     return HdrFormat.hdr10;
@@ -209,11 +245,13 @@ String formatSubtitle(String? mime, String? codecs) {
 HdrFormat detectMedia3HdrFormat({
   int? colorTransfer,
   String? videoCodecs,
+  String? videoMime,
   bool isHdr10Plus = false,
   bool isHdr10 = false,
 }) {
-  final codec = (videoCodecs ?? '').toLowerCase();
-  if (codec.startsWith('dv')) return HdrFormat.dolbyVision;
+  if (isDolbyVisionCodec(videoCodecs) || isDolbyVisionCodec(videoMime)) {
+    return HdrFormat.dolbyVision;
+  }
   // ST 2094-40 dynamic metadata found in the bitstream → HDR10+, even though
   // the transfer function is the same PQ used by plain HDR10.
   if (isHdr10Plus) return HdrFormat.hdr10plus;
