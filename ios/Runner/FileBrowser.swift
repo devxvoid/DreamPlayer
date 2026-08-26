@@ -371,11 +371,10 @@ final class FileBrowser: NSObject {
         }
         guard let url = fileURL else { return nil }
         let asset = AVURLAsset(url: url)
-        let items = AVMetadataItem.metadataItems(
-            from: asset.commonMetadata,
-            filteredByIdentifier: .commonKeyArtwork
-        )
-        for item in items {
+        // `AVMetadataCommonKeyArtwork` ("itsk") via the String commonKey —
+        // stable across SDKs where the AVMetadataIdentifier member spelling
+        // differs.
+        for item in asset.commonMetadata where item.commonKey == AVMetadataCommonKeyArtwork {
             if let data = item.dataValue, !data.isEmpty { return data }
         }
         return nil
