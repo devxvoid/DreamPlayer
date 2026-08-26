@@ -3,16 +3,19 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../services/downloaded_subtitles_store.dart';
 import '../services/opensubtitles_client.dart';
 
 /// Bottom sheet for OpenSubtitles search & download (anonymous 5/day, login 20/day).
 class OpensubtitlesSheet extends StatefulWidget {
-  const OpensubtitlesSheet({super.key, required this.initialQuery, this.filePath});
+  const OpensubtitlesSheet({super.key, required this.initialQuery, this.filePath, this.resumeKey});
 
   /// Prefilled search term (video title / parsed name).
   final String initialQuery;
   /// Local file path for hash-based search (optional).
   final String? filePath;
+  /// Resume key for persisting downloaded subtitle (store top section).
+  final String? resumeKey;
 
   @override
   State<OpensubtitlesSheet> createState() => _OpensubtitlesSheetState();
@@ -76,42 +79,53 @@ class _OpensubtitlesSheetState extends State<OpensubtitlesSheet> {
     }
   }
 
+  Future<String?> _downloadToPersistent(OpensubtitlesResult r, {required String fileName, required List<int> bytes}) async {
+    final rk = widget.resumeKey;
+    if (rk != null && rk.isNotEmpty) {
+      final entry = await DownloadedSubtitlesStore.saveForVideo(
+        resumeKey: rk,
+        tempPath: await _writeTemp(fileName, bytes),
+        fileName: fileName,
+        language: r.language,
+      );
+      return entry.path;
+    }
+    return _writeTemp(fileName, bytes);
+  }
+
+  Future<String> _writeTemp(String fileName, List<int> bytes) async {
+    final dir = await getTemporaryDirectory();
+    final subDir = Directory('${dir.path}/opensubs');
+    if (!await subDir.exists()) await subDir.create(recursive: true);
+    final safeName = fileName.replaceAll(RegExp(r'[^\w.\-]'), '_');
+    final file = File('${subDir.path}/$safeName');
+    await file.writeAsBytes(bytes, flush: true);
+    return file.path;
+  }
+
   Future<void> _download(OpensubtitlesResult r) async {
     setState(() { _downloading = true; _error = null; });
     try {
       final info = await OpensubtitlesClient.instance.requestDownload(r.fileId);
       final bytes = await OpensubtitlesClient.instance.fetchBytes(info.link);
-      final dir = await getTemporaryDirectory();
-      final subDir = Directory('${dir.path}/opensubs');
-      if (!await subDir.exists()) await subDir.create(recursive: true);
-      // Sanitize fileName
-      final safeName = info.fileName.replaceAll(RegExp(r'[^\w.\-]'), '_');
-      final file = File('${subDir.path}/$safeName');
-      await file.writeAsBytes(bytes, flush: true);
+      final persisted = await _downloadToPersistent(r, fileName: info.fileName, bytes: bytes);
       if (!mounted) return;
-      Navigator.of(context).pop(file.path);
+      Navigator.of(context).pop(persisted);
     } catch (e) {
       final msg = e.toString();
       final isQuota = msg.toLowerCase().contains('limit') || msg.toLowerCase().contains('quota') || msg.contains('401');
       if (!mounted) return;
       setState(() { _downloading = false; _error = msg; });
       if (isQuota) {
-        // Offer login
         final loggedIn = await _showLoginDialog();
         if (loggedIn == true && mounted) {
-          // Retry once with new token
           try {
             setState(() => _downloading = true);
             final info = await OpensubtitlesClient.instance.requestDownload(r.fileId);
             final bytes = await OpensubtitlesClient.instance.fetchBytes(info.link);
-            final dir = await getTemporaryDirectory();
-            final subDir = Directory('${dir.path}/opensubs');
-            if (!await subDir.exists()) await subDir.create(recursive: true);
-            final safeName = info.fileName.replaceAll(RegExp(r'[^\w.\-]'), '_');
-            final file = File('${subDir.path}/$safeName');
-            await file.writeAsBytes(bytes, flush: true);
+            final persisted = await _downloadToPersistent(r, fileName: info.fileName, bytes: bytes);
             if (!mounted) return;
-            Navigator.of(context).pop(file.path);
+            Navigator.of(context).pop(persisted);
           } catch (e2) {
             if (mounted) setState(() { _downloading = false; _error = e2.toString(); });
           }

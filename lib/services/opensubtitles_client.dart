@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:shared_preferences/shared_preferences.dart';
+
 import '../config/opensubtitles_api_key.dart';
 
 /// Thrown for OpenSubtitles API errors with a user-friendly message.
@@ -78,10 +80,37 @@ class OpensubtitlesClient {
     ..idleTimeout = const Duration(seconds: 30);
 
   final _tokenCache = _TokenCache();
+  String? _cachedUsername;
+  bool _didLoadPersisted = false;
 
   String get _apiKey => opensubtitlesDefaultApiKey;
 
   bool get hasApiKey => _apiKey.isNotEmpty;
+  String? get username => _cachedUsername;
+  bool get isLoggedIn => _tokenCache.isValid;
+
+  static const _prefToken = 'dreamplayer.opensubtitlesToken';
+  static const _prefUser = 'dreamplayer.opensubtitlesUser';
+  static const _prefExpiry = 'dreamplayer.opensubtitlesExpiryMs';
+
+  Future<void> _ensureLoaded() async {
+    if (_didLoadPersisted) return;
+    _didLoadPersisted = true;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final tok = prefs.getString(_prefToken);
+      final exp = prefs.getInt(_prefExpiry);
+      final user = prefs.getString(_prefUser);
+      if (tok != null && tok.isNotEmpty && exp != null) {
+        final expiry = DateTime.fromMillisecondsSinceEpoch(exp);
+        if (DateTime.now().isBefore(expiry)) {
+          _tokenCache.token = tok;
+          _tokenCache.expiry = expiry;
+          _cachedUsername = user;
+        }
+      }
+    } catch (_) {}
+  }
 
   Map<String, String> _headers({String? bearer}) => {
         'Api-Key': _apiKey,
@@ -157,14 +186,37 @@ class OpensubtitlesClient {
     if (token.isEmpty) throw OpensubtitlesException('Login failed — check username/password');
     _tokenCache.token = token;
     _tokenCache.expiry = DateTime.now().add(const Duration(hours: 23));
+    _cachedUsername = username;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_prefToken, token);
+      await prefs.setInt(_prefExpiry, _tokenCache.expiry!.millisecondsSinceEpoch);
+      await prefs.setString(_prefUser, username);
+    } catch (_) {}
     return token;
   }
 
   String? get cachedToken => _tokenCache.isValid ? _tokenCache.token : null;
 
-  void logout() {
+  Future<void> logout() async {
     _tokenCache.token = null;
     _tokenCache.expiry = null;
+    _cachedUsername = null;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_prefToken);
+      await prefs.remove(_prefExpiry);
+      await prefs.remove(_prefUser);
+    } catch (_) {}
+  }
+
+  /// Fetch user info (remaining downloads etc.) — requires login.
+  Future<Map<String, dynamic>> fetchUserInfo() async {
+    await _ensureLoaded();
+    final tok = cachedToken;
+    if (tok == null) throw OpensubtitlesException('Not signed in');
+    final uri = Uri.https(_host, '/api/v1/infos/user');
+    return _getJson(uri, bearer: tok);
   }
 
   // --- Search ---
@@ -176,6 +228,7 @@ class OpensubtitlesClient {
     String? movieHash,
     int page = 1,
   }) async {
+    await _ensureLoaded();
     if (!hasApiKey) throw OpensubtitlesException('Missing OPENSUBTITLES_API_KEY — add it to .env');
     if (query.trim().isEmpty && (movieHash == null || movieHash.isEmpty)) {
       throw OpensubtitlesException('Enter a search term');
@@ -202,6 +255,7 @@ class OpensubtitlesClient {
   /// `POST /api/v1/download` → temporary `link`. Anonymous: just Api-Key (5/day).
   /// Authenticated: also Bearer. Throws with quota message when exhausted.
   Future<DownloadInfo> requestDownload(int fileId, {String? bearer}) async {
+    await _ensureLoaded();
     if (!hasApiKey) throw OpensubtitlesException('Missing OPENSUBTITLES_API_KEY');
     if (fileId == 0) throw OpensubtitlesException('Invalid subtitle');
     final uri = Uri.https(_host, '/api/v1/download');

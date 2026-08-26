@@ -23,6 +23,7 @@ import '../services/tmdb_client.dart';
 import '../services/trakt_client.dart';
 import '../services/watched_store.dart';
 import '../services/subtitle_style.dart';
+import '../services/downloaded_subtitles_store.dart';
 import 'subtitle_settings_screen.dart';
 import 'opensubtitles_sheet.dart';
 import '../utils/codec_info.dart';
@@ -1533,13 +1534,18 @@ class _PlayerScreenState extends State<PlayerScreen>
     // Sentinel for "Load subtitle file..." and "Search online…".
     const loadSentinel = -2;
     const onlineSentinel = -3;
+    const downloadedBase = -10;
+    // Load persisted online downloads for this video (Nova-style top section).
+    final resumeKey = _current.resumeKey ?? _current.id;
+    final downloaded = await DownloadedSubtitlesStore.loadForVideo(resumeKey);
+    if (!mounted) return;
     final choice = await showModalBottomSheet<int>(
       context: context,
       backgroundColor: const Color(0xFF1C1C1E),
       builder: (sheetContext) => SafeArea(
         child: ConstrainedBox(
           constraints: BoxConstraints(
-            maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.6,
+            maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.7,
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -1556,7 +1562,29 @@ class _PlayerScreenState extends State<PlayerScreen>
                   ),
                 ),
               ),
-              if (tracks.isEmpty)
+              if (downloaded.isNotEmpty) ...[
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(20, 8, 20, 4),
+                  child: Text('Downloaded', style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600)),
+                ),
+                Flexible(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: downloaded.length,
+                    itemBuilder: (context, i) {
+                      final d = downloaded[i];
+                      final isSelected = _current.subtitleUri == d.path;
+                      return _tvListTile(
+                        leading: Icon(isSelected ? Icons.radio_button_checked : Icons.file_download_done, color: isSelected ? Colors.white : Colors.white70),
+                        title: Text('${d.fileName} · ${d.language.toUpperCase()}', style: const TextStyle(color: Colors.white)),
+                        onTap: () => Navigator.of(context).pop(downloadedBase - i),
+                      );
+                    },
+                  ),
+                ),
+                const Divider(color: Colors.white12, height: 1),
+              ],
+              if (tracks.isEmpty && downloaded.isEmpty)
                 const Padding(
                   padding: EdgeInsets.fromLTRB(20, 8, 20, 8),
                   child: Text(
@@ -1564,7 +1592,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                     style: TextStyle(color: Colors.white54, fontSize: 13),
                   ),
                 )
-              else ...[
+              else if (tracks.isNotEmpty) ...[
                 _tvListTile(
                   leading: Icon(
                     selected < 0
@@ -1631,6 +1659,36 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
     if (choice == loadSentinel) {
       await _pickAndLoadSubtitle();
+      return;
+    }
+    if (choice <= downloadedBase) {
+      final idx = downloadedBase - choice;
+      if (idx >= 0 && idx < downloaded.length) {
+        final picked = downloaded[idx];
+        final pos = _position;
+        _current = VideoItem(
+          id: _current.id,
+          title: _current.title,
+          path: _current.path,
+          uri: _current.uri,
+          resumeKey: _current.resumeKey,
+          duration: _current.duration,
+          sizeBytes: _current.sizeBytes,
+          resolution: _current.resolution,
+          videoCodec: _current.videoCodec,
+          hdrHint: _current.hdrHint,
+          audioCodec: _current.audioCodec,
+          audioProfile: _current.audioProfile,
+          audioChannels: _current.audioChannels,
+          subtitleUri: picked.path,
+          httpHeaders: _current.httpHeaders,
+          allowSelfSigned: _current.allowSelfSigned,
+          jellyfinServerId: _current.jellyfinServerId,
+          jellyfinItemId: _current.jellyfinItemId,
+          externalSubtitles: _current.externalSubtitles,
+        );
+        await _reopenAt(pos, _duration);
+      }
       return;
     }
     if (choice != selected) {
@@ -1712,11 +1770,12 @@ class _PlayerScreenState extends State<PlayerScreen>
     final raw = _current.title.trim();
     final q = raw.isEmpty ? _current.id : raw;
     final filePath = _current.path;
+    final resumeKey = _current.resumeKey ?? _current.id;
     final result = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: const Color(0xFF1C1C1E),
       isScrollControlled: true,
-      builder: (ctx) => OpensubtitlesSheet(initialQuery: q, filePath: filePath),
+      builder: (ctx) => OpensubtitlesSheet(initialQuery: q, filePath: filePath, resumeKey: resumeKey),
     );
     if (result == null || result.isEmpty || !mounted) return;
     final pos = _position;

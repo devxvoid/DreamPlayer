@@ -9,6 +9,7 @@ import '../services/auto_play_store.dart';
 import '../services/cache_cleaner.dart';
 import '../services/decoder_mode.dart';
 import '../services/exo_player.dart';
+import '../services/opensubtitles_client.dart';
 import '../services/support_links.dart';
 import '../services/trakt_client.dart';
 import '../services/trakt_sync.dart';
@@ -38,6 +39,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _nightMode = false;
   bool _traktConnected = false;
   DateTime? _traktLastSync;
+  String? _osUsername;
+  int? _osRemaining;
+  bool _osLoggedIn = false;
 
   @override
   void initState() {
@@ -50,6 +54,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _loadDecoderMode();
     _loadAudioFilters();
     _loadTrakt();
+    _loadOpensubtitles();
   }
 
   Future<void> _loadTrakt() async {
@@ -65,6 +70,59 @@ class _SettingsScreenState extends State<SettingsScreen> {
         });
       }
     } catch (_) {}
+  }
+
+  Future<void> _loadOpensubtitles() async {
+    final c = OpensubtitlesClient.instance;
+    if (!c.hasApiKey) return;
+    try {
+      await c.fetchUserInfo().then((info) {
+        final data = info['data'] as Map<String, dynamic>?;
+        final remaining = data?['remaining_downloads'] as int?;
+        if (mounted) setState(() { _osLoggedIn = true; _osUsername = c.username; _osRemaining = remaining; });
+      }).catchError((_) {
+        if (mounted) setState(() { _osLoggedIn = false; _osUsername = null; });
+      });
+      if (!c.isLoggedIn && mounted) {
+        setState(() { _osLoggedIn = false; _osUsername = c.username; });
+      }
+    } catch (_) {
+      if (mounted) setState(() { _osLoggedIn = c.isLoggedIn; _osUsername = c.username; });
+    }
+  }
+
+  Future<void> _loginOpensubtitles() async {
+    final uCtrl = TextEditingController();
+    final pCtrl = TextEditingController();
+    String? err;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setDlg) => AlertDialog(
+        title: const Text('OpenSubtitles sign in'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(controller: uCtrl, decoration: const InputDecoration(labelText: 'Username')),
+          TextField(controller: pCtrl, obscureText: true, decoration: const InputDecoration(labelText: 'Password')),
+          if (err != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(err!, style: const TextStyle(color: Colors.redAccent, fontSize: 12))),
+          const SizedBox(height: 8),
+          const Text('Free account = 20/day (anonymous = 5/day). Create at opensubtitles.com', style: TextStyle(color: Colors.white54, fontSize: 11)),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(onPressed: () async {
+            try {
+              await OpensubtitlesClient.instance.login(username: uCtrl.text.trim(), password: pCtrl.text);
+              if (ctx.mounted) Navigator.pop(ctx, true);
+            } catch (e) { setDlg(() => err = e.toString()); }
+          }, child: const Text('Sign in')),
+        ],
+      )),
+    );
+    if (ok == true) await _loadOpensubtitles();
+  }
+
+  Future<void> _logoutOpensubtitles() async {
+    await OpensubtitlesClient.instance.logout();
+    if (mounted) setState(() { _osLoggedIn = false; _osUsername = null; _osRemaining = null; });
   }
 
   Future<void> _loadPassthrough() async {
@@ -424,6 +482,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   },
                 ),
             ],
+            // Subtitles — OpenSubtitles (Nova-style): anonymous 5/day, free login 20/day
+            const Divider(),
+            Padding(
+              padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Text('Subtitles', style: TextStyle(color: Colors.purpleAccent, fontWeight: FontWeight.w600, fontSize: 12)),
+            ),
+            TvTile(
+              leading: const Icon(Icons.subtitles),
+              title: const Text('OpenSubtitles'),
+              subtitle: Text(
+                !OpensubtitlesClient.instance.hasApiKey
+                    ? 'Add OPENSUBTITLES_API_KEY in .env and rebuild'
+                    : _osLoggedIn
+                        ? 'Signed in as ${_osUsername ?? ''}${_osRemaining != null ? ' · $_osRemaining remaining' : ''}'
+                        : 'Anonymous — 5/day, sign in for 20/day',
+              ),
+              onTap: !OpensubtitlesClient.instance.hasApiKey
+                  ? null
+                  : _osLoggedIn
+                      ? _logoutOpensubtitles
+                      : _loginOpensubtitles,
+            ),
             if (TraktClient().isConfigured) ...[
               const Divider(),
               Padding(
