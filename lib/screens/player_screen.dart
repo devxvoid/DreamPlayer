@@ -24,6 +24,7 @@ import '../services/trakt_client.dart';
 import '../services/watched_store.dart';
 import '../services/subtitle_style.dart';
 import 'subtitle_settings_screen.dart';
+import 'opensubtitles_sheet.dart';
 import '../utils/codec_info.dart';
 import '../utils/tv_helper.dart';
 import '../widgets/format_chip.dart';
@@ -1529,8 +1530,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     _showControls();
     final tracks = _subtitleTracks;
     final selected = _selectedSubtitleTrack;
-    // Sentinel for "Load subtitle file...".
+    // Sentinel for "Load subtitle file..." and "Search online…".
     const loadSentinel = -2;
+    const onlineSentinel = -3;
     final choice = await showModalBottomSheet<int>(
       context: context,
       backgroundColor: const Color(0xFF1C1C1E),
@@ -1602,6 +1604,14 @@ class _PlayerScreenState extends State<PlayerScreen>
               ],
               const Divider(color: Colors.white12, height: 1),
               _tvListTile(
+                leading: const Icon(Icons.language, color: Colors.white70),
+                title: const Text(
+                  'Search online subtitles…',
+                  style: TextStyle(color: Colors.white),
+                ),
+                onTap: () => Navigator.of(context).pop(onlineSentinel),
+              ),
+              _tvListTile(
                 leading: const Icon(Icons.file_open, color: Colors.white70),
                 title: const Text(
                   'Load subtitle file…',
@@ -1615,6 +1625,10 @@ class _PlayerScreenState extends State<PlayerScreen>
       ),
     );
     if (choice == null) return;
+    if (choice == onlineSentinel) {
+      await _searchOnlineSubtitle();
+      return;
+    }
     if (choice == loadSentinel) {
       await _pickAndLoadSubtitle();
       return;
@@ -1684,6 +1698,43 @@ class _PlayerScreenState extends State<PlayerScreen>
       audioProfile: _current.audioProfile,
       audioChannels: _current.audioChannels,
       subtitleUri: uri,
+      httpHeaders: _current.httpHeaders,
+      allowSelfSigned: _current.allowSelfSigned,
+      jellyfinServerId: _current.jellyfinServerId,
+      jellyfinItemId: _current.jellyfinItemId,
+      externalSubtitles: _current.externalSubtitles,
+    );
+    await _reopenAt(pos, _duration);
+  }
+
+  Future<void> _searchOnlineSubtitle() async {
+    // Prefill with the video title without extension / noise.
+    final raw = _current.title.trim();
+    final q = raw.isEmpty ? _current.id : raw;
+    final filePath = _current.path;
+    final result = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: const Color(0xFF1C1C1E),
+      isScrollControlled: true,
+      builder: (ctx) => OpensubtitlesSheet(initialQuery: q, filePath: filePath),
+    );
+    if (result == null || result.isEmpty || !mounted) return;
+    final pos = _position;
+    _current = VideoItem(
+      id: _current.id,
+      title: _current.title,
+      path: _current.path,
+      uri: _current.uri,
+      resumeKey: _current.resumeKey,
+      duration: _current.duration,
+      sizeBytes: _current.sizeBytes,
+      resolution: _current.resolution,
+      videoCodec: _current.videoCodec,
+      hdrHint: _current.hdrHint,
+      audioCodec: _current.audioCodec,
+      audioProfile: _current.audioProfile,
+      audioChannels: _current.audioChannels,
+      subtitleUri: result,
       httpHeaders: _current.httpHeaders,
       allowSelfSigned: _current.allowSelfSigned,
       jellyfinServerId: _current.jellyfinServerId,
