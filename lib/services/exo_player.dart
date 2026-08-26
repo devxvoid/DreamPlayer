@@ -451,6 +451,12 @@ abstract class PlaybackController {
   /// re-applies it on every open.
   Future<void> setSpeed(double speed);
 
+  /// Native repeat loop for the current media item: 0 = off, 1 = repeat one,
+  /// 2 = repeat all (meaningless for a single item; Dart drives folder loops).
+  /// Android maps to Media3 `Player.setRepeatMode`; iOS is a no-op (the Dart
+  /// ended-handler restarts the session there).
+  Future<void> setRepeatMode(int mode);
+
   /// Sets the display brightness (0.0 = dim, 1.0 = max). Per-app; reverts on
   /// player close on both platforms. Pass -1 to restore system default.
   Future<void> setBrightness(double brightness);
@@ -609,6 +615,10 @@ class ExoPlayerController implements PlaybackController {
   @override
   Future<void> setSpeed(double speed) =>
       _send('setSpeed', {'speed': speed.clamp(0.25, 4.0)});
+
+  @override
+  Future<void> setRepeatMode(int mode) =>
+      _send('setRepeatMode', {'mode': mode});
 
   @override
   Future<void> setBrightness(double brightness) =>

@@ -1217,6 +1217,16 @@ class ExoPlayerView(
                     player.setPlaybackSpeed(speed)
                     result.success(null)
                 }
+                "setRepeatMode" -> {
+                    // 0 = off, 1 = repeat one, 2 = repeat all (single item:
+                    // same as off; Dart drives folder loops).
+                    when (call.argument<Number>("mode")?.toInt() ?: 0) {
+                        1 -> player.repeatMode = Player.REPEAT_MODE_ONE
+                        2 -> player.repeatMode = Player.REPEAT_MODE_ALL
+                        else -> player.repeatMode = Player.REPEAT_MODE_OFF
+                    }
+                    result.success(null)
+                }
                 "setBrightness" -> {
                     val brightness = call.argument<Number>("brightness")?.toFloat() ?: 0.5f
                     val params = activity.window.attributes

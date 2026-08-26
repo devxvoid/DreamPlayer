@@ -12,6 +12,7 @@ import '../services/continue_watching.dart';
 import '../services/exo_player.dart';
 import '../services/file_browser.dart';
 import '../services/jellyfin_client.dart';
+import '../services/playback_modes.dart';
 import '../services/auto_play_store.dart';
 import '../services/decoder_mode.dart';
 import '../services/smb_client.dart';
@@ -135,6 +136,23 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   int _subtitleDelayMs = 0;
   bool _autoPlayNext = false;
+
+  /// Repeat + shuffle (Phase 2). Persisted via [PlaybackModesStore]; repeat
+  /// one loops the current file, repeat all loops the folder (with shuffle
+  /// randomizing the order).
+  LoopMode _repeat = LoopMode.off;
+  bool _shuffle = false;
+
+  /// A-B repeat loop points (milliseconds), or null when unset. Both set →
+  /// the position ticker seeks back to A whenever playback passes B.
+  int? _abA;
+  int? _abB;
+
+  /// Sleep timer: absolute deadline for minute-based timers, a flag for
+  /// "end of current video", and the periodic ticker driving the countdown.
+  DateTime? _sleepUntil;
+  bool _sleepAtEnd = false;
+  Timer? _sleepTicker;
   DecoderMode _decoderMode = DecoderMode.auto;
 
   /// Whether the app is running on a TV (set once on first build).
@@ -238,7 +256,12 @@ class _PlayerScreenState extends State<PlayerScreen>
         _swipeEnabled = await areSwipeGesturesEnabled();
         _subtitleDelayMs = (await SubtitleStyle.load()).delayMs;
         _autoPlayNext = await isAutoPlayNextEnabled();
+        _repeat = await PlaybackModesStore.loadRepeat();
+        _shuffle = await PlaybackModesStore.loadShuffle();
         _decoderMode = await DecoderModeStore.load();
+        // Repeat one loops natively on Android (no ended event); iOS handles
+        // the restart from the Dart ended-handler.
+        unawaited(exo.setRepeatMode(_repeat.index));
       } catch (_) {
         // Persistence unavailable; keep the default fit.
       }
@@ -273,6 +296,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     final video = _current;
     _markedWatched = false;
     _autoPlayFired = false;
+    // A-B loop points are per-video.
+    _abA = null;
+    _abB = null;
     // Seed chapters from the VideoItem (e.g. Jellyfin `MediaSources[].Chapters`);
     // native MKV parsing (`e.chapters`) will override once available.
     _chapters = video.chapters
@@ -583,11 +609,36 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (!_inTests && key.isNotEmpty) WatchedStore.set(key, true);
       if (!_inTests) _pushTraktHistory(key);
     }
-    // Auto-play next episode (Settings → Player). Once per ended session.
-    if (e.ended && !_autoPlayFired && !_inTests) {
-      _autoPlayFired = true;
-      // Fire-and-forget: don't block the event loop.
-      _maybeAutoPlayNext();
+
+    // A-B repeat: loop back to A whenever playback passes B. Only while
+    // actually playing (not while paused/dragging the scrubber).
+    if (_abA != null &&
+        _abB != null &&
+        e.playing &&
+        !_dragging &&
+        e.position >= Duration(milliseconds: _abB!)) {
+      _exo?.seekTo(Duration(milliseconds: _abA!));
+      _position = Duration(milliseconds: _abA!);
+    }
+
+    // End-of-media routing, in priority order:
+    //   sleep "end of video" → stay ended (no next),
+    //   repeat one           → restart this file,
+    //   repeat all / shuffle → next in folder (wrapping),
+    //   auto-play next       → existing sequential behaviour.
+    if (e.ended && !_inTests) {
+      if (_sleepAtEnd) {
+        _sleepAtEnd = false;
+      } else if (_repeat == LoopMode.one) {
+        _restartForRepeatOne();
+      } else if (!_autoPlayFired) {
+        _autoPlayFired = true;
+        if (_repeat == LoopMode.all || _shuffle) {
+          _advancePlayback(wrap: _repeat == LoopMode.all);
+        } else {
+          _maybeAutoPlayNext();
+        }
+      }
     }
 
     // Resume bookmark: persist every ~5s while playing, and immediately when
@@ -620,7 +671,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     } catch (_) {
       return;
     }
-    final next = await _findNextEpisode();
+    final next = await _pickNextVideo(wrap: false);
     if (next == null || !mounted) return;
     // Small grace period so the user sees the ended state and can cancel
     // via back. If the screen is popped in that window, `mounted` is false.
@@ -633,10 +684,109 @@ class _PlayerScreenState extends State<PlayerScreen>
     await _openCurrent();
   }
 
-  /// Finds the next episode in the same folder (season-aware). Returns null
-  /// when the current video isn't part of a recognizable episode sequence or
-  /// when there is no next entry. File folders + Jellyfin both supported.
-  Future<VideoItem?> _findNextEpisode() async {
+  /// Repeat one: replay the current file from the start. Android loops
+  /// natively via `setRepeatMode` (no ended event ever fires); this Dart
+  /// path covers iOS (AetherEngine parks in `.ended`, and play-after-ended
+  /// reloads the session) and acts as the fallback everywhere.
+  void _restartForRepeatOne() {
+    _exo?.seekTo(Duration.zero);
+    _exo?.play();
+  }
+
+  /// Arms (or cancels) the sleep timer. A null [duration] with [endOfVideo]
+  /// set arms the "stop after this video" variant; both null cancels.
+  void _setSleepTimer({Duration? duration, bool endOfVideo = false}) {
+    _sleepTicker?.cancel();
+    _sleepTicker = null;
+    _sleepUntil = null;
+    _sleepAtEnd = false;
+    if (endOfVideo) {
+      _sleepAtEnd = true;
+    } else if (duration != null && duration > Duration.zero) {
+      _sleepUntil = DateTime.now().add(duration);
+      _sleepTicker = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (!mounted) return;
+        final left = _sleepUntil?.difference(DateTime.now());
+        if (left == null || left <= Duration.zero) {
+          _fireSleepTimer();
+        } else if (_sleepUntil != null) {
+          setState(() {}); // refresh the countdown label
+        }
+      });
+    }
+    if (mounted) setState(() {});
+  }
+
+  void _fireSleepTimer() {
+    _sleepTicker?.cancel();
+    _sleepTicker = null;
+    _sleepUntil = null;
+    _sleepAtEnd = false;
+    _exo?.pause();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Sleep timer finished — playback paused'),
+          duration: Duration(seconds: 3),
+        ),
+      );
+      setState(() {});
+    }
+  }
+
+  /// "12:34" remaining, or null when no minute-based timer is armed.
+  String? get _sleepCountdown {
+    final until = _sleepUntil;
+    if (until == null) return null;
+    final left = until.difference(DateTime.now());
+    if (left <= Duration.zero) return '0:00';
+    final m = left.inMinutes;
+    final s = left.inSeconds % 60;
+    return '$m:${s.toString().padLeft(2, '0')}';
+  }
+
+  /// Repeat-all / shuffle advance: pick the next video from the same folder
+  /// (wrapping at the end when repeating) and open it. A single-video folder
+  /// loops the file itself.
+  Future<void> _advancePlayback({required bool wrap}) async {
+    final next = await _pickNextVideo(wrap: wrap);
+    if (!mounted) return;
+    // Grace period, same rationale as auto-play-next.
+    await Future.delayed(const Duration(seconds: 2));
+    if (!mounted || !_completed) return;
+    _current = next ?? _current; // null → single-video folder: loop it
+    setState(() => _error = null);
+    await _openCurrent();
+  }
+
+  /// Picks the next video from the current folder honouring shuffle and
+  /// wrap. Returns null when there is nothing to advance to (end of a
+  /// non-wrapping sequence, or listing unavailable).
+  Future<VideoItem?> _pickNextVideo({required bool wrap}) async {
+    final siblings = await _orderedSiblings();
+    if (siblings == null || siblings.length < 2) {
+      // Single-file folder: repeat all means replay the same file.
+      return (wrap && siblings != null && siblings.length == 1) ? siblings.first : null;
+    }
+    final cur = _current;
+    final idx = siblings.indexWhere(
+      (v) => v.path == cur.path && v.uri == cur.uri,
+    );
+    final nextIdx = nextPlaybackIndex(
+      idx < 0 ? 0 : idx,
+      siblings.length,
+      wrap: wrap,
+      shuffle: _shuffle,
+    );
+    if (nextIdx == null || nextIdx == idx) return null;
+    return siblings[nextIdx];
+  }
+
+  /// Lists the current folder's videos in playback order (season/episode
+  /// aware when the folder looks episodic, else alphabetical). Returns null
+  /// when the current video isn't in a listable file folder. Jellyfin
+  /// folders aren't listed here yet (auto-play stays sequential-only there).
+  Future<List<VideoItem>?> _orderedSiblings() async {
     final cur = _current;
     // Local / SMB file folders (path or content:// handled via FileBrowser).
     final p = cur.path;
@@ -662,19 +812,20 @@ class _PlayerScreenState extends State<PlayerScreen>
         } else {
           videos.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
         }
-        final idx = videos.indexWhere((e) => e.path == p);
-        if (idx < 0 || idx + 1 >= videos.length) return null;
-        final nxt = videos[idx + 1];
-        final isContent = nxt.path.startsWith('content://');
-        return VideoItem(
-          id: 'folder_next_${nxt.path.hashCode}',
-          title: nxt.name,
-          path: isContent ? null : nxt.path,
-          uri: isContent ? nxt.path : null,
-          resumeKey: nxt.resumeKey,
-          duration: Duration.zero,
-          sizeBytes: nxt.size,
-        );
+        return videos
+            .map((e) {
+              final isContent = e.path.startsWith('content://');
+              return VideoItem(
+                id: 'folder_next_${e.path.hashCode}',
+                title: e.name,
+                path: isContent ? null : e.path,
+                uri: isContent ? e.path : null,
+                resumeKey: e.resumeKey,
+                duration: Duration.zero,
+                sizeBytes: e.size,
+              );
+            })
+            .toList();
       } catch (_) {
         return null;
       }
@@ -786,6 +937,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _hideTimer?.cancel();
+    _sleepTicker?.cancel();
     _swipeOverlayTimer?.cancel();
     _singleTapTimer?.cancel();
     _dtSeekTimer?.cancel();
@@ -1761,6 +1913,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     const fitOrder = VideoFitMode.values;
     bool expandAspect = false;
     bool expandSpeed = false;
+    bool expandRepeat = false;
+    bool expandSleep = false;
+    bool expandAB = false;
     bool expandChapters = false;
     bool expandSubtitleDelay = false;
     bool expandDecoder = false;
@@ -1850,6 +2005,177 @@ class _PlayerScreenState extends State<PlayerScreen>
                                 setSheet(() {});
                               },
                             ),
+                        ],
+                      ),
+                    ),
+                  const Divider(color: Colors.white12, height: 1),
+                  // Repeat & shuffle dropdown (Phase 2)
+                  _tvListTile(
+                    leading: Icon(
+                      _repeat == LoopMode.one
+                          ? Icons.repeat_one
+                          : Icons.repeat,
+                      color: _repeat == LoopMode.off
+                          ? Colors.white70
+                          : const Color(0xFF7C8BFF),
+                    ),
+                    title: const Text('Repeat & shuffle', style: TextStyle(color: Colors.white)),
+                    subtitle: Text(
+                      _shuffle
+                          ? '${_repeat.label} · Shuffle'
+                          : _repeat.label,
+                      style: const TextStyle(color: Colors.white54, fontSize: 12),
+                    ),
+                    trailing: Icon(expandRepeat ? Icons.expand_less : Icons.expand_more, color: Colors.white54),
+                    onTap: () => setSheet(() => expandRepeat = !expandRepeat),
+                  ),
+                  if (expandRepeat)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 12),
+                      child: Column(
+                        children: [
+                          for (final mode in LoopMode.values)
+                            _tvListTile(
+                              leading: Icon(
+                                _repeat == mode ? Icons.radio_button_checked : Icons.radio_button_off,
+                                color: _repeat == mode ? Colors.white : Colors.white54,
+                              ),
+                              title: Text(mode.label, style: const TextStyle(color: Colors.white)),
+                              onTap: () {
+                                if (_repeat != mode) {
+                                  setState(() => _repeat = mode);
+                                  _exo?.setRepeatMode(mode.index);
+                                  if (!_inTests) PlaybackModesStore.saveRepeat(mode);
+                                }
+                                setSheet(() {});
+                              },
+                            ),
+                          SwitchListTile(
+                            value: _shuffle,
+                            onChanged: (v) {
+                              setState(() => _shuffle = v);
+                              if (!_inTests) PlaybackModesStore.saveShuffle(v);
+                              setSheet(() {});
+                            },
+                            title: const Text('Shuffle', style: TextStyle(color: Colors.white)),
+                            subtitle: const Text('Random order inside the folder', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                          ),
+                        ],
+                      ),
+                    ),
+                  const Divider(color: Colors.white12, height: 1),
+                  // Sleep timer dropdown (Phase 2)
+                  _tvListTile(
+                    leading: const Icon(Icons.bedtime, color: Colors.white70),
+                    title: const Text('Sleep timer', style: TextStyle(color: Colors.white)),
+                    subtitle: Text(
+                      _sleepCountdown != null
+                          ? '${_sleepCountdown!} left'
+                          : _sleepAtEnd
+                              ? 'End of video'
+                              : 'Off',
+                      style: const TextStyle(color: Colors.white54, fontSize: 12),
+                    ),
+                    trailing: Icon(expandSleep ? Icons.expand_less : Icons.expand_more, color: Colors.white54),
+                    onTap: () => setSheet(() => expandSleep = !expandSleep),
+                  ),
+                  if (expandSleep)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 12),
+                      child: Column(
+                        children: [
+                          for (final option in const [
+                            (Duration.zero, 'Off'),
+                            (Duration(minutes: 5), '5 minutes'),
+                            (Duration(minutes: 10), '10 minutes'),
+                            (Duration(minutes: 15), '15 minutes'),
+                            (Duration(minutes: 30), '30 minutes'),
+                            (Duration(minutes: 60), '60 minutes'),
+                          ])
+                            _tvListTile(
+                              leading: Icon(
+                                (_sleepUntil != null ? option.$1 : Duration.zero) == option.$1
+                                    ? Icons.radio_button_checked
+                                    : Icons.radio_button_off,
+                                color: (_sleepUntil != null ? option.$1 : Duration.zero) == option.$1
+                                    ? Colors.white
+                                    : Colors.white54,
+                              ),
+                              title: Text(option.$2, style: const TextStyle(color: Colors.white)),
+                              onTap: () {
+                                _setSleepTimer(
+                                  duration: option.$1 == Duration.zero ? null : option.$1,
+                                );
+                                setSheet(() {});
+                              },
+                            ),
+                          _tvListTile(
+                            leading: Icon(
+                              _sleepAtEnd ? Icons.radio_button_checked : Icons.radio_button_off,
+                              color: _sleepAtEnd ? Colors.white : Colors.white54,
+                            ),
+                            title: const Text('End of current video', style: TextStyle(color: Colors.white)),
+                            onTap: () {
+                              _setSleepTimer(endOfVideo: true);
+                              setSheet(() {});
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                  const Divider(color: Colors.white12, height: 1),
+                  // A-B repeat dropdown (Phase 2)
+                  _tvListTile(
+                    leading: Icon(
+                      Icons.loop,
+                      color: _abA != null && _abB != null
+                          ? const Color(0xFF7C8BFF)
+                          : Colors.white70,
+                    ),
+                    title: const Text('A-B repeat', style: TextStyle(color: Colors.white)),
+                    subtitle: Text(
+                      _abA != null && _abB != null
+                          ? '${_formatDuration(Duration(milliseconds: _abA!))} – ${_formatDuration(Duration(milliseconds: _abB!))}'
+                          : _abA != null
+                              ? 'A ${_formatDuration(Duration(milliseconds: _abA!))} — pick B'
+                              : 'Off',
+                      style: const TextStyle(color: Colors.white54, fontSize: 12),
+                    ),
+                    trailing: Icon(expandAB ? Icons.expand_less : Icons.expand_more, color: Colors.white54),
+                    onTap: () => setSheet(() => expandAB = !expandAB),
+                  ),
+                  if (expandAB)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 12),
+                      child: Column(
+                        children: [
+                          _tvListTile(
+                            leading: const Icon(Icons.flag, color: Colors.white54),
+                            title: const Text('Set A to current position', style: TextStyle(color: Colors.white)),
+                            onTap: () {
+                              setState(() => _abA = _position.inMilliseconds);
+                              setSheet(() {});
+                            },
+                          ),
+                          _tvListTile(
+                            leading: const Icon(Icons.flag, color: Colors.white54),
+                            title: const Text('Set B to current position', style: TextStyle(color: Colors.white)),
+                            onTap: () {
+                              setState(() => _abB = _position.inMilliseconds);
+                              setSheet(() {});
+                            },
+                          ),
+                          _tvListTile(
+                            leading: const Icon(Icons.clear, color: Colors.white54),
+                            title: const Text('Clear', style: TextStyle(color: Colors.white)),
+                            onTap: () {
+                              setState(() {
+                                _abA = null;
+                                _abB = null;
+                              });
+                              setSheet(() {});
+                            },
+                          ),
                         ],
                       ),
                     ),
