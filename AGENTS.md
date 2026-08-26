@@ -643,8 +643,8 @@ verified for local/SMB/Jellyfin/WebDAV)**:
   from 6 → 4 buttons (`audio · CC · ⋮ · fullscreen`; `tune`/`1×`/`chapters`
   now live inside `⋮`).
 
-**Phase 3 — parity + binge (pending)**: Android subtitle delay (cue-pipeline
-offset), optional auto-play-next-episode within the same folder.
+**Phase 3 — parity + binge (DONE 2026-08-26)**: Android subtitle delay live via
+`DelayingParser` (`android/.../DreamSubtitleParserFactory.kt:71` `SubtitleTiming.delayUs` + `ExoPlayerView.kt:2931` reopen on change; PGS/DVB bitmap cues still not shifted), auto-play-next-episode within the same folder (local/SMB via `_orderedSiblings` + `JellyfinClient` `ParentId` sibling walk `lib/screens/player_screen.dart:893`).
 
 **Later/demand-driven**: cloud drives.
 

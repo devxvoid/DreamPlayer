@@ -163,6 +163,7 @@ class JellyfinItem {
     this.container,
     this.indexNumber,
     this.parentIndexNumber,
+    this.parentId,
     this.externalSubtitles = const [],
     this.chapters = const [],
   });
@@ -189,6 +190,9 @@ class JellyfinItem {
 
   /// Season number for `Type == Episode` (`ParentIndexNumber`).
   final int? parentIndexNumber;
+
+  /// Parent folder id (`ParentId`) for sibling listing (auto-play next).
+  final String? parentId;
 
   /// External subtitle tracks reported by the server (SRT/ASS/VTT files
   /// sitting next to the video on the server, served via `DeliveryUrl`).
@@ -286,6 +290,7 @@ class JellyfinItem {
       container: json['Container'] as String?,
       indexNumber: (json['IndexNumber'] as num?)?.toInt(),
       parentIndexNumber: (json['ParentIndexNumber'] as num?)?.toInt(),
+      parentId: json['ParentId'] as String?,
       externalSubtitles: externalSubs,
       chapters: chapters,
     );

@@ -894,8 +894,6 @@ class _PlayerScreenState extends State<PlayerScreen>
       try {
         final client = JellyfinClient();
         final server = await client.serverForUrl(cur.jellyfinServerId!);
-        // `cur.jellyfinServerId` is the host, not the full URL — `serverForUrl`
-        // expects a URL; reconstruct via the stored servers list.
         JellyfinServer? resolved = server;
         if (resolved == null) {
           final servers = await client.loadServers();
@@ -906,13 +904,26 @@ class _PlayerScreenState extends State<PlayerScreen>
           }
         }
         if (resolved == null) return null;
-        // We don't have the parentId for the current item, but we can locate
-        // it by scanning the user's views for the item's parent. Simpler:
-        // list the item's siblings via a recent-items search isn't reliable.
-        // For now skip Jellyfin auto-play — it needs the parent folder id
-        // threaded through the player. The file path above covers the main
-        // use case (local/SMB folders); Jellyfin will follow.
-        return null;
+        // Fetch the current item to learn its ParentId, then list siblings.
+        final item = await client.getItem(resolved, cur.jellyfinItemId!);
+        final parentId = item?.parentId;
+        if (parentId == null || parentId.isEmpty) return null;
+        final siblings = await client.getItems(resolved, parentId);
+        final playable = siblings.where((e) => e.isPlayable).toList();
+        if (playable.isEmpty) return null;
+        final episodic = playable.any((e) => e.parentIndexNumber != null && e.indexNumber != null);
+        if (episodic) {
+          playable.sort((a, b) {
+            final c = (a.parentIndexNumber ?? 0).compareTo(b.parentIndexNumber ?? 0);
+            if (c != 0) return c;
+            final d = (a.indexNumber ?? 0).compareTo(b.indexNumber ?? 0);
+            if (d != 0) return d;
+            return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+          });
+        } else {
+          playable.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+        }
+        return playable.map((e) => client.videoItem(resolved!, e)).toList();
       } catch (_) {
         return null;
       }
