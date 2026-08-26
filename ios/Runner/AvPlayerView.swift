@@ -1069,9 +1069,17 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         }()
 
         let videoCodec = Self.displayVideoCodec(base: videoCodecName, isDV: isDolbyVision, profile: dvProfile)
-        let colorTransfer = Self.colorTransfer(for: engine.videoFormat)
-        let hdrPlus = isHdr10PlusContent || engine.videoFormat == .hdr10Plus
-        let hdr10 = isHdr10Content || engine.videoFormat == .hdr10 || engine.videoFormat == .hdr10Plus
+        let hevcForHdr: Bool = {
+            let c = (videoCodecName ?? "").lowercased()
+            return c.contains("hevc") || c.contains("hev1") || c.contains("hvc1") || c.hasPrefix("dv")
+        }()
+        // Engine HDR (and its PQ transfer) is only trusted for HEVC-family
+        // codecs — H.264 never carries ST 2086/PQ mastering. Gating both the
+        // SEI scan and the engine report kills the SDR H.264 → HDR10 alias
+        // (and the 8-MiB raw scan already requires hevcFamily + luma sanity).
+        let colorTransfer = hevcForHdr ? Self.colorTransfer(for: engine.videoFormat) : nil
+        let hdrPlus = isHdr10PlusContent || (hevcForHdr && engine.videoFormat == .hdr10Plus)
+        let hdr10 = isHdr10Content || (hevcForHdr && (engine.videoFormat == .hdr10 || engine.videoFormat == .hdr10Plus))
 
         let audioTracks = audioTrackMaps()
         let activeAudio = engine.audioTracks.first(where: { $0.id == engine.activeAudioTrackIndex })
@@ -1471,10 +1479,28 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                 if ptype == 4, psize >= 4,
                    bytes[pos] == 0xB5, bytes[pos + 1] == 0x00, bytes[pos + 2] == 0x3C {
                     foundPlus = true // ST 2094-40 (HDR10+) via ITU-T T.35
-                } else if ptype == 137, (20...40).contains(psize) {
-                    found10 = true // ST 2086 mastering display colour volume
-                } else if ptype == 144, (3...8).contains(psize) {
-                    found10 = true // content light level
+                } else if ptype == 137, psize == 24 {
+                    // ST 2086: 24 B payload, sanity-check max/min luminance
+                    // (DTS/AC3 bytes can fake the type+size pair — random luma
+                    // values almost never fall in the HDR mastering window).
+                    let b0 = Int(bytes[pos + 16]) << 24 | Int(bytes[pos + 17]) << 16
+                        | Int(bytes[pos + 18]) << 8 | Int(bytes[pos + 19])
+                    let b1 = Int(bytes[pos + 20]) << 24 | Int(bytes[pos + 21]) << 16
+                        | Int(bytes[pos + 22]) << 8 | Int(bytes[pos + 23])
+                    // maxDisplay 50..10000 nits (= 500000..100000000 in
+                    // 0.0001-nit units per spec), minDisplay < maxDisplay.
+                    let maxNits = UInt32(bitPattern: Int32(b0))
+                    let minNits = UInt32(bitPattern: Int32(b1))
+                    if maxNits >= 500_000, maxNits <= 100_000_000, minNits < maxNits {
+                        found10 = true
+                    }
+                } else if ptype == 144, psize == 4 {
+                    // content light level: 4 B (maxCLL u16 + maxFALL u16)
+                    let maxCLL = Int(bytes[pos]) << 8 | Int(bytes[pos + 1])
+                    let maxFALL = Int(bytes[pos + 2]) << 8 | Int(bytes[pos + 3])
+                    if maxCLL >= 10, maxCLL <= 10000, maxFALL <= maxCLL {
+                        found10 = true
+                    }
                 }
                 pos += psize
                 if foundPlus && found10 { return }
