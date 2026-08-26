@@ -1577,14 +1577,18 @@ class _PlayerScreenState extends State<PlayerScreen>
     final choice = await showModalBottomSheet<int>(
       context: context,
       backgroundColor: const Color(0xFF1C1C1E),
+      isScrollControlled: true,
       builder: (sheetContext) => SafeArea(
         child: ConstrainedBox(
           constraints: BoxConstraints(
             maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.7,
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
+          // One scrollable list (not a fixed Column with nested Flexible
+          // lists) — in landscape the fixed tiles alone can exceed the cap
+          // and overflow the bottom.
+          child: ListView(
+            shrinkWrap: true,
+            padding: const EdgeInsets.only(bottom: 8),
             children: [
               const Padding(
                 padding: EdgeInsets.fromLTRB(20, 16, 20, 4),
@@ -1602,21 +1606,16 @@ class _PlayerScreenState extends State<PlayerScreen>
                   padding: EdgeInsets.fromLTRB(20, 8, 20, 4),
                   child: Text('Downloaded', style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600)),
                 ),
-                Flexible(
-                  child: ListView.builder(
-                    shrinkWrap: true,
-                    itemCount: downloaded.length,
-                    itemBuilder: (context, i) {
-                      final d = downloaded[i];
-                      final isSelected = _current.subtitleUri == d.path;
-                      return _tvListTile(
-                        leading: Icon(isSelected ? Icons.radio_button_checked : Icons.file_download_done, color: isSelected ? Colors.white : Colors.white70),
-                        title: Text('${d.fileName} · ${d.language.toUpperCase()}', style: const TextStyle(color: Colors.white)),
-                        onTap: () => Navigator.of(context).pop(downloadedBase - i),
-                      );
-                    },
-                  ),
-                ),
+                for (var i = 0; i < downloaded.length; i++)
+                  () {
+                    final d = downloaded[i];
+                    final isSelected = _current.subtitleUri == d.path;
+                    return _tvListTile(
+                      leading: Icon(isSelected ? Icons.radio_button_checked : Icons.file_download_done, color: isSelected ? Colors.white : Colors.white70),
+                      title: Text('${d.fileName} · ${d.language.toUpperCase()}', style: const TextStyle(color: Colors.white)),
+                      onTap: () => Navigator.of(sheetContext).pop(downloadedBase - i),
+                    );
+                  }(),
                 const Divider(color: Colors.white12, height: 1),
               ],
               if (tracks.isEmpty && downloaded.isEmpty)
@@ -1639,31 +1638,25 @@ class _PlayerScreenState extends State<PlayerScreen>
                     'Off',
                     style: TextStyle(color: Colors.white),
                   ),
-                  onTap: () => Navigator.of(context).pop(-1),
+                  onTap: () => Navigator.of(sheetContext).pop(-1),
                 ),
-                Flexible(
-                  child: ListView.builder(
-                    shrinkWrap: true,
-                    itemCount: tracks.length,
-                    itemBuilder: (context, i) {
-                      final t = tracks[i];
-                      final isSelected = t.index == selected;
-                      return _tvListTile(
-                        leading: Icon(
-                          isSelected
-                              ? Icons.radio_button_checked
-                              : Icons.radio_button_off,
-                          color: isSelected ? Colors.white : Colors.white54,
-                        ),
-                        title: Text(
-                          _subtitleTrackLabel(t),
-                          style: const TextStyle(color: Colors.white),
-                        ),
-                        onTap: () => Navigator.of(context).pop(t.index),
-                      );
-                    },
-                  ),
-                ),
+                for (final t in tracks)
+                  () {
+                    final isSelected = t.index == selected;
+                    return _tvListTile(
+                      leading: Icon(
+                        isSelected
+                            ? Icons.radio_button_checked
+                            : Icons.radio_button_off,
+                        color: isSelected ? Colors.white : Colors.white54,
+                      ),
+                      title: Text(
+                        _subtitleTrackLabel(t),
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      onTap: () => Navigator.of(sheetContext).pop(t.index),
+                    );
+                  }(),
               ],
               const Divider(color: Colors.white12, height: 1),
               _tvListTile(
@@ -1672,7 +1665,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                   'Search online subtitles…',
                   style: TextStyle(color: Colors.white),
                 ),
-                onTap: () => Navigator.of(context).pop(onlineSentinel),
+                onTap: () => Navigator.of(sheetContext).pop(onlineSentinel),
               ),
               _tvListTile(
                 leading: const Icon(Icons.file_open, color: Colors.white70),
@@ -1680,7 +1673,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                   'Load subtitle file…',
                   style: TextStyle(color: Colors.white),
                 ),
-                onTap: () => Navigator.of(context).pop(loadSentinel),
+                onTap: () => Navigator.of(sheetContext).pop(loadSentinel),
               ),
             ],
           ),
@@ -2636,14 +2629,29 @@ class _PlayerScreenState extends State<PlayerScreen>
                     title: const Text('Subtitle settings', style: TextStyle(color: Colors.white)),
                     subtitle: const Text('Size, color, background, delay', style: TextStyle(color: Colors.white54, fontSize: 12)),
                     trailing: const Icon(Icons.chevron_right, color: Colors.white54),
-                    onTap: () {
-                      Navigator.of(sheetContext).pop();
-                      Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => const SubtitleSettingsScreen(),
-                        ),
-                      );
-                    },
+                  onTap: () async {
+                    Navigator.of(sheetContext).pop();
+                    await Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const SubtitleSettingsScreen(),
+                      ),
+                    );
+                    // Re-apply the (possibly changed) style to the live
+                    // player — the settings screen only persists; without
+                    // this the change only landed on the NEXT open.
+                    if (!mounted) return;
+                    try {
+                      final style = await SubtitleStyle.load();
+                      await _exo?.setSubtitleStyle(style);
+                      final delayChanged = style.delayMs != _subtitleDelayMs;
+                      _subtitleDelayMs = style.delayMs;
+                      if (delayChanged &&
+                          Platform.isAndroid &&
+                          (_subtitleTracks.isNotEmpty || _subtitleOn)) {
+                        await _reopenAt(_position, _duration);
+                      }
+                    } catch (_) {}
+                  },
                   ),
                   const Divider(color: Colors.white12, height: 1),
                   if (defaultTargetPlatform == TargetPlatform.android) ...[
