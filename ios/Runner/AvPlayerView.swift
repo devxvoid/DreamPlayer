@@ -912,6 +912,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
               let layer = findPlayerLayer(),
               layer.player != nil else { return }
         let controller = AVPictureInPictureController(playerLayer: layer)
+        guard let controller else { return }
         // Pressing HOME while playing floats the video automatically (same
         // trigger as Android's onUserLeaveHint path).
         controller.canStartPictureInPictureAutomaticallyFromInline = true

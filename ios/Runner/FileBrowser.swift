@@ -371,10 +371,10 @@ final class FileBrowser: NSObject {
         }
         guard let url = fileURL else { return nil }
         let asset = AVURLAsset(url: url)
-        // `AVMetadataCommonKeyArtwork` ("itsk") via the String commonKey —
-        // stable across SDKs where the AVMetadataIdentifier member spelling
-        // differs.
-        for item in asset.commonMetadata where item.commonKey == AVMetadataCommonKeyArtwork {
+        // "itsk" = the common-key artwork identifier (AVMetadataKey
+        // .commonKeyArtwork) — matched via rawValue so the lookup is stable
+        // across SDK spellings. Metadata-only: never decodes video.
+        for item in asset.commonMetadata where item.identifier?.rawValue == "itsk" {
             if let data = item.dataValue, !data.isEmpty { return data }
         }
         return nil
