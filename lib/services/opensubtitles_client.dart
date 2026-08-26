@@ -121,29 +121,51 @@ class OpensubtitlesClient {
       };
 
   Future<Map<String, dynamic>> _getJson(Uri uri, {String? bearer}) async {
-    final req = await _client.getUrl(uri);
-    _headers(bearer: bearer).forEach(req.headers.set);
-    final resp = await req.close().timeout(const Duration(seconds: 30));
-    final body = await resp.transform(utf8.decoder).join();
-    if (resp.statusCode >= 400) {
-      final msg = _friendlyGetError(resp.statusCode, body);
-      throw OpensubtitlesException(msg, statusCode: resp.statusCode);
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        final req = await _client.getUrl(uri);
+        _headers(bearer: bearer).forEach(req.headers.set);
+        final resp = await req.close().timeout(const Duration(seconds: 30));
+        final body = await resp.transform(utf8.decoder).join();
+        if (resp.statusCode >= 400) {
+          final msg = _friendlyGetError(resp.statusCode, body);
+          throw OpensubtitlesException(msg, statusCode: resp.statusCode);
+        }
+        return jsonDecode(body) as Map<String, dynamic>;
+      } on SocketException catch (e) {
+        if (attempt == 1) throw OpensubtitlesException('Network error — check connection and retry (${e.osError?.message ?? e.message})');
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+      } on TimeoutException {
+        if (attempt == 1) throw OpensubtitlesException('Search timed out — retry');
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+      }
     }
-    return jsonDecode(body) as Map<String, dynamic>;
+    throw OpensubtitlesException('Network error — retry');
   }
 
   Future<Map<String, dynamic>> _postJson(Uri uri, Map<String, dynamic> payload,
       {String? bearer}) async {
-    final req = await _client.postUrl(uri);
-    _headers(bearer: bearer).forEach(req.headers.set);
-    req.write(jsonEncode(payload));
-    final resp = await req.close().timeout(const Duration(seconds: 30));
-    final body = await resp.transform(utf8.decoder).join();
-    if (resp.statusCode >= 400) {
-      final msg = _friendlyPostError(resp.statusCode, body);
-      throw OpensubtitlesException(msg, statusCode: resp.statusCode);
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        final req = await _client.postUrl(uri);
+        _headers(bearer: bearer).forEach(req.headers.set);
+        req.write(jsonEncode(payload));
+        final resp = await req.close().timeout(const Duration(seconds: 30));
+        final body = await resp.transform(utf8.decoder).join();
+        if (resp.statusCode >= 400) {
+          final msg = _friendlyPostError(resp.statusCode, body);
+          throw OpensubtitlesException(msg, statusCode: resp.statusCode);
+        }
+        return body.isEmpty ? <String, dynamic>{} : jsonDecode(body) as Map<String, dynamic>;
+      } on SocketException catch (e) {
+        if (attempt == 1) throw OpensubtitlesException('Network error — check connection and retry (${e.osError?.message ?? e.message})');
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+      } on TimeoutException {
+        if (attempt == 1) throw OpensubtitlesException('Download timed out — retry');
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+      }
     }
-    return body.isEmpty ? <String, dynamic>{} : jsonDecode(body) as Map<String, dynamic>;
+    throw OpensubtitlesException('Network error — retry');
   }
 
   String _friendlyGetError(int code, String body) {
@@ -272,17 +294,33 @@ class OpensubtitlesClient {
   }
 
   /// Fetch the temporary `link` URL to bytes. Link needs no auth headers.
+  /// Retries once on transient `SocketException` (CDN RST on pooled keep-alive).
   Future<List<int>> fetchBytes(String link) async {
-    final uri = Uri.parse(link);
-    final req = await _client.getUrl(uri);
-    req.headers.set('User-Agent', _userAgent);
-    final resp = await req.close().timeout(const Duration(seconds: 30));
-    if (resp.statusCode >= 400) throw OpensubtitlesException('Subtitle download failed (${resp.statusCode})');
-    final bytes = <int>[];
-    await for (final chunk in resp) {
-      bytes.addAll(chunk);
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        final uri = Uri.parse(link);
+        final req = await _client.getUrl(uri);
+        req.headers.set('User-Agent', _userAgent);
+        req.headers.set('Accept', '*/*');
+        // dl.* does not need Api-Key; keep connection short-lived.
+        req.persistentConnection = false;
+        final resp = await req.close().timeout(const Duration(seconds: 30));
+        if (resp.statusCode >= 400) throw OpensubtitlesException('Subtitle download failed (${resp.statusCode})');
+        final bytes = <int>[];
+        await for (final chunk in resp) {
+          bytes.addAll(chunk);
+        }
+        if (bytes.isEmpty) throw OpensubtitlesException('Empty subtitle file');
+        return bytes;
+      } on SocketException catch (e) {
+        if (attempt == 1) throw OpensubtitlesException('Network error — check connection and retry (${e.osError?.message ?? e.message})');
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+      } on TimeoutException {
+        if (attempt == 1) throw OpensubtitlesException('Download timed out — retry');
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+      }
     }
-    return bytes;
+    throw OpensubtitlesException('Network error — retry');
   }
 
   void dispose() => _client.close(force: true);
