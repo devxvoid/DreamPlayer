@@ -166,7 +166,7 @@ internal object MkvChapters {
             .build()
     }
 
-    private fun openSmbFile(smbUri: String, context: Context): SmbRandomAccessFile? {
+    internal fun openSmbFile(smbUri: String, context: Context): SmbRandomAccessFile? {
         val uri = android.net.Uri.parse(smbUri) ?: return null
         if (!"smb".equals(uri.scheme, ignoreCase = true)) return null
         val serverId = uri.host ?: return null

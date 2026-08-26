@@ -604,14 +604,23 @@ class ExoPlayerView(
         headers: Map<String, String>,
     ): Boolean {
         val extractor = MediaExtractor()
+        var smbSource: SmbMediaDataSource? = null
         try {
             when {
                 path != null -> extractor.setDataSource(path)
                 uri != null -> {
                     val u = android.net.Uri.parse(uri)
-                    when (u.scheme) {
-                        "file" -> u.path?.let { extractor.setDataSource(it) } ?: return false
-                        "content" -> extractor.setDataSource(activity, u, null)
+                    when {
+                        u.scheme.equals("smb", ignoreCase = true) -> {
+                            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return false
+                            val src = SmbMediaDataSource.create(uri, activity) ?: return false
+                            smbSource = src
+                            extractor.setDataSource(src)
+                        }
+                        u.scheme.equals("file", ignoreCase = true) ->
+                            u.path?.let { extractor.setDataSource(it) } ?: return false
+                        u.scheme.equals("content", ignoreCase = true) ->
+                            extractor.setDataSource(activity, u, null)
                         else -> extractor.setDataSource(activity, u, headers.ifEmpty { null })
                     }
                 }
@@ -802,14 +811,23 @@ class ExoPlayerView(
         headers: Map<String, String>,
     ): Boolean {
         val extractor = MediaExtractor()
+        var smbSource: SmbMediaDataSource? = null
         try {
             when {
                 path != null -> extractor.setDataSource(path)
                 uri != null -> {
                     val u = android.net.Uri.parse(uri)
-                    when (u.scheme) {
-                        "file" -> u.path?.let { extractor.setDataSource(it) } ?: return false
-                        "content" -> extractor.setDataSource(activity, u, null)
+                    when {
+                        u.scheme.equals("smb", ignoreCase = true) -> {
+                            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return false
+                            val src = SmbMediaDataSource.create(uri, activity) ?: return false
+                            smbSource = src
+                            extractor.setDataSource(src)
+                        }
+                        u.scheme.equals("file", ignoreCase = true) ->
+                            u.path?.let { extractor.setDataSource(it) } ?: return false
+                        u.scheme.equals("content", ignoreCase = true) ->
+                            extractor.setDataSource(activity, u, null)
                         else -> extractor.setDataSource(activity, u, headers.ifEmpty { null })
                     }
                 }
@@ -1961,5 +1979,61 @@ private class ForcedAspectPlayerView(context: Context) : PlayerView(context) {
         frame.setAspectRatio(forcedAspect ?: contentAspect)
         frame.scaleX = zoomScale
         frame.scaleY = zoomScale
+    }
+}
+
+/// Feeds a remote SMB file to Android's [MediaExtractor] via its
+/// [android.media.MediaDataSource] adapter (API 23+). Reuses the saved
+/// share credentials exactly like [MkvChapters.parseSmb]: `SmbStore.resolve`
+/// for the login, `SmbRandomAccessFile` for seekable reads. Without this,
+/// the HDR probes silently failed on every `smb://` source because
+/// MediaExtractor cannot open the jcifs scheme (exception swallowed →
+/// `hdr10Content=false` → HDR10 rips with no MKV `Colour` element played
+/// as SDR — verified with the Spider-Verse REMUX whose HDR metadata lives
+/// only in the HEVC SEI).
+private class SmbMediaDataSource private constructor(
+    private val raf: jcifs.smb.SmbRandomAccessFile,
+    private val length: Long,
+) : android.media.MediaDataSource() {
+
+    override fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int): Int {
+        if (position >= length || size <= 0) return -1
+        raf.seek(position)
+        var total = 0
+        while (total < size) {
+            val n = raf.read(buffer, offset + total, size - total)
+            if (n < 0) break
+            total += n
+        }
+        return if (total == 0) -1 else total
+    }
+
+    override fun getSize(): Long = length
+
+    override fun close() {
+        try { raf.close() } catch (_: Exception) {}
+    }
+
+    companion object {
+        fun create(uri: String, context: Context): SmbMediaDataSource? {
+            return try {
+                val parsed = Uri.parse(uri)
+                val serverId = parsed.host ?: return null
+                val segments = parsed.pathSegments
+                if (segments.isEmpty()) return null
+                val share = segments[0]
+                val remotePath = if (segments.size > 1) {
+                    segments.subList(1, segments.size).joinToString("/")
+                } else ""
+                val creds = SmbStore.resolve(context, serverId) ?: return null
+                val base = "smb://${creds.host}:${creds.port}/$share"
+                val url = if (remotePath.isEmpty()) base else "$base/$remotePath"
+                val f = jcifs.smb.SmbFile(url, creds.context())
+                val raf = jcifs.smb.SmbRandomAccessFile(f, "r")
+                SmbMediaDataSource(raf, f.length())
+            } catch (_: Exception) {
+                null
+            }
+        }
     }
 }
