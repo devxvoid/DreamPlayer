@@ -10,11 +10,13 @@ pulled into the GitHub Release body automatically by `.github/workflows/release.
 - **Nova-based subtitle language & encoding prefs** — reading language (auto-select track) + download language (OpenSubtitles `languages` param) + text encoding (codepage) modeled on Nova `res/values/arrays.xml` (`system` + 35 full names, not ISO codes; 3-letter Nova codes `eng/fre/ger/pob/zho/zht` → `en/fr/de/pt-BR/zh-CN/zh-TW`). `lib/services/subtitle_languages.dart` / `subtitle_encodings.dart` with `migrateLegacyLangCode`, `openSubsCodeForNovaCode`, `trackMatchesNovaCode`; Settings pickers show full names via `RadioGroup`, sheet `lib/screens/opensubtitles_sheet.dart` uses same list. Persisted as `dreamplayer.subReadingLang` / `subDownloadLang` / `subEncoding`.
 - **Phase 3 — parity + binge DONE** — Jellyfin auto-play next now walks `ParentId` siblings (`JellyfinItem.parentId` + `lib/screens/player_screen.dart:893` episodic sort → `videoItem`); Android subtitle delay live via `DelayingParser` + reopen (text cues, PGS/DVB still not shifted).
 - **NAS reconnect-on-drop verified** — high-bitrate SMB reconnect/resume confirmed on-device (2026-08-26).
+- **Dolby Vision profiles P4/P5/P7/P8/P9** — chip + badge + Video info now show `DV P8`, `DV P7`, etc. (`lib/utils/codec_info.dart:15` `dolbyVisionProfile`/`dolbyVisionLabel`, `lib/screens/player_screen.dart:3059` `_hdrLabel`, `lib/widgets/video_card.dart:368`).
 
 ### Fixed
 
 - **iOS OpenSubtitles CC search showed No results** — hash-exact search used `moviehash` only, so unknown hashes returned 0 rows. Now sends both `query` + `moviehash` and falls back to `query`-only (`lib/services/opensubtitles_client.dart:258`).
 - **CI now bakes `OPENSUBTITLES_API_KEY`** — `ios.yml` + `release.yml` pass both `TMDB_API_KEY` + `OPENSUBTITLES_API_KEY` as `dart-define`; added `OPENSUBTITLES_API_KEY` to GitHub secrets from `.env`.
+- **Dolby Vision only showed P8** — `detectHdrFormat`/`detectMedia3HdrFormat` now handle all profiles via `dvhe/dvh1/dvav 0?N` + `P4-P9` hints, with `videoMime` support.
 
 ### Changed
 

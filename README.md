@@ -21,10 +21,10 @@ A cross-platform video player for **Android, iOS/iPad, and Android TV** — buil
 ## Highlights
 
 ### Dolby Vision & HDR
-- Plays **Dolby Vision** Profile 8 at 4K 60fps with zero dropped frames
+- Plays **Dolby Vision** Profiles **P4 / P5 / P7 / P8 / P9** at 4K 60fps with zero dropped frames — chip shows `DV P8`, `DV P7`, etc.
 - Full **HDR10 / HDR10+ / HLG** passthrough to the display panel
-- Live on-screen chips showing the active HDR format, video codec, audio codec, and resolution
-- Graceful fallback on non-DV devices (plays as HDR10 or shows a clean error)
+- Live on-screen chips showing the active HDR format (profile-aware), video codec, audio codec, and resolution
+- Graceful fallback on non-DV devices (P7/P8 as HDR10, P5 shows clean error)
 
 ### Lossless Audio
 - All major codecs: **DTS, DTS-HD, TrueHD, E-AC3, AC3, AAC, FLAC** and more
