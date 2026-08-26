@@ -125,4 +125,20 @@ class DownloadedSubtitlesStore {
       } catch (_) {}
     } catch (_) {}
   }
+
+  /// Delete temp `opensubs` files older than 7 days and any orphaned support files.
+  static Future<void> cleanStaleTemp() async {
+    try {
+      final tmp = await getTemporaryDirectory();
+      final dir = Directory('${tmp.path}/opensubs');
+      if (!await dir.exists()) return;
+      final now = DateTime.now();
+      await for (final e in dir.list()) {
+        try {
+          final stat = await e.stat();
+          if (now.difference(stat.modified).inDays >= 7) await e.delete();
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
 }

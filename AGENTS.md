@@ -536,56 +536,6 @@ Run DreamPlayer on an Android TV box/panel as a real 10-foot app. **Status: Phas
 
 ~~Rejected by user (2026-08-22)~~ — **implemented 2026-08-26 at the user's request**; see "Picture-in-Picture" in Implemented features.
 
-### Trakt sync upgrade — two-way service (researched 2026-08-25)
-
-**SHELVED (2026-08-25, user decision)**: Trakt now gates API application
-*creation* behind a paid Trakt VIP subscription (quiet trakt-web change;
-forum-confirmed), so there is no free way for the developer to mint the
-client id/secret the build needs. Phase 1 code stays dormant and harmless —
-the Settings section only appears when `TRAKT_CLIENT_ID`/`SECRET` are baked
-via `--dart-define` (none committed; `.env.example` documents them). If
-Trakt ever reverses the paywall (or keys are obtained another way), resume
-at phase 2. Note: end users never needed VIP for our endpoints — this only
-blocks app registration.
-
-Current state: device-code auth (Settings), push-on-completion `addToHistory`
-with TMDB ids incl. S/E (`_pushTraktHistory` in player_screen.dart),
-batch `syncWatched` + `getWatchedTmdbIds` exist in `trakt_client.dart`. No
-pull-into-UI, no scrobble, no resume-point sync.
-
-Reference = **Nova Video Player** (aos-MediaLib `Trakt.java`/`TraktService`,
-`com.uwetrottmann.trakt5:trakt-java` self-forked): full two-way background
-sync — real-time **scrobble** (start/pause/stop during playback),
-**bidirectional watched** (pull Trakt history → mark rows; push local marks),
-**resume-point sync** across devices via `paused_at`, incremental engine
-keyed off Trakt `/sync/last_activities` timestamps (full sync on first login,
->24 h stale, or NAS-share refresh), manual "Sync now", sync status/skip
-reasons in Settings, min-resume threshold to skip accidental short plays.
-Documented limit: history pull reads only last ~100 plays. Their hardening
-history (token-renewal retries, auth error messages, NPE fixes) shows the
-sharp edges to design for up front.
-
-Phases (each verified on-device before the next):
-1. ~~Pull watched → WatchedStore~~ — DONE (2026-08-25): `TraktSync`
-   (`lib/services/trakt_sync.dart`) pulls a `TraktWatched` snapshot
-   (`fetchWatched()` = movies id set + shows as tmdbId→{season→watchedCount};
-   Trakt semantics: first N episodes of a season are watched) and marks
-   matching identity keys in `WatchedStore`. Matching is pure/unit-tested
-   (`matchKeys`, `test/trakt_sync_test.dart`): movies exact-id; episodes
-   parse SxxEyy from the key's filename tail; folder keys & unresolved ids
-   skipped. One-way mark-only by design (never clears local marks). Triggered
-   fire-and-forget at home-screen init (6 h throttle via
-   `dreamplayer.traktLastPullAt`) and force-pulled right after sign-in
-   succeeds in Settings.
-2. **Real scrobble** — start/pause/stop at playback transitions instead of
-   completion-only; keep completion push as fallback.
-3. **Resume points** — push/pull `ResumeStore` positions through Trakt
-   playback endpoints; cross-device continue-watching. Needs the same
-   min-threshold guard Nova added (>~5 min or >10 % played).
-4. **Sync-now button + status row** in Settings (last-sync time, skip
-   reasons); incremental sync via `last_activities`; 100-play pull cap like
-   Nova.
-
 ### iOS monetization — Apple Developer + IAP paywall (planned, 2026-08-25)
 
 User is buying the $99/yr Apple Developer Program; DreamPlayer gets a paid
@@ -696,8 +646,7 @@ verified for local/SMB/Jellyfin/WebDAV)**:
 **Phase 3 — parity + binge (pending)**: Android subtitle delay (cue-pipeline
 offset), optional auto-play-next-episode within the same folder.
 
-**Later/demand-driven**: Trakt sync, cloud drives. **Declined by user**: online
-subtitle download.
+**Later/demand-driven**: cloud drives.
 
 ### UPnP/DLNA browse (DONE 2026-08, both platforms)
 

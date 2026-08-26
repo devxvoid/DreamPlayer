@@ -10,6 +10,7 @@ import '../services/cache_cleaner.dart';
 import '../services/decoder_mode.dart';
 import '../services/exo_player.dart';
 import '../services/opensubtitles_client.dart';
+import '../services/subtitle_prefs.dart';
 import '../services/support_links.dart';
 import '../services/trakt_client.dart';
 import '../services/trakt_sync.dart';
@@ -42,6 +43,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? _osUsername;
   int? _osRemaining;
   bool _osLoggedIn = false;
+  String _prefSubLang = 'en';
+  bool _autoFetchSubs = false;
 
   @override
   void initState() {
@@ -55,6 +58,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _loadAudioFilters();
     _loadTrakt();
     _loadOpensubtitles();
+    _loadSubtitlePrefs();
   }
 
   Future<void> _loadTrakt() async {
@@ -89,6 +93,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } catch (_) {
       if (mounted) setState(() { _osLoggedIn = c.isLoggedIn; _osUsername = c.username; });
     }
+  }
+
+  Future<void> _loadSubtitlePrefs() async {
+    try {
+      final lang = await SubtitlePrefs.loadLanguage();
+      final auto = await SubtitlePrefs.loadAutoFetch();
+      if (mounted) setState(() { _prefSubLang = lang; _autoFetchSubs = auto; });
+    } catch (_) {}
   }
 
   Future<void> _loginOpensubtitles() async {
@@ -503,6 +515,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   : _osLoggedIn
                       ? _logoutOpensubtitles
                       : _loginOpensubtitles,
+            ),
+            TvTile(
+              leading: const Icon(Icons.language),
+              title: const Text('Preferred subtitle language'),
+              subtitle: Text(_prefSubLang.toUpperCase()),
+              onTap: () async {
+                final ctrl = TextEditingController(text: _prefSubLang);
+                final picked = await showDialog<String>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    title: const Text('Preferred language'),
+                    content: TextField(controller: ctrl, decoration: const InputDecoration(hintText: 'en, es, hi…', labelText: 'ISO 639-1 code')),
+                    actions: [
+                      TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+                      TextButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim().toLowerCase()), child: const Text('Save')),
+                    ],
+                  ),
+                );
+                if (picked != null && picked.isNotEmpty) {
+                  await SubtitlePrefs.saveLanguage(picked);
+                  if (mounted) setState(() => _prefSubLang = picked);
+                }
+              },
+            ),
+            SwitchListTile(
+              secondary: const Icon(Icons.auto_awesome),
+              title: const Text('Auto-fetch subtitles'),
+              subtitle: const Text('Download best match when no subtitles found'),
+              value: _autoFetchSubs,
+              onChanged: (v) async {
+                await SubtitlePrefs.saveAutoFetch(v);
+                if (mounted) setState(() => _autoFetchSubs = v);
+              },
             ),
             if (TraktClient().isConfigured) ...[
               const Divider(),

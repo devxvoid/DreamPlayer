@@ -1,5 +1,7 @@
 import 'dart:async';
-import 'dart:io' show Platform;
+import 'dart:io';
+
+import 'package:path_provider/path_provider.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -24,6 +26,8 @@ import '../services/trakt_client.dart';
 import '../services/watched_store.dart';
 import '../services/subtitle_style.dart';
 import '../services/downloaded_subtitles_store.dart';
+import '../services/opensubtitles_client.dart';
+import '../services/subtitle_prefs.dart';
 import 'subtitle_settings_screen.dart';
 import 'opensubtitles_sheet.dart';
 import '../utils/codec_info.dart';
@@ -126,6 +130,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   bool _markedWatched = false;
   bool _autoPlayFired = false;
   int _selectedSubtitleTrack = -1;
+  bool _autoFetchFired = false;
 
   /// True while the activity floats in picture-in-picture mode: every overlay
   /// (bars, transport pill, gestures) hides so the pip window shows only the
@@ -314,6 +319,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     final video = _current;
     _markedWatched = false;
     _autoPlayFired = false;
+    _autoFetchFired = false;
     // Chips flash again for each newly opened video.
     _chipsFlashedForOpen = false;
     // A-B loop points are per-video.
@@ -701,6 +707,11 @@ class _PlayerScreenState extends State<PlayerScreen>
 
     if (wasPlaying != _playing || wasBuffering != _buffering) {
       _syncControlsForPlaybackState();
+    }
+    // Auto-fetch online subtitles once per video when no tracks exist (Nova-style).
+    if (!_autoFetchFired && e.state == _nativeStateReady && _subtitleTracks.isEmpty && e.subtitleTracks.isEmpty) {
+      // Fire-and-forget; handle async outside setState.
+      Future.microtask(() => _maybeAutoFetchSubs());
     }
     if (mounted) setState(() {});
   }
@@ -1801,6 +1812,72 @@ class _PlayerScreenState extends State<PlayerScreen>
       externalSubtitles: _current.externalSubtitles,
     );
     await _reopenAt(pos, _duration);
+  }
+
+  Future<String> _writeTempForAuto(String fileName, List<int> bytes) async {
+    final dir = await getTemporaryDirectory();
+    // Use dart:io via path_provider's temp; need import already via player_screen? Add.
+    // Fallback: use system temp via Directory.systemTemp
+    final sub = Directory('${dir.path}/opensubs');
+    if (!await sub.exists()) await sub.create(recursive: true);
+    final safe = fileName.replaceAll(RegExp(r'[^\w.\-]'), '_');
+    final f = File('${sub.path}/$safe');
+    await f.writeAsBytes(bytes, flush: true);
+    return f.path;
+  }
+
+  Future<void> _maybeAutoFetchSubs() async {
+    if (_autoFetchFired) return;
+    _autoFetchFired = true;
+    try {
+      final auto = await SubtitlePrefs.loadAutoFetch();
+      if (!auto) return;
+      if (!OpensubtitlesClient.instance.hasApiKey) return;
+      if (_subtitleTracks.isNotEmpty) return;
+      final resumeKey = _current.resumeKey ?? _current.id;
+      final downloaded = await DownloadedSubtitlesStore.loadForVideo(resumeKey);
+      if (downloaded.isNotEmpty) return;
+      if (_current.subtitleUri != null && _current.subtitleUri!.isNotEmpty) return;
+      final lang = await SubtitlePrefs.loadLanguage();
+      final query = _current.title.trim().isEmpty ? _current.id : _current.title.trim();
+      String? hash;
+      if (_current.path != null && _current.path!.isNotEmpty) {
+        hash = await opensubtitlesHashForFile(_current.path!);
+      }
+      final results = await OpensubtitlesClient.instance.search(query: query, languages: lang, movieHash: hash);
+      if (results.isEmpty) return;
+      final best = results.first;
+      if (!mounted || _subtitleTracks.isNotEmpty) return;
+      final info = await OpensubtitlesClient.instance.requestDownload(best.fileId);
+      final bytes = await OpensubtitlesClient.instance.fetchBytes(info.link);
+      final tmp = await _writeTempForAuto(info.fileName, bytes);
+      final entry = await DownloadedSubtitlesStore.saveForVideo(resumeKey: resumeKey, tempPath: tmp, fileName: info.fileName, language: best.language);
+      if (!mounted) return;
+      final pos = _position;
+      _current = VideoItem(
+        id: _current.id,
+        title: _current.title,
+        path: _current.path,
+        uri: _current.uri,
+        resumeKey: _current.resumeKey,
+        duration: _current.duration,
+        sizeBytes: _current.sizeBytes,
+        resolution: _current.resolution,
+        videoCodec: _current.videoCodec,
+        hdrHint: _current.hdrHint,
+        audioCodec: _current.audioCodec,
+        audioProfile: _current.audioProfile,
+        audioChannels: _current.audioChannels,
+        subtitleUri: entry.path,
+        httpHeaders: _current.httpHeaders,
+        allowSelfSigned: _current.allowSelfSigned,
+        jellyfinServerId: _current.jellyfinServerId,
+        jellyfinItemId: _current.jellyfinItemId,
+        externalSubtitles: _current.externalSubtitles,
+      );
+      await _reopenAt(pos, _duration);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Auto-fetched: ${entry.fileName}')));
+    } catch (_) {}
   }
 
   /// For CX / SMB playback, scan the video's NAS folder via the saved SMB
