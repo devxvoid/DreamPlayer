@@ -148,6 +148,10 @@ class _PlayerScreenState extends State<PlayerScreen>
   int? _abA;
   int? _abB;
 
+  /// Manual A/V sync (Android): audio shifted relative to video, ±5 s.
+  /// Positive = audio later. Session-only (not persisted).
+  int _audioDelayMs = 0;
+
   /// Sleep timer: absolute deadline for minute-based timers, a flag for
   /// "end of current video", and the periodic ticker driving the countdown.
   DateTime? _sleepUntil;
@@ -1916,6 +1920,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     bool expandRepeat = false;
     bool expandSleep = false;
     bool expandAB = false;
+    bool expandAudioDelay = false;
     bool expandChapters = false;
     bool expandSubtitleDelay = false;
     bool expandDecoder = false;
@@ -2124,6 +2129,56 @@ class _PlayerScreenState extends State<PlayerScreen>
                       ),
                     ),
                   const Divider(color: Colors.white12, height: 1),
+                  // Audio delay (manual A/V sync) — Android only; AetherEngine
+                  // exposes no audio-offset hook on iOS.
+                  if (defaultTargetPlatform == TargetPlatform.android) ...[
+                    _tvListTile(
+                      leading: const Icon(Icons.graphic_eq, color: Colors.white70),
+                      title: const Text('Audio delay', style: TextStyle(color: Colors.white)),
+                      subtitle: Text(
+                        _audioDelayMs == 0
+                            ? 'Off'
+                            : _audioDelayMs > 0
+                                ? '+${(_audioDelayMs / 1000).toStringAsFixed(1)} s (audio later)'
+                                : '${(_audioDelayMs / 1000).toStringAsFixed(1)} s (audio earlier)',
+                        style: const TextStyle(color: Colors.white54, fontSize: 12),
+                      ),
+                      trailing: Icon(expandAudioDelay ? Icons.expand_less : Icons.expand_more, color: Colors.white54),
+                      onTap: () => setSheet(() => expandAudioDelay = !expandAudioDelay),
+                    ),
+                    if (expandAudioDelay)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                        child: Column(
+                          children: [
+                            Slider(
+                              value: _audioDelayMs.toDouble(),
+                              min: -5000,
+                              max: 5000,
+                              divisions: 100,
+                              label: '${(_audioDelayMs / 1000).toStringAsFixed(1)} s',
+                              onChanged: (v) {
+                                final ms = v.round();
+                                setState(() => _audioDelayMs = ms);
+                                _exo?.setAudioDelay(ms);
+                              },
+                            ),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: TextButton(
+                                onPressed: () {
+                                  setState(() => _audioDelayMs = 0);
+                                  _exo?.setAudioDelay(0);
+                                  setSheet(() {});
+                                },
+                                child: const Text('Reset', style: TextStyle(color: Colors.white70)),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    const Divider(color: Colors.white12, height: 1),
+                  ],
                   // A-B repeat dropdown (Phase 2)
                   _tvListTile(
                     leading: Icon(

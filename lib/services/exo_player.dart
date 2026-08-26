@@ -457,6 +457,11 @@ abstract class PlaybackController {
   /// ended-handler restarts the session there).
   Future<void> setRepeatMode(int mode);
 
+  /// Manual A/V sync: shifts audio relative to video. Positive = audio
+  /// later. Android retunes a PCM AudioProcessor live; iOS is a no-op
+  /// (AetherEngine exposes no audio-offset hook yet — UI hidden there).
+  Future<void> setAudioDelay(int ms);
+
   /// Sets the display brightness (0.0 = dim, 1.0 = max). Per-app; reverts on
   /// player close on both platforms. Pass -1 to restore system default.
   Future<void> setBrightness(double brightness);
@@ -619,6 +624,9 @@ class ExoPlayerController implements PlaybackController {
   @override
   Future<void> setRepeatMode(int mode) =>
       _send('setRepeatMode', {'mode': mode});
+
+  @override
+  Future<void> setAudioDelay(int ms) => _send('setAudioDelay', {'ms': ms});
 
   @override
   Future<void> setBrightness(double brightness) =>

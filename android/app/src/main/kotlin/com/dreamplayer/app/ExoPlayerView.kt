@@ -1227,6 +1227,14 @@ class ExoPlayerView(
                     }
                     result.success(null)
                 }
+                "setAudioDelay" -> {
+                    // Manual A/V sync: positive = audio later. Dynamic — the
+                    // processor retunes without reconfiguring the sink.
+                    DreamRenderersFactory.audioDelayProcessor.setDelayMs(
+                        call.argument<Number>("ms")?.toLong() ?: 0L,
+                    )
+                    result.success(null)
+                }
                 "setBrightness" -> {
                     val brightness = call.argument<Number>("brightness")?.toFloat() ?: 0.5f
                     val params = activity.window.attributes

@@ -1,4 +1,5 @@
-import 'dart:async';import 'dart:io' show Platform;
+import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -12,7 +13,9 @@ import '../services/library_folders.dart';
 import '../services/tmdb_client.dart';
 import '../services/webdav_client.dart';
 import '../widgets/folder_card.dart';
+import '../widgets/tv_text_field.dart';
 import 'ftp_screen.dart';
+import 'player_screen.dart';
 import '../widgets/tv_overscan.dart';
 import '../widgets/video_card.dart';
 import '../utils/tv_helper.dart';
@@ -687,6 +690,12 @@ class _HomeScreenState extends State<HomeScreen>
                   onTap: () => Navigator.of(context).pop('upnp'),
                 ),
                 ListTile(
+                  leading: const Icon(Icons.link_outlined),
+                  title: const Text('Play URL'),
+                  subtitle: const Text('Stream a direct video link'),
+                  onTap: () => Navigator.of(context).pop('play-url'),
+                ),
+                ListTile(
                   leading: const Icon(Icons.video_library_outlined),
                   title: const Text('Add folder to library'),
                   subtitle: const Text(
@@ -748,9 +757,71 @@ class _HomeScreenState extends State<HomeScreen>
         await Navigator.of(context).push(
           MaterialPageRoute<void>(builder: (_) => const FileBrowserScreen()),
         );
+      case 'play-url':
+        await _playUrlDialog();
       case 'add-folder':
         await _addFolderToLibrary();
     }
+  }
+
+  /// Asks for a direct video URL and plays it. The URL is its own stable
+  /// resume key, so re-entering the same link continues where it stopped.
+  Future<void> _playUrlDialog() async {
+    final controller = TextEditingController();
+    final url = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Play URL'),
+        content: TvTextField(
+          controller: controller,
+          autofocus: true,
+          keyboardType: TextInputType.url,
+          autocorrect: false,
+          enableSuggestions: false,
+          textInputAction: TextInputAction.done,
+          decoration: const InputDecoration(
+            hintText: 'https://example.com/video.mp4',
+            labelText: 'Video URL',
+          ),
+          onSubmitted: (v) => Navigator.of(dialogContext).pop(v),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () =>
+                Navigator.of(dialogContext).pop(controller.text.trim()),
+            child: const Text('Play'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (url == null || url.isEmpty) return;
+    final uri = Uri.tryParse(url);
+    if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter a valid http(s) URL')),
+      );
+      return;
+    }
+    final last = uri.pathSegments.isNotEmpty ? uri.pathSegments.last : '';
+    final title = Uri.decodeComponent(last.isNotEmpty ? last : uri.host);
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => PlayerScreen(
+          video: VideoItem(
+            id: 'url_${url.hashCode}',
+            title: title,
+            uri: url,
+            resumeKey: 'url:$url',
+            duration: Duration.zero,
+          ),
+        ),
+      ),
+    );
   }
 
   static int _columnsForWidth(double width) {
