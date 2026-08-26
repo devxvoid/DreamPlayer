@@ -1,5 +1,4 @@
-import 'dart:async';
-import 'dart:io' show Platform;
+import 'dart:async';import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -20,6 +19,7 @@ import '../utils/tv_helper.dart';
 import 'file_browser_screen.dart';
 import 'jellyfin_screen.dart';
 import '../services/trakt_sync.dart';
+import '../utils/startup_permissions.dart';
 import 'smb_screen.dart';
 import 'tmd_details_screen.dart';
 import 'upnp_screen.dart';
@@ -70,6 +70,11 @@ class _HomeScreenState extends State<HomeScreen>
     // Phase-1 Trakt sync: pull watched state into WatchedStore (throttled,
     // silent, marks show up as green checks as stores fill).
     unawaited(TraktSync.pullWatched());
+    // Ask for every runtime permission at app open instead of mid-playback.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(requestStartupPermissions(context));
+    });
   }
 
   void _onMetadataChanged() {
