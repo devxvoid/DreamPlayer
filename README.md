@@ -38,7 +38,8 @@ A cross-platform video player for **Android, iOS/iPad, and Android TV** — buil
 - **Embedded + sideloaded** — every subtitle file next to the video auto-attaches
 - Supports SRT, SSA/ASS, WebVTT, TTML, SAMI, MicroDVD, MPL2, SubViewer
 - Full track picker with Off option; subtitles are anchored to the video, not the screen
-- **Appearance settings** — size, color, background, outline, and sync delay with live preview (in the player's ⋮ menu)
+- **Appearance settings** — size, color, background, outline, and sync delay with live preview (in the player's ⋮ menu; delay live on Android via `DelayingParser` + reopen)
+- **OpenSubtitles** — search/download from CC (5/day anon, 20/day free login); Nova-based language catalog (full names, 3-letter `eng/fre/pob/zho`, `zh-CN/zh-TW`) for reading + download prefs + text encoding (CP1250…CP949)
 
 ### Network Playback
 - **SMB / NAS** — in-app SMB browser on Android; CX Explorer "Open with" handoff
@@ -70,7 +71,7 @@ A cross-platform video player for **Android, iOS/iPad, and Android TV** — buil
 - **Pinch-to-zoom**, horizontal-swipe seek, double-tap-to-seek ±10 s
 - **Touch lock** — locks gestures during playback; tap once to reveal the unlock button
 - **Watched marks** — videos auto-mark as watched at the end; toggle manually per row
-- **Auto-play next episode** within the same folder (togglable)
+- **Auto-play next episode** within the same folder — local/SMB + **Jellyfin via ParentId sibling walk** (togglable)
 - Resumes playback from where you left off, even after app close or screen lock
 
 ### Android TV / Fire TV
