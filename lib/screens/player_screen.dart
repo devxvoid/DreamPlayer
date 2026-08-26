@@ -82,12 +82,6 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// is recreated on unlock) so [didChangeAppLifecycleState] can detect that
   /// the media was lost and reopen it.
   bool _hadMedia = false;
-
-  /// True when the current source is a network stream (WebDAV) whose
-  /// underlying TCP connection is killed when iOS backgrounds the app.
-  /// On resume, the engine still reports paused (not IDLE) but the reader is
-  /// dead — we must force-reload instead of just calling play().
-  bool _isNetworkSource = false;
   String? _error;
 
   bool _dragging = false;
@@ -291,14 +285,6 @@ class _PlayerScreenState extends State<PlayerScreen>
       }
       return;
     }
-    // Track network sources (WebDAV / authenticated HTTP) so
-    // resume-after-background force-reloads instead of just calling play()
-    // on a dead reader.
-    final uri = video.uri;
-    _isNetworkSource =
-        uri != null &&
-        ((uri.startsWith('http://') || uri.startsWith('https://')) &&
-            (video.httpHeaders.isNotEmpty || video.allowSelfSigned));
     Duration? resume;
     if (!_inTests) {
       resume = await ResumeStore.positionFor(_resumeKey);
@@ -753,13 +739,10 @@ class _PlayerScreenState extends State<PlayerScreen>
         state == AppLifecycleState.detached) {
       _saveResume(_position);
     }
-    // Stop audio while the screen is locked / the app is backgrounded.
-    // Android destroys the video surface while locked, so pausing keeps the
-    // playhead stable; `_reopenAfterBackground` resumes it on unlock.
-    if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.hidden) {
-      _exo?.pause();
-    }
+    // Background playback: audio KEEPS PLAYING when the app is backgrounded
+    // or the screen locks — that's the MediaSession + foreground-service
+    // feature (Android) / background-audio mode (iOS). We only bookmark the
+    // position above; on resume, media that the OS destroyed is reopened.
     if (state == AppLifecycleState.resumed) {
       _reopenAfterBackground();
     }
@@ -769,11 +752,13 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// platform view was recreated while the device was locked).
   static const int _nativeStateIdle = 1;
 
-  /// After the device unlocks, verify the native player still has the media
-  /// loaded. Android destroys the video surface while locked, and may recreate
-  /// the whole platform view (a fresh ExoPlayer, reset to IDLE). If the media
-  /// is gone, reopen from the saved resume position; otherwise just continue
-  /// playing from where we paused on background.
+  /// After returning to the foreground, verify the native player still has
+  /// the media loaded. Android may destroy the video surface while locked and
+  /// even recreate the whole platform view (a fresh ExoPlayer, reset to
+  /// IDLE); if the media is gone, reopen from the saved resume position.
+  /// When playback survived the background (the normal case now that audio
+  /// keeps playing), it is left untouched — a user-paused player stays
+  /// paused instead of being force-played.
   Future<void> _reopenAfterBackground() async {
     final exo = _exo;
     if (exo == null || _inTests) return;
@@ -794,15 +779,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (state.state == _nativeStateIdle && _hadMedia && !_completed) {
       // `open` autoplays and re-applies the saved resume position.
       await _openCurrent();
-    } else if (_isNetworkSource && _hadMedia && !_completed) {
-      // iOS kills TCP connections when the app is backgrounded. The engine
-      // still reports paused (not IDLE) but the underlying reader (WebDAV
-      // session) is dead and will buffer forever.
-      // Force-reload with a fresh source to re-establish the connection.
-      await _openCurrent();
-    } else {
-      // The media survived; we paused on background, so continue playing.
-      await exo.play();
     }
   }
 

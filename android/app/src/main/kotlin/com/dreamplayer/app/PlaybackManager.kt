@@ -11,7 +11,6 @@ import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
-import androidx.media.app.NotificationCompat.MediaStyle
 import androidx.media.session.MediaButtonReceiver
 import androidx.media3.common.C
 import androidx.media3.common.Player
@@ -45,6 +44,7 @@ object PlaybackManager {
 
     /// Guards redundant notification rebuilds (position ticker emits ~1/s).
     private var lastNotifyKey: String? = null
+    private var lastNotifyAtMs = 0L
 
     val sessionCompatToken: MediaSessionCompat.Token?
         get() = session?.sessionToken
@@ -149,11 +149,14 @@ object PlaybackManager {
 
         ContextCompat.startForegroundService(context, Intent(context, PlaybackService::class.java))
 
-        // Rebuild the notification only when a visible aspect changed; the
+        // Rebuild the notification when a visible aspect changed, or once a
+        // second while playing so the progress bar tracks playback. The
         // lockscreen extrapolates position from state.speed between updates.
+        val now = android.os.SystemClock.elapsedRealtime()
         val key = "${p.playbackState}|$playing|$title"
-        if (key != lastNotifyKey) {
+        if (key != lastNotifyKey || (playing && now - lastNotifyAtMs >= 1000)) {
             lastNotifyKey = key
+            lastNotifyAtMs = now
             notify(context)
         }
     }
@@ -203,6 +206,8 @@ object PlaybackManager {
         ensureChannel(context)
         val p = player
         val playing = p?.isPlaying == true
+        val duration = p?.duration?.takeIf { it != C.TIME_UNSET }?.coerceAtLeast(0L) ?: 0L
+        val position = p?.currentPosition?.coerceIn(0L, if (duration > 0) duration else Long.MAX_VALUE) ?: 0L
 
         val contentPi = PendingIntent.getActivity(
             context,
@@ -218,8 +223,16 @@ object PlaybackManager {
                 MediaButtonReceiver.buildMediaButtonPendingIntent(context, action),
             ).build()
 
-        return NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_media_play)
+        // Deliberately a PLAIN notification, not MediaStyle: on Android 13+ /
+        // OxygenOS a MediaStyle notification bound to the session token is
+        // pulled out of the notification panel entirely and rendered as the
+        // system media card in the quick-settings shade (verified on-device —
+        // Poweramp behaves the same). Users expect a visible row here, so we
+        // post a normal silent notification with transport actions; the
+        // MediaSession stays active for headset/Bluetooth keys and the action
+        // PendingIntents still route through it into the player.
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_stat_play)
             .setContentTitle(title ?: "DreamPlayer")
             .setContentText("DreamPlayer")
             .setContentIntent(contentPi)
@@ -241,12 +254,10 @@ object PlaybackManager {
             )
             .addAction(button(PlaybackStateCompat.ACTION_FAST_FORWARD, android.R.drawable.ic_media_ff, "Forward 10s"))
             .addAction(button(PlaybackStateCompat.ACTION_STOP, android.R.drawable.ic_menu_close_clear_cancel, "Close"))
-            .setStyle(
-                MediaStyle()
-                    .setMediaSession(session?.sessionToken)
-                    .setShowActionsInCompactView(0, 1, 2),
-            )
-            .build()
+        if (duration > 0) {
+            builder.setProgress(duration.toInt(), position.toInt(), false)
+        }
+        return builder.build()
     }
 
     private fun ensureChannel(context: Context) {
