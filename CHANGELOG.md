@@ -3,6 +3,14 @@
 All notable changes to DreamPlayer are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## 0.3.1
+
+### Fixed
+
+- **SMB HDR10 files played as SDR** — HDR10 rips whose MKV lacks the `Colour` element (metadata only in the HEVC SEI, e.g. the Spider-Verse REMUX) fell back to SDR on NAS playback: the bitstream probe fed the `smb://` URI to `MediaExtractor`, which cannot open SMB. New `SmbMediaDataSource` (`ExoPlayerView.kt`) wraps jcifs `SmbRandomAccessFile` (saved share creds, like `MkvChapters.parseSmb`) in a `MediaDataSource` so MediaExtractor demuxes the remote MKV — wired into both the HDR10 (SEI 137/144) and HDR10+ (ST 2094-40) probes.
+- **CC sheet overflowed in landscape** — the subtitle picker was a fixed `Column`; its whole body is now a single scrollable `ListView` so nothing overflows at any height.
+- **Subtitle settings changes didn't apply** — the ⋮ → Subtitle settings screen saved prefs but never pushed the new style to the live player. On return the player now reloads the style, applies it natively, and (Android) reopens at the current position so a delay change re-parses cues.
+
 ## 0.3.0
 
 ### Added
