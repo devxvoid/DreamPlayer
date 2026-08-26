@@ -1562,16 +1562,21 @@ extension AvPlayerView: AVPictureInPictureControllerDelegate {
     ) {
         inPip = false
         emit()
+        // Re-arm defensively (no-op when the controller is still bound to a
+        // live layer) so the next HOME swipe floats again.
+        ensurePipController()
     }
 
     /// User tapped the restore button on the pip window — the layer is back
-    /// inline; the controller is stale (bound to the same layer, but Apple
-    /// requires a fresh one for the next start).
+    /// inline. The controller stays valid while its AVPlayerLayer keeps the
+    /// same player, so it is NOT nilled here: nil-ing left no controller for
+    /// the next HOME swipe (auto-start silently did nothing and the app just
+    /// minimized). A new load replaces the controller via
+    /// [invalidatePipController] + [ensurePipController].
     func pictureInPictureController(
         _ pictureInPictureController: AVPictureInPictureController,
         restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void
     ) {
-        pipController = nil
         completionHandler(true)
     }
 }
