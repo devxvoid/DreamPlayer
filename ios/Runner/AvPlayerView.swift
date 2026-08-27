@@ -562,9 +562,6 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         var localURL: URL?
         var webDAVSource: (url: URL, headers: [String: String], allowSelfSigned: Bool)?
         var ftpUri: String?
-        // Google Drive URIs carry the fileId; recover accountId from resumeKey
-        // so the ByteRangeSource can refresh the Bearer token per read.
-        let resumeKey = args?["resumeKey"] as? String ?? ""
         if let path, !path.isEmpty {
             localURL = URL(fileURLWithPath: path)
             source = .url(localURL!)

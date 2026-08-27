@@ -435,7 +435,6 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
-  /// Google Drive playback URLs need a fresh Bearer token on every open
   /// Jellyfin stream URLs embed the session's `api_key`, which rotates on
   /// re-login. Rebuild the URL from the stable resume key
   /// (`jellyfin:<host>/<item>`) against the current saved server + token.
