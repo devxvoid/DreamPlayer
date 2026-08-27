@@ -3,6 +3,12 @@
 All notable changes to DreamPlayer are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## 0.3.3
+
+### Fixed
+
+- **Seekbar touch alignment & responsiveness** — the seekbar now snaps to the exact finger position on touch-down (no more needing to find the thumb dot), uses `onTapDown` + `HitTestBehavior.opaque` for instant grab instead of waiting for a 20 px drag threshold, and removed the horizontal-padding-from-total-width offset bug that made the thumb jump off your finger. Tappable height increased to 48 dp; thumb grows to 22 dp and track to 6 dp while dragging for clear visual feedback.
+
 ## 0.3.2
 
 ### Added
