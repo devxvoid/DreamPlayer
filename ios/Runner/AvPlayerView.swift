@@ -692,15 +692,6 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                         formatHint: ext.isEmpty ? nil : ext
                     )
                 }
-                    let byteSource = try await Task.detached(priority: .userInitiated) {
-                    }.value
-                    // Extension not in URL query; keep generic (demux probes).
-                    let ext = localURL?.pathExtension.lowercased() ?? ""
-                    source = .custom(
-                        BufferedSMBReader(source: byteSource),
-                        formatHint: ext.isEmpty ? nil : ext
-                    )
-                }
                 if let (webURL, webHeaders, webAllowSelfSigned) = webDAVSource {
                     // Size probe is a blocking URLSession round-trip; keep it
                     // off the main actor.
@@ -870,13 +861,6 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     /// WebDAV: new HTTP session → new BufferedSMBReader.
     /// Local file: reuses the file URL (always re-openable).
     private func buildFreshSource() async throws -> MediaSource? {
-            let byteSource = try await Task.detached(priority: .userInitiated) {
-            }.value
-            return .custom(
-                BufferedSMBReader(source: byteSource),
-                formatHint: nil
-            )
-        }
         if let ftpUri = lastFtpUri {
             let buffered = try await Task.detached(priority: .userInitiated) {
                 try await FtpClient.makeByteRangeSource(uriText: ftpUri)
