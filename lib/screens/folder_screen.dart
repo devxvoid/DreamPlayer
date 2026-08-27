@@ -5,7 +5,6 @@ import '../models/video_item.dart';
 import '../services/file_browser.dart';
 import '../services/jellyfin_client.dart';
 import '../services/library_folders.dart';
-import '../services/resume_store.dart';
 import '../services/smb_client.dart';
 import '../services/tmdb_client.dart';
 import '../services/watched_store.dart';
@@ -47,9 +46,6 @@ class _FolderScreenState extends State<FolderScreen> {
   /// Watched marks for the current list, keyed by each row's stable resume
   /// key (same keys the player auto-marks on completion).
   Set<String> _watchedKeys = {};
-
-  /// Saved resume positions per stable key, for the per-episode resume bar.
-  Map<String, Duration> _positions = {};
 
   /// Jellyfin mode: the folder crumbs (name + item id) below the root, the
   /// resolved server, and the current level's children.
@@ -337,47 +333,12 @@ class _FolderScreenState extends State<FolderScreen> {
     );
   }
 
-  /// Reloads the watched-mark set and resume positions for the current list.
+  /// Reloads the watched-mark set for the current list.
   Future<void> _refreshWatched() async {
     try {
       final watched = await WatchedStore.load();
       if (mounted) setState(() => _watchedKeys = watched);
-      await _refreshPositions();
     } catch (_) {}
-  }
-
-  Future<void> _refreshPositions() async {
-    try {
-      final keys = <String>[];
-      for (final e in _currentEntries) {
-        final k = _watchedKeyForEntry(e);
-        if (k != null && k.isNotEmpty) keys.add(k);
-      }
-      final map = <String, Duration>{};
-      for (final k in keys) {
-        final pos = await ResumeStore.positionFor(k);
-        if (pos != null) map[k] = pos;
-      }
-      if (mounted) setState(() => _positions = map);
-    } catch (_) {}
-  }
-
-  double? _resumeProgressFor(Object entry) {
-    final key = _watchedKeyForEntry(entry);
-    if (key == null || key.isEmpty) return null;
-    if (_watchedKeys.contains(key)) return 1.0;
-    final pos = _positions[key];
-    if (pos == null) return null;
-    if (_isJellyfin) {
-      final item = entry as JellyfinItem;
-      final dur = item.duration;
-      if (dur > Duration.zero) {
-        return (pos.inMilliseconds / dur.inMilliseconds).clamp(0.0, 1.0);
-      }
-      return 0.35;
-    }
-    // File entries have no duration — show partial bar when in progress.
-    return 0.35;
   }
 
   String? _watchedKeyForEntry(Object entry) {
@@ -516,14 +477,12 @@ class _FolderScreenState extends State<FolderScreen> {
     final sortedSeasons = seasonGroups.keys.toList()..sort();
 
     Widget tileFor(Object e) {
-      final progress = _resumeProgressFor(e);
       if (_isJellyfin) {
         final item = e as JellyfinItem;
         return _JellyfinFolderTile(
           item: item,
           tmdbMeta: item.isFolder ? null : _tmdbForJellyfin(item),
           watched: _watchedKeys.contains(_watchedKeyForEntry(item)),
-          resumeProgress: progress,
           onToggleWatched: () => _toggleWatched(item),
           onTap: () => _openJellyfinItem(item),
         );
@@ -534,7 +493,6 @@ class _FolderScreenState extends State<FolderScreen> {
           entry: FileEntry(name: smb.name, path: smb.path, isDirectory: smb.isDirectory, size: smb.size, resumeKey: _watchedKeyForEntry(smb)),
           tmdbMeta: smb.isDirectory ? null : _tmdbForSmb(smb),
           watched: _watchedKeys.contains(_watchedKeyForEntry(smb)),
-          resumeProgress: progress,
           onToggleWatched: () => _toggleWatched(smb),
           onTap: () => _openSmbEntry(smb),
         );
@@ -544,7 +502,6 @@ class _FolderScreenState extends State<FolderScreen> {
         entry: fileEntry,
         tmdbMeta: fileEntry.isDirectory ? null : _tmdbFor(fileEntry),
         watched: _watchedKeys.contains(_watchedKeyForEntry(fileEntry)),
-        resumeProgress: progress,
         onToggleWatched: () => _toggleWatched(fileEntry),
         onTap: () => _openEntry(fileEntry),
       );
@@ -616,6 +573,13 @@ class _FolderScreenState extends State<FolderScreen> {
     );
   }
 
+  bool _isFolderEntry(Object e) {
+    if (_isJellyfin) return (e as JellyfinItem).isFolder;
+    if (_isSmb) return (e as SmbEntry).isDirectory;
+    if (_isWebDav) return (e as Map)['isDirectory'] == true;
+    return (e as FileEntry).isDirectory;
+  }
+
   bool _isEpisode(Object e) {
     if (_isJellyfin) return (e as JellyfinItem).type == 'Episode';
     if (_isSmb) return ParsedFileName.parse((e as SmbEntry).name).isEpisode;
@@ -682,9 +646,12 @@ class _FolderScreenState extends State<FolderScreen> {
     final meta = TmdService.instance.metaFor(widget.folder.metadataKey);
     final movie = meta?.movie;
     final backdrop = movie?.backdropUrl();
-    final videoCount = _isJellyfin
-        ? _jellyfinEntries.where((i) => i.isPlayable).length
-        : _entries.where((e) => !e.isDirectory).length;
+    // Network folders (SMB/WebDAV) keep their entries in _smbEntries /
+    // _networkEntries, so read from the unified _currentEntries — never the
+    // local _entries list (which is empty for them and would read "0 videos").
+    final all = _currentEntries;
+    final videoCount = all.where((e) => !_isFolderEntry(e)).length;
+    final folderCount = all.where(_isFolderEntry).length;
 
     return SizedBox(
       width: double.infinity,
@@ -713,35 +680,16 @@ class _FolderScreenState extends State<FolderScreen> {
                 ],
               ),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        movie?.title.isNotEmpty == true
-                            ? movie!.title
-                            : widget.folder.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  _headerSubtitle(movie, videoCount),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
+            // The AppBar already shows the title, so the header only carries
+            // the metadata line (year, kind, video/folder counts) — never a
+            // second copy of the title.
+            child: Text(
+              _headerSubtitle(movie, videoCount, folderCount),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
         ],
@@ -749,8 +697,13 @@ class _FolderScreenState extends State<FolderScreen> {
     );
   }
 
-  static String _headerSubtitle(TmdMovie? movie, int videoCount) {
-    final countLabel = videoCount == 1 ? '1 video' : '$videoCount videos';
+  static String _headerSubtitle(TmdMovie? movie, int videoCount, int folderCount) {
+    final countParts = <String>[
+      videoCount == 1 ? '1 video' : '$videoCount videos',
+      if (folderCount > 0)
+        folderCount == 1 ? '1 folder' : '$folderCount folders',
+    ];
+    final countLabel = countParts.join(' · ');
     if (movie == null) return countLabel;
     final parts = <String>[
       if (movie.kind == TmdKind.tv) 'TV Series',
@@ -768,7 +721,6 @@ class _JellyfinFolderTile extends StatelessWidget {
     required this.tmdbMeta,
     required this.onTap,
     this.watched = false,
-    this.resumeProgress,
     this.onToggleWatched,
   });
 
@@ -776,7 +728,6 @@ class _JellyfinFolderTile extends StatelessWidget {
   final TmdMeta? tmdbMeta;
   final VoidCallback onTap;
   final bool watched;
-  final double? resumeProgress;
   final VoidCallback? onToggleWatched;
 
   @override
@@ -798,29 +749,7 @@ class _JellyfinFolderTile extends StatelessWidget {
 
     final posterUrl = posterUrlOf(tmdbMeta);
 
-    final subtitleWidget = subtitle.isEmpty
-        ? null
-        : Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(subtitle),
-              if (resumeProgress != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(1),
-                    child: LinearProgressIndicator(
-                      value: resumeProgress,
-                      minHeight: 2,
-                      backgroundColor: colorScheme.surfaceContainerHighest,
-                      valueColor:
-                          AlwaysStoppedAnimation<Color>(colorScheme.primary),
-                    ),
-                  ),
-                ),
-            ],
-          );
+    final subtitleWidget = subtitle.isEmpty ? null : Text(subtitle);
 
     return TvTile(
       leading: posterUrl != null
@@ -859,7 +788,6 @@ class _FolderTile extends StatelessWidget {
     required this.tmdbMeta,
     required this.onTap,
     this.watched = false,
-    this.resumeProgress,
     this.onToggleWatched,
   });
 
@@ -867,7 +795,6 @@ class _FolderTile extends StatelessWidget {
   final TmdMeta? tmdbMeta;
   final VoidCallback onTap;
   final bool watched;
-  final double? resumeProgress;
   final VoidCallback? onToggleWatched;
 
   static String _sizeLabel(int bytes) {
@@ -903,29 +830,7 @@ class _FolderTile extends StatelessWidget {
 
     final posterUrl = posterUrlOf(tmdbMeta);
 
-    final subtitleWidget = subtitle.isEmpty && resumeProgress == null
-        ? null
-        : Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (subtitle.isNotEmpty) Text(subtitle),
-              if (resumeProgress != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(1),
-                    child: LinearProgressIndicator(
-                      value: resumeProgress,
-                      minHeight: 2,
-                      backgroundColor: colorScheme.surfaceContainerHighest,
-                      valueColor:
-                          AlwaysStoppedAnimation<Color>(colorScheme.primary),
-                    ),
-                  ),
-                ),
-            ],
-          );
+    final subtitleWidget = subtitle.isEmpty ? null : Text(subtitle);
 
     return TvTile(
       leading: posterUrl != null
