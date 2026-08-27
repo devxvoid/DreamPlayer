@@ -3,6 +3,12 @@
 All notable changes to DreamPlayer are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## 0.3.4
+
+### Fixed
+
+- **iOS subtitle background opacity was ignored** — `UILabel` auto-sets `isOpaque = true` when a `backgroundColor` is assigned, forcing the background to render fully opaque and silently dropping the alpha byte. Explicitly setting `label.isOpaque = false` lets the ARGB alpha through, so "Semi" and custom-alpha backgrounds now blend with the video on iOS. Also reset `label.backgroundColor` to `.clear` (instead of `nil`) and reset `cornerRadius`/`clipsToBounds` when the "None" background option is chosen.
+
 ## 0.3.3
 
 ### Fixed
