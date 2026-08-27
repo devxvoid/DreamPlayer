@@ -5,8 +5,11 @@ import '../models/video_item.dart';
 import '../services/file_browser.dart';
 import '../services/jellyfin_client.dart';
 import '../services/library_folders.dart';
+import '../services/resume_store.dart';
 import '../services/tmdb_client.dart';
 import '../services/watched_store.dart';
+import '../utils/season_group.dart' as sg;
+import '../widgets/season_progress_ring.dart';
 import '../widgets/tv_overscan.dart';
 import '../widgets/tv_tile.dart';
 import 'tmd_details_screen.dart';
@@ -42,6 +45,9 @@ class _FolderScreenState extends State<FolderScreen> {
   /// Watched marks for the current list, keyed by each row's stable resume
   /// key (same keys the player auto-marks on completion).
   Set<String> _watchedKeys = {};
+
+  /// Saved resume positions per stable key, for the per-episode resume bar.
+  Map<String, Duration> _positions = {};
 
   /// Jellyfin mode: the folder crumbs (name + item id) below the root, the
   /// resolved server, and the current level's children.
@@ -226,12 +232,47 @@ class _FolderScreenState extends State<FolderScreen> {
     );
   }
 
-  /// Reloads the watched-mark set for the current list.
+  /// Reloads the watched-mark set and resume positions for the current list.
   Future<void> _refreshWatched() async {
     try {
       final watched = await WatchedStore.load();
       if (mounted) setState(() => _watchedKeys = watched);
+      await _refreshPositions();
     } catch (_) {}
+  }
+
+  Future<void> _refreshPositions() async {
+    try {
+      final keys = <String>[];
+      for (final e in _currentEntries) {
+        final k = _watchedKeyForEntry(e);
+        if (k != null && k.isNotEmpty) keys.add(k);
+      }
+      final map = <String, Duration>{};
+      for (final k in keys) {
+        final pos = await ResumeStore.positionFor(k);
+        if (pos != null) map[k] = pos;
+      }
+      if (mounted) setState(() => _positions = map);
+    } catch (_) {}
+  }
+
+  double? _resumeProgressFor(Object entry) {
+    final key = _watchedKeyForEntry(entry);
+    if (key == null || key.isEmpty) return null;
+    if (_watchedKeys.contains(key)) return 1.0;
+    final pos = _positions[key];
+    if (pos == null) return null;
+    if (_isJellyfin) {
+      final item = entry as JellyfinItem;
+      final dur = item.duration;
+      if (dur > Duration.zero) {
+        return (pos.inMilliseconds / dur.inMilliseconds).clamp(0.0, 1.0);
+      }
+      return 0.35;
+    }
+    // File entries have no duration — show partial bar when in progress.
+    return 0.35;
   }
 
   String? _watchedKeyForEntry(Object entry) {
@@ -338,30 +379,25 @@ class _FolderScreenState extends State<FolderScreen> {
       (isFolder ? folders : videos).add(e);
     }
     // Build season groups for episode videos; movies stay ungrouped.
-    final seasonGroups = <int, List<Object>>{};
-    final movies = <Object>[];
-    for (final v in videos) {
-      if (_isEpisode(v)) {
-        final s = _seasonOf(v);
-        (seasonGroups[s] ??= []).add(v);
-      } else {
-        movies.add(v);
-      }
-    }
+    final episodes = videos.where(_isEpisode).toList();
+    final movies = videos.where((v) => !_isEpisode(v)).toList();
+    final seasonGroups = sg.groupBySeason<Object>(
+      episodes,
+      _seasonOf,
+      _episodeOf,
+    );
     final hasSeasons = seasonGroups.isNotEmpty;
-    // Sort episodes inside each season by episode number.
-    for (final list in seasonGroups.values) {
-      list.sort((a, b) => _episodeOf(a).compareTo(_episodeOf(b)));
-    }
     final sortedSeasons = seasonGroups.keys.toList()..sort();
 
     Widget tileFor(Object e) {
+      final progress = _resumeProgressFor(e);
       if (_isJellyfin) {
         final item = e as JellyfinItem;
         return _JellyfinFolderTile(
           item: item,
           tmdbMeta: item.isFolder ? null : _tmdbForJellyfin(item),
           watched: _watchedKeys.contains(_watchedKeyForEntry(item)),
+          resumeProgress: progress,
           onToggleWatched: () => _toggleWatched(item),
           onTap: () => _openJellyfinItem(item),
         );
@@ -371,6 +407,7 @@ class _FolderScreenState extends State<FolderScreen> {
         entry: fileEntry,
         tmdbMeta: fileEntry.isDirectory ? null : _tmdbFor(fileEntry),
         watched: _watchedKeys.contains(_watchedKeyForEntry(fileEntry)),
+        resumeProgress: progress,
         onToggleWatched: () => _toggleWatched(fileEntry),
         onTap: () => _openEntry(fileEntry),
       );
@@ -387,13 +424,49 @@ class _FolderScreenState extends State<FolderScreen> {
                 for (final s in sortedSeasons) ...[
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                    child: Text(
-                      'Season $s',
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.primary,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 13,
-                      ),
+                    child: Row(
+                      children: [
+                        Text(
+                          sg.seasonHeader(s),
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.primary,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 13,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Builder(builder: (context) {
+                          final seasonList = seasonGroups[s]!;
+                          final watched = sg.watchedCount(
+                            seasonList,
+                            _watchedKeys,
+                            _watchedKeyForEntry,
+                          );
+                          final total = seasonList.length;
+                          return Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SeasonProgressRing(
+                                watched: watched,
+                                total: total,
+                                size: 28,
+                                strokeWidth: 2.5,
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                sg.watchedBadge(watched, total),
+                                style: TextStyle(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurfaceVariant,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          );
+                        }),
+                      ],
                     ),
                   ),
                   for (final v in seasonGroups[s]!) tileFor(v),
@@ -533,6 +606,7 @@ class _JellyfinFolderTile extends StatelessWidget {
     required this.tmdbMeta,
     required this.onTap,
     this.watched = false,
+    this.resumeProgress,
     this.onToggleWatched,
   });
 
@@ -540,6 +614,7 @@ class _JellyfinFolderTile extends StatelessWidget {
   final TmdMeta? tmdbMeta;
   final VoidCallback onTap;
   final bool watched;
+  final double? resumeProgress;
   final VoidCallback? onToggleWatched;
 
   @override
@@ -561,6 +636,30 @@ class _JellyfinFolderTile extends StatelessWidget {
 
     final posterUrl = posterUrlOf(tmdbMeta);
 
+    final subtitleWidget = subtitle.isEmpty
+        ? null
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(subtitle),
+              if (resumeProgress != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(1),
+                    child: LinearProgressIndicator(
+                      value: resumeProgress,
+                      minHeight: 2,
+                      backgroundColor: colorScheme.surfaceContainerHighest,
+                      valueColor:
+                          AlwaysStoppedAnimation<Color>(colorScheme.primary),
+                    ),
+                  ),
+                ),
+            ],
+          );
+
     return TvTile(
       leading: posterUrl != null
           ? _Poster(posterUrl: posterUrl)
@@ -571,7 +670,7 @@ class _JellyfinFolderTile extends StatelessWidget {
               color: colorScheme.secondary,
             ),
       title: Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: subtitle.isEmpty ? null : Text(subtitle),
+      subtitle: subtitleWidget,
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -598,6 +697,7 @@ class _FolderTile extends StatelessWidget {
     required this.tmdbMeta,
     required this.onTap,
     this.watched = false,
+    this.resumeProgress,
     this.onToggleWatched,
   });
 
@@ -605,6 +705,7 @@ class _FolderTile extends StatelessWidget {
   final TmdMeta? tmdbMeta;
   final VoidCallback onTap;
   final bool watched;
+  final double? resumeProgress;
   final VoidCallback? onToggleWatched;
 
   static String _sizeLabel(int bytes) {
@@ -640,6 +741,30 @@ class _FolderTile extends StatelessWidget {
 
     final posterUrl = posterUrlOf(tmdbMeta);
 
+    final subtitleWidget = subtitle.isEmpty && resumeProgress == null
+        ? null
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (subtitle.isNotEmpty) Text(subtitle),
+              if (resumeProgress != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(1),
+                    child: LinearProgressIndicator(
+                      value: resumeProgress,
+                      minHeight: 2,
+                      backgroundColor: colorScheme.surfaceContainerHighest,
+                      valueColor:
+                          AlwaysStoppedAnimation<Color>(colorScheme.primary),
+                    ),
+                  ),
+                ),
+            ],
+          );
+
     return TvTile(
       leading: posterUrl != null
           ? _Poster(posterUrl: posterUrl)
@@ -648,7 +773,7 @@ class _FolderTile extends StatelessWidget {
               color: colorScheme.secondary,
             ),
       title: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: subtitle.isEmpty ? null : Text(subtitle),
+      subtitle: subtitleWidget,
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [

@@ -3,6 +3,14 @@
 All notable changes to DreamPlayer are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## 0.4.0
+
+### Added
+
+- **Series-grouped library with watched progress** — folder and details screens now group episodes by season (`lib/utils/season_group.dart` pure helper; `lib/widgets/season_progress_ring.dart` 28–32dp ring). Season headers show `Season N` + `watched/total` badge + circular progress (`WatchedStore` + `ResumeStore.positionFor`), collapsible `ExpansionTile` per season in `tmd_details_screen.dart:886`, linear 2px resume bar per episode tile, TV `TvTile` focus kept. Folder cards show bottom-right ring + `S1 2/5` pill for TV shows (`folder_card.dart`).
+- **SIMKL free sync (Trakt alternative)** — Trakt free now caps at 100 items; SIMKL free is unlimited (`api.simkl.com`, `SIMKL_CLIENT_ID` from `.env` via `lib/config/simkl_keys.dart:1`). New `lib/services/simkl_client.dart` (`dreamplayer.simkl` prefs, PIN flow `GET /oauth/pin` + 5s poll, `POST /sync/history` with TMDB ids, `GET /sync/all-items`/`/sync/activities` delta) + `lib/services/simkl_sync.dart` throttled pull/apply. Player `player_screen.dart:662` pushes watched on `ended` alongside Trakt; Settings shows Connect/Sync now/Disconnect gated on `simklClientId.isNotEmpty`.
+- **Google Drive browse + stream** — `GDRIVE_CLIENT_ID/SECRET` from `.env` via `lib/config/cloud_keys.dart:8` (15 GB free). New `lib/services/gdrive_client.dart` (`dreamplayer/gdrive` channel) + `GDriveClient.kt` (`EncryptedSharedPreferences dreamplayer.gdriveSecrets` + `dreamplayer.gdriveAccounts`, Custom Tabs OAuth `drive.readonly` offline → `oauth2.googleapis.com/token` → Drive v3 `files?q='id'+in+parents` + `VIDEO_EXTENSIONS` filter) + `GDriveClient.swift` (Keychain `com.dreamplayer.app.gdrive`, `ASWebAuthenticationSession`, `GDriveByteRangeSource:ByteRangeSource` + `BufferedSMBReader`) + `lib/screens/gdrive_screen.dart` (accounts + folder browse, TMDB prefetch `gdrive:<acc>/<id>`, `https://www.googleapis.com/drive/v3/files/{id}?alt=media` + `Authorization: Bearer` → `resumeKey gdrive:<acc>/<id>`). Home `+` menu `home_screen.dart:636` adds cloud tile + `_restoreGDriveSource` for continue-watching. `PlaybackSource.gdrive` added (`video_item.dart:67`).
+
 ## 0.3.1
 
 ### Fixed

@@ -242,6 +242,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     private var lastSource: MediaSource?
     private var lastLoadOptions = LoadOptions()
     private var lastWebDAVInfo: (url: URL, headers: [String: String], allowSelfSigned: Bool)?
+    private var lastGDriveInfo: (fileId: String, accountId: String)?
     /// Pending/active FTP/SFTP uri (dreamplayer `ftp://<serverId>/<path>`),
     /// rebuilt on replay/scrub-after-end like the WebDAV source.
     private var lastFtpUri: String?
@@ -558,14 +559,42 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         let allowSelfSigned = (args?["allowSelfSigned"] as? Bool) ?? false
 
         // Source pending construction: some sources need background I/O
-        // (WebDAV size probe) before the engine can load.
+        // (WebDAV / GDrive size probe) before the engine can load.
         var source: MediaSource?
         var localURL: URL?
         var webDAVSource: (url: URL, headers: [String: String], allowSelfSigned: Bool)?
+        var gdriveSource: (fileId: String, accountId: String)?
         var ftpUri: String?
+        // Google Drive URIs carry the fileId; recover accountId from resumeKey
+        // so the ByteRangeSource can refresh the Bearer token per read.
+        let resumeKey = args?["resumeKey"] as? String ?? ""
         if let path, !path.isEmpty {
             localURL = URL(fileURLWithPath: path)
             source = .url(localURL!)
+        } else if let uri, let u = URL(string: uri),
+                  u.host?.contains("googleapis.com") == true,
+                  u.path.contains("/drive/v3/files/") {
+            // Google Drive: `https://www.googleapis.com/drive/v3/files/{id}?alt=media`
+            // File id is the last path component after /files/.
+            let fileId = u.path.components(separatedBy: "/").last ?? ""
+            var accountId = ""
+            if resumeKey.hasPrefix("gdrive:") {
+                let rest = String(resumeKey.dropFirst("gdrive:".count))
+                if let slash = rest.firstIndex(of: "/") {
+                    accountId = String(rest[..<slash])
+                }
+            }
+            if !fileId.isEmpty, !accountId.isEmpty {
+                gdriveSource = (fileId, accountId)
+                localURL = u
+            } else if !httpHeaders.isEmpty {
+                // Fallback: treat as generic HTTP with static headers (short-lived).
+                localURL = u
+                webDAVSource = (u, httpHeaders, allowSelfSigned)
+            } else {
+                localURL = u
+                source = .url(u)
+            }
         } else if let uri, uri.lowercased().hasPrefix("ftp://") || uri.lowercased().hasPrefix("sftp://") {
             // FTP/SFTP playback: the engine has no FTP stack, so serve it via
             // FtpClient's ByteRangeSource (plain-FTP REST reads or Citadel
@@ -611,6 +640,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         isDolbyVision = false
         dvProfile = nil
         lastWebDAVInfo = nil
+        lastGDriveInfo = nil
         lastFtpUri = nil
         chapters = []
         isHdr10PlusContent = false
@@ -690,6 +720,17 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                         formatHint: ext.isEmpty ? nil : ext
                     )
                 }
+                if let (gFileId, gAccountId) = gdriveSource {
+                    let byteSource = try await Task.detached(priority: .userInitiated) {
+                        try GDriveClient.shared.makeByteRangeSource(fileId: gFileId, accountId: gAccountId)
+                    }.value
+                    // Extension not in URL query; keep generic (demux probes).
+                    let ext = localURL?.pathExtension.lowercased() ?? ""
+                    source = .custom(
+                        BufferedSMBReader(source: byteSource),
+                        formatHint: ext.isEmpty ? nil : ext
+                    )
+                }
                 if let (webURL, webHeaders, webAllowSelfSigned) = webDAVSource {
                     // Size probe is a blocking URLSession round-trip; keep it
                     // off the main actor.
@@ -712,6 +753,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                     return
                 }
                 self.lastSource = finalSource
+                self.lastGDriveInfo = gdriveSource
                 self.lastWebDAVInfo = webDAVSource
                 self.lastFtpUri = ftpUri
                 let probe = try await engine.load(source: finalSource, startPosition: startPosition, options: options)
@@ -859,6 +901,15 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     /// WebDAV: new HTTP session → new BufferedSMBReader.
     /// Local file: reuses the file URL (always re-openable).
     private func buildFreshSource() async throws -> MediaSource? {
+        if let g = lastGDriveInfo {
+            let byteSource = try await Task.detached(priority: .userInitiated) {
+                try GDriveClient.shared.makeByteRangeSource(fileId: g.fileId, accountId: g.accountId)
+            }.value
+            return .custom(
+                BufferedSMBReader(source: byteSource),
+                formatHint: nil
+            )
+        }
         if let ftpUri = lastFtpUri {
             let buffered = try await Task.detached(priority: .userInitiated) {
                 try await FtpClient.makeByteRangeSource(uriText: ftpUri)

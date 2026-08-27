@@ -70,6 +70,7 @@ import Network
     FileBrowser.register(with: messenger)
     IntentBridge.shared.configure(with: messenger)
     WebDAVClient.register(with: messenger)
+    GDriveClient.register(with: messenger)
     FtpClient.register(with: messenger)
     JellyfinDiscovery.register(with: messenger)
     CacheCleaner.register(with: messenger)

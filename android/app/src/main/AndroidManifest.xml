@@ -88,6 +88,14 @@
                 <data android:mimeType="audio/octet-stream"/>
                 <data android:mimeType="application/octet-stream"/>
             </intent-filter>
+            <!-- Google Drive OAuth redirect (Custom Tabs -> com.dreamplayer.app:/oauth2redirect) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="com.dreamplayer.app" android:host="oauth2redirect"/>
+                <data android:scheme="com.dreamplayer.app"/>
+            </intent-filter>
         </activity>
         <!-- Background playback keepalive: hosts the MediaStyle notification;
              the player itself lives in the platform view inside MainActivity. -->

@@ -14,6 +14,8 @@ import '../services/subtitle_encodings.dart';
 import '../services/subtitle_languages.dart';
 import '../services/subtitle_prefs.dart';
 import '../services/support_links.dart';
+import '../config/simkl_keys.dart';
+import '../services/simkl_client.dart';
 import '../services/trakt_client.dart';
 import '../services/trakt_sync.dart';
 import '../services/tmdb_client.dart';
@@ -42,6 +44,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _nightMode = false;
   bool _traktConnected = false;
   DateTime? _traktLastSync;
+  bool _simklConnected = false;
+  DateTime? _simklLastSync;
   String? _osUsername;
   int? _osRemaining;
   bool _osLoggedIn = false;
@@ -61,6 +65,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _loadDecoderMode();
     _loadAudioFilters();
     _loadTrakt();
+    _loadSimkl();
     _loadOpensubtitles();
     _loadSubtitlePrefs();
   }
@@ -75,6 +80,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
         setState(() {
           _traktConnected = connected;
           _traktLastSync = lastSync;
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _loadSimkl() async {
+    final client = SimklClient();
+    if (!client.isConfigured) return;
+    try {
+      final connected = await client.isAuthenticated();
+      final lastSync = await client.lastSyncAt();
+      if (mounted) {
+        setState(() {
+          _simklConnected = connected;
+          _simklLastSync = lastSync;
         });
       }
     } catch (_) {}
@@ -665,6 +685,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onTap: _connectTrakt,
                 ),
             ],
+            if (simklClientId.isNotEmpty) ...[
+              const Divider(),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Text(
+                  'SIMKL',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    color: theme.colorScheme.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              if (_simklConnected) ...[
+                TvTile(
+                  leading: const Icon(Icons.sync),
+                  title: const Text('Sync now'),
+                  subtitle: Text(
+                    _simklLastSync == null
+                        ? 'Push watched + resume to SIMKL'
+                        : 'Last synced ${_formatWhen(_simklLastSync!)}',
+                  ),
+                  onTap: _syncSimkl,
+                ),
+                TvTile(
+                  leading: const Icon(Icons.link_off),
+                  title: const Text('Disconnect SIMKL'),
+                  subtitle: const Text('Sign out and stop syncing'),
+                  onTap: () async {
+                    await SimklClient().signOut();
+                    if (mounted) {
+                      setState(() {
+                        _simklConnected = false;
+                        _simklLastSync = null;
+                      });
+                    }
+                  },
+                ),
+              ] else
+                TvTile(
+                  leading: const Icon(Icons.link),
+                  title: const Text('Connect SIMKL'),
+                  subtitle: const Text('Sync watched history with simkl.com (free unlimited)'),
+                  onTap: _connectSimkl,
+                ),
+            ],
             const Divider(),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
@@ -810,6 +875,60 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     return items;
   }
+
+  Future<void> _connectSimkl() async {
+    final client = SimklClient();
+    try {
+      final code = await client.requestPinCode();
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => _SimklConnectDialog(client: client, code: code),
+      );
+      await _loadSimkl();
+    } on SimklException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      }
+    }
+  }
+
+  Future<void> _syncSimkl() async {
+    final client = SimklClient();
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final items = await _collectSimklItems();
+      await client.markWatched(items);
+      if (mounted) {
+        setState(() => _simklLastSync = DateTime.now());
+        messenger.showSnackBar(SnackBar(content: Text('Synced ${items.length} item(s) to SIMKL')));
+      }
+    } on SimklException catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    }
+  }
+
+  Future<List<SimklWatchItem>> _collectSimklItems() async {
+    final keys = await WatchedStore.load();
+    final items = <SimklWatchItem>[];
+    for (final key in keys) {
+      final meta = TmdService.instance.metaFor(key);
+      if (meta == null) continue;
+      final movie = meta.movie;
+      if (movie.id == 0) continue;
+      final parsed = ParsedFileName.parse(key);
+      items.add(
+        SimklWatchItem(
+          tmdbId: movie.id,
+          isTv: movie.kind == TmdKind.tv,
+          season: parsed.isEpisode ? parsed.season : null,
+          episode: parsed.isEpisode ? parsed.episode : null,
+        ),
+      );
+    }
+    return items;
+  }
 }
 
 /// Device-flow dialog: shows the user code + activation URL and polls in the
@@ -907,6 +1026,81 @@ class _TraktConnectDialogState extends State<_TraktConnectDialog> {
           child: const Text('Cancel'),
         ),
       ],
+    );
+  }
+}
+
+class _SimklConnectDialog extends StatefulWidget {
+  const _SimklConnectDialog({required this.client, required this.code});
+  final SimklClient client;
+  final SimklPinCode code;
+  @override
+  State<_SimklConnectDialog> createState() => _SimklConnectDialogState();
+}
+
+class _SimklConnectDialogState extends State<_SimklConnectDialog> {
+  String _status = 'Waiting for authorization…';
+  @override
+  void initState() {
+    super.initState();
+    _poll();
+  }
+
+  Future<void> _poll() async {
+    try {
+      final ok = await widget.client.pollForToken(widget.code);
+      if (!mounted) return;
+      setState(() => _status = ok ? 'Connected!' : 'Timed out — try again.');
+      if (ok) {
+        await Future<void>.delayed(const Duration(milliseconds: 800));
+        if (mounted) Navigator.of(context).pop();
+      }
+    } on SimklException catch (e) {
+      if (!mounted) return;
+      setState(() => _status = e.message);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AlertDialog(
+      title: const Text('Connect SIMKL'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Go to the address below and enter this code:'),
+            const SizedBox(height: 12),
+            Center(
+              child: Text(
+                widget.code.userCode,
+                style: theme.textTheme.headlineMedium?.copyWith(
+                  letterSpacing: 4,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Center(
+              child: Text(
+                widget.code.verificationUrl,
+                style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.primary),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                const SizedBox(width: 12),
+                Expanded(child: Text(_status)),
+              ],
+            ),
+          ],
+        ),
+      ),
+      actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel'))],
     );
   }
 }

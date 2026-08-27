@@ -69,6 +69,9 @@ class MainActivity : FlutterActivity() {
         WebDAVClient(this).configure(
             MethodChannel(flutterEngine.dartExecutor.binaryMessenger, WebDAVClient.CHANNEL),
         )
+        GDriveClient(this).configure(
+            MethodChannel(flutterEngine.dartExecutor.binaryMessenger, GDriveClient.CHANNEL),
+        )
         CacheCleaner(this).configure(
             MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dreamplayer/cache"),
         )
@@ -111,6 +114,9 @@ class MainActivity : FlutterActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        // Google Drive OAuth redirect (Custom Tabs) — consume before the
+        // generic VIEW handler so the auth code never reaches the player.
+        if (GDriveClient.handleOAuthRedirect(intent)) return
         // Launcher taps after unlock deliver a MAIN intent (singleTop);
         // intentPayload is null for non-VIDEO intents, so don't tell Dart to
         // open anything — the home screen stays put.

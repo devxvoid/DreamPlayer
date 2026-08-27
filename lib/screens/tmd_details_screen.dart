@@ -7,6 +7,10 @@ import '../services/jellyfin_client.dart';
 import '../services/library_folders.dart';
 import '../services/resume_store.dart';
 import '../services/tmdb_client.dart';
+import '../services/watched_store.dart';
+import '../utils/season_group.dart' as sg;
+import '../widgets/season_progress_ring.dart';
+import '../widgets/tv_tile.dart';
 import 'folder_screen.dart';
 import 'player_screen.dart';
 
@@ -77,12 +81,21 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
   /// refreshed here on open) — shown when no TMDB match resolves.
   JellyfinItemInfo? _jellyfinInfo;
 
+  /// Watched marks and resume positions for per-season progress rings and the
+  /// per-episode 2px resume bar.
+  Set<String> _watchedKeys = {};
+  Map<String, Duration> _positions = {};
+
+  /// Which seasons are expanded (all true initially).
+  final Set<int> _expandedSeasons = {};
+
   @override
   void initState() {
     super.initState();
     _service.addListener(_onServiceChanged);
     _jellyfinInfo = widget.jellyfinInfo;
     _load();
+    _refreshWatched();
   }
 
   @override
@@ -98,6 +111,65 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
       _meta = meta;
       _details = meta?.details;
     });
+  }
+
+  Future<void> _refreshWatched() async {
+    try {
+      final watched = await WatchedStore.load();
+      if (mounted) setState(() => _watchedKeys = watched);
+      await _refreshPositions();
+    } catch (_) {}
+  }
+
+  Future<void> _refreshPositions() async {
+    try {
+      final keys = <String>[];
+      for (final e in _entries) {
+        final k = _watchedKeyForFile(e);
+        if (k != null && k.isNotEmpty) keys.add(k);
+      }
+      for (final i in _jellyfinEntries) {
+        final k = _watchedKeyForJellyfin(i);
+        if (k != null && k.isNotEmpty) keys.add(k);
+      }
+      final map = <String, Duration>{};
+      for (final k in keys) {
+        final pos = await ResumeStore.positionFor(k);
+        if (pos != null) map[k] = pos;
+      }
+      if (mounted) setState(() => _positions = map);
+    } catch (_) {}
+  }
+
+  String? _watchedKeyForFile(FileEntry e) =>
+      e.isDirectory ? null : e.resumeKey;
+
+  String? _watchedKeyForJellyfin(JellyfinItem i) {
+    final s = _jellyfinServer;
+    if (s == null || i.isFolder) return null;
+    return _jellyfin.videoItem(s, i).resumeKey;
+  }
+
+  double? _resumeProgressForFile(FileEntry entry) {
+    final k = _watchedKeyForFile(entry);
+    if (k == null) return null;
+    if (_watchedKeys.contains(k)) return 1.0;
+    final pos = _positions[k];
+    if (pos == null) return null;
+    return 0.35;
+  }
+
+  double? _resumeProgressForJellyfin(JellyfinItem item) {
+    final k = _watchedKeyForJellyfin(item);
+    if (k == null) return null;
+    if (_watchedKeys.contains(k)) return 1.0;
+    final pos = _positions[k];
+    if (pos == null) return null;
+    final dur = item.duration;
+    if (dur > Duration.zero) {
+      return (pos.inMilliseconds / dur.inMilliseconds).clamp(0.0, 1.0);
+    }
+    return 0.35;
   }
 
   Future<void> _load() async {
@@ -164,6 +236,7 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
         _folderError = null;
       });
       _prefetchFolderMeta(entries);
+      _refreshWatched();
     } on PlatformException catch (e) {
       if (!mounted) return;
       setState(() {
@@ -200,6 +273,7 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
         _folderError = null;
       });
       _prefetchJellyfinMeta(server);
+      _refreshWatched();
     } on Exception catch (e) {
       if (!mounted) return;
       setState(() {
@@ -882,10 +956,67 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
   }
 
   /// The folder's file list as slivers (episode files labelled with their TMDB
-  /// episode name when the season data is loaded).
+  /// episode name when the season data is loaded). Episodes are grouped by
+  /// season with a collapsible header per season showing a progress ring.
   List<Widget> _entriesSlivers(ThemeData theme) {
     if (widget.folder!.isJellyfin) return _jellyfinEntriesSlivers(theme);
     final colorScheme = theme.colorScheme;
+    if (_entries.isEmpty) {
+      return [
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+          sliver: SliverToBoxAdapter(
+            child: Row(
+              children: [
+                Text(
+                  'Episodes',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              _folderError ?? 'No videos or folders here',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: colorScheme.error,
+              ),
+            ),
+          ),
+        ),
+        const SliverToBoxAdapter(child: SizedBox(height: 24)),
+      ];
+    }
+    final folders = _entries.where((e) => e.isDirectory).toList();
+    final videos = _entries.where((e) => !e.isDirectory).toList();
+    final episodes = videos
+        .where((e) => ParsedFileName.parse(e.name).isEpisode)
+        .toList();
+    final movies = videos
+        .where((e) => !ParsedFileName.parse(e.name).isEpisode)
+        .toList();
+    final seasonGroups = sg.groupBySeason<FileEntry>(
+      episodes,
+      (e) => ParsedFileName.parse(e.name).season,
+      (e) => ParsedFileName.parse(e.name).episode,
+    );
+    final sortedSeasons = seasonGroups.keys.toList()..sort();
+
+    Widget entryTile(FileEntry e) => _FolderEntryTile(
+          entry: e,
+          episode: _episodeFor(e),
+          tmdbMeta: _service.metaFor(
+            TmdStore.identityKeyFor(_toVideoItem(e)),
+          ),
+          resumeProgress: _resumeProgressForFile(e),
+          onTap: () => _openFolderEntry(e),
+        );
+
     return [
       SliverPadding(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
@@ -899,46 +1030,56 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
                 ),
               ),
               const Spacer(),
-              if (_entries.isNotEmpty)
-                Text(
-                  _fileCountLabel(),
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: colorScheme.onSurfaceVariant,
-                  ),
+              Text(
+                _fileCountLabel(),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
                 ),
+              ),
             ],
           ),
         ),
       ),
-      if (_entries.isEmpty)
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(
-              _folderError ?? 'No videos or folders here',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: colorScheme.error,
-              ),
-            ),
-          ),
-        )
-      else
+      if (folders.isNotEmpty)
         SliverList(
           delegate: SliverChildBuilderDelegate(
             (context, index) {
-              final entry = _entries[index];
+              final entry = folders[index];
               return _FolderEntryTile(
                 entry: entry,
-                episode: _episodeFor(entry),
-                tmdbMeta: entry.isDirectory
-                    ? null
-                    : _service.metaFor(
-                        TmdStore.identityKeyFor(_toVideoItem(entry)),
-                      ),
+                episode: null,
+                tmdbMeta: null,
                 onTap: () => _openFolderEntry(entry),
               );
             },
-            childCount: _entries.length,
+            childCount: folders.length,
+          ),
+        ),
+      for (final s in sortedSeasons)
+        SliverToBoxAdapter(
+          child: _SeasonExpansion<FileEntry>(
+            season: s,
+            entries: seasonGroups[s]!,
+            watchedKeys: _watchedKeys,
+            keyOf: _watchedKeyForFile,
+            expanded: _expandedSeasons.isEmpty || _expandedSeasons.contains(s),
+            onExpansionChanged: (expanded) {
+              setState(() {
+                if (expanded) {
+                  _expandedSeasons.add(s);
+                } else {
+                  _expandedSeasons.remove(s);
+                }
+              });
+            },
+            tileBuilder: entryTile,
+          ),
+        ),
+      if (movies.isNotEmpty)
+        SliverList(
+          delegate: SliverChildBuilderDelegate(
+            (context, index) => entryTile(movies[index]),
+            childCount: movies.length,
           ),
         ),
       const SliverToBoxAdapter(child: SizedBox(height: 24)),
@@ -949,6 +1090,67 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
   /// Jellyfin season number + TMDB episode name when matched).
   List<Widget> _jellyfinEntriesSlivers(ThemeData theme) {
     final colorScheme = theme.colorScheme;
+    if (_jellyfinEntries.isEmpty) {
+      return [
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+          sliver: SliverToBoxAdapter(
+            child: Row(
+              children: [
+                Text(
+                  'Episodes',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              _folderError ?? 'No videos or folders here',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: colorScheme.error,
+              ),
+            ),
+          ),
+        ),
+        const SliverToBoxAdapter(child: SizedBox(height: 24)),
+      ];
+    }
+    final folders = _jellyfinEntries.where((i) => i.isFolder).toList();
+    final playables = _jellyfinEntries.where((i) => i.isPlayable).toList();
+    final episodes = playables
+        .where((i) => i.parentIndexNumber != null && i.indexNumber != null)
+        .toList();
+    final movies = playables
+        .where((i) => i.parentIndexNumber == null || i.indexNumber == null)
+        .toList();
+    final seasonGroups = sg.groupBySeason<JellyfinItem>(
+      episodes,
+      (e) => e.parentIndexNumber ?? 0,
+      (e) => e.indexNumber ?? 0,
+    );
+    final sortedSeasons = seasonGroups.keys.toList()..sort();
+
+    Widget itemTile(JellyfinItem item) {
+      final server = _jellyfinServer;
+      return _JellyfinEntryTile(
+        item: item,
+        episode: _episodeForItem(item),
+        tmdbMeta: item.isFolder || server == null
+            ? null
+            : _service.metaFor(
+                TmdStore.identityKeyFor(_jellyfin.videoItem(server, item)),
+              ),
+        resumeProgress: _resumeProgressForJellyfin(item),
+        onTap: () => _openJellyfinItem(item),
+      );
+    }
+
     return [
       SliverPadding(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
@@ -962,47 +1164,56 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
                 ),
               ),
               const Spacer(),
-              if (_jellyfinEntries.isNotEmpty)
-                Text(
-                  _jellyfinFileCountLabel(),
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: colorScheme.onSurfaceVariant,
-                  ),
+              Text(
+                _jellyfinFileCountLabel(),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
                 ),
+              ),
             ],
           ),
         ),
       ),
-      if (_jellyfinEntries.isEmpty)
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(
-              _folderError ?? 'No videos or folders here',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: colorScheme.error,
-              ),
-            ),
-          ),
-        )
-      else
+      if (folders.isNotEmpty)
         SliverList(
           delegate: SliverChildBuilderDelegate(
             (context, index) {
-              final item = _jellyfinEntries[index];
-              final server = _jellyfinServer;
+              final item = folders[index];
               return _JellyfinEntryTile(
                 item: item,
-                episode: _episodeForItem(item),
-                tmdbMeta: item.isFolder || server == null
-                    ? null
-                    : _service.metaFor(
-                        TmdStore.identityKeyFor(_jellyfin.videoItem(server, item)),
-                      ),
+                episode: null,
+                tmdbMeta: null,
                 onTap: () => _openJellyfinItem(item),
               );
             },
-            childCount: _jellyfinEntries.length,
+            childCount: folders.length,
+          ),
+        ),
+      for (final s in sortedSeasons)
+        SliverToBoxAdapter(
+          child: _SeasonExpansion<JellyfinItem>(
+            season: s,
+            entries: seasonGroups[s]!,
+            watchedKeys: _watchedKeys,
+            keyOf: _watchedKeyForJellyfin,
+            expanded: _expandedSeasons.isEmpty || _expandedSeasons.contains(s),
+            onExpansionChanged: (expanded) {
+              setState(() {
+                if (expanded) {
+                  _expandedSeasons.add(s);
+                } else {
+                  _expandedSeasons.remove(s);
+                }
+              });
+            },
+            tileBuilder: itemTile,
+          ),
+        ),
+      if (movies.isNotEmpty)
+        SliverList(
+          delegate: SliverChildBuilderDelegate(
+            (context, index) => itemTile(movies[index]),
+            childCount: movies.length,
           ),
         ),
       const SliverToBoxAdapter(child: SizedBox(height: 24)),
@@ -1486,6 +1697,67 @@ class _HeaderArtwork extends StatelessWidget {
   }
 }
 
+/// Collapsible season section with a progress ring header.
+class _SeasonExpansion<T> extends StatelessWidget {
+  const _SeasonExpansion({
+    required this.season,
+    required this.entries,
+    required this.watchedKeys,
+    required this.keyOf,
+    required this.expanded,
+    required this.onExpansionChanged,
+    required this.tileBuilder,
+  });
+
+  final int season;
+  final List<T> entries;
+  final Set<String> watchedKeys;
+  final String? Function(T) keyOf;
+  final bool expanded;
+  final ValueChanged<bool> onExpansionChanged;
+  final Widget Function(T) tileBuilder;
+
+  @override
+  Widget build(BuildContext context) {
+    final watched = sg.watchedCount(entries, watchedKeys, keyOf);
+    final total = entries.length;
+    final colorScheme = Theme.of(context).colorScheme;
+    return Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        initiallyExpanded: expanded,
+        onExpansionChanged: onExpansionChanged,
+        tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+        childrenPadding: EdgeInsets.zero,
+        title: Row(
+          children: [
+            Text(
+              sg.seasonHeader(season),
+              style: TextStyle(
+                color: colorScheme.primary,
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+              ),
+            ),
+            const SizedBox(width: 10),
+            SeasonProgressRing(watched: watched, total: total, size: 28, strokeWidth: 2.5),
+            const SizedBox(width: 6),
+            Text(
+              sg.watchedBadge(watched, total),
+              style: TextStyle(
+                color: colorScheme.onSurfaceVariant,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+        children: [for (final e in entries) tileBuilder(e)],
+      ),
+    );
+  }
+}
+
 /// A folder file/subfolder tile for the details screen's episode list.
 class _FolderEntryTile extends StatelessWidget {
   const _FolderEntryTile({
@@ -1493,12 +1765,14 @@ class _FolderEntryTile extends StatelessWidget {
     required this.episode,
     required this.tmdbMeta,
     required this.onTap,
+    this.resumeProgress,
   });
 
   final FileEntry entry;
   final TmdEpisode? episode;
   final TmdMeta? tmdbMeta;
   final VoidCallback onTap;
+  final double? resumeProgress;
 
   static String _sizeLabel(int bytes) {
     if (bytes <= 0) return '';
@@ -1516,7 +1790,7 @@ class _FolderEntryTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     if (entry.isDirectory) {
-      return ListTile(
+      return TvTile(
         leading: Icon(Icons.folder, color: colorScheme.primary),
         title: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis),
         trailing: const Icon(Icons.chevron_right),
@@ -1533,7 +1807,31 @@ class _FolderEntryTile extends StatelessWidget {
 
     final posterUrl = posterUrlOf(tmdbMeta);
 
-    return ListTile(
+    final subtitleWidget = subtitle.isEmpty && resumeProgress == null
+        ? null
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (subtitle.isNotEmpty)
+                Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+              if (resumeProgress != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(1),
+                    child: LinearProgressIndicator(
+                      value: resumeProgress,
+                      minHeight: 2,
+                      backgroundColor: colorScheme.surfaceContainerHighest,
+                      valueColor: AlwaysStoppedAnimation<Color>(colorScheme.primary),
+                    ),
+                  ),
+                ),
+            ],
+          );
+
+    return TvTile(
       leading: posterUrl != null
           ? _Poster(posterUrl: posterUrl)
           : Icon(
@@ -1541,9 +1839,7 @@ class _FolderEntryTile extends StatelessWidget {
               color: colorScheme.secondary,
             ),
       title: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: subtitle.isEmpty
-          ? null
-          : Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+      subtitle: subtitleWidget,
       onTap: onTap,
     );
   }
@@ -1556,18 +1852,20 @@ class _JellyfinEntryTile extends StatelessWidget {
     required this.episode,
     required this.tmdbMeta,
     required this.onTap,
+    this.resumeProgress,
   });
 
   final JellyfinItem item;
   final TmdEpisode? episode;
   final TmdMeta? tmdbMeta;
   final VoidCallback onTap;
+  final double? resumeProgress;
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     if (item.isFolder) {
-      return ListTile(
+      return TvTile(
         leading: Icon(Icons.folder, color: colorScheme.primary),
         title: Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis),
         trailing: const Icon(Icons.chevron_right),
@@ -1583,7 +1881,31 @@ class _JellyfinEntryTile extends StatelessWidget {
 
     final posterUrl = posterUrlOf(tmdbMeta);
 
-    return ListTile(
+    final subtitleWidget = subtitle.isEmpty && resumeProgress == null
+        ? null
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (subtitle.isNotEmpty)
+                Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+              if (resumeProgress != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(1),
+                    child: LinearProgressIndicator(
+                      value: resumeProgress,
+                      minHeight: 2,
+                      backgroundColor: colorScheme.surfaceContainerHighest,
+                      valueColor: AlwaysStoppedAnimation<Color>(colorScheme.primary),
+                    ),
+                  ),
+                ),
+            ],
+          );
+
+    return TvTile(
       leading: posterUrl != null
           ? _Poster(posterUrl: posterUrl)
           : Icon(
@@ -1593,9 +1915,7 @@ class _JellyfinEntryTile extends StatelessWidget {
               color: colorScheme.secondary,
             ),
       title: Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: subtitle.isEmpty
-          ? null
-          : Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+      subtitle: subtitleWidget,
       onTap: onTap,
     );
   }

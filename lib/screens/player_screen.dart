@@ -22,6 +22,7 @@ import '../services/resume_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/tmdb_client.dart';
+import '../services/simkl_client.dart';
 import '../services/trakt_client.dart';
 import '../services/watched_store.dart';
 import '../services/subtitle_style.dart';
@@ -453,6 +454,22 @@ class _PlayerScreenState extends State<PlayerScreen>
     unawaited(client.addToHistoryOne(item).catchError((_) {}));
   }
 
+  /// Fire-and-forget: push a finished video to SIMKL history. Mirrors Trakt.
+  void _pushSimklHistory(String key) {
+    final client = SimklClient();
+    if (!client.isConfigured) return;
+    final meta = TmdService.instance.metaFor(key);
+    if (meta == null || meta.movie.id == 0) return;
+    final parsed = ParsedFileName.parse(_current.title);
+    final item = SimklWatchItem(
+      tmdbId: meta.movie.id,
+      isTv: meta.movie.kind == TmdKind.tv,
+      season: parsed.isEpisode ? parsed.season : null,
+      episode: parsed.isEpisode ? parsed.episode : null,
+    );
+    unawaited(client.addToHistoryOne(item).catchError((_) {}));
+  }
+
   /// Reopens the current Jellyfin video through the server's transcoder
   /// (HLS, H.264/AAC) at the last known position. Runs at most once per
   /// video ([_transcodeRetried] is set before this is called); on any
@@ -662,6 +679,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       final key = _resumeKey;
       if (!_inTests && key.isNotEmpty) WatchedStore.set(key, true);
       if (!_inTests) _pushTraktHistory(key);
+      if (!_inTests) _pushSimklHistory(key);
     }
 
     // A-B repeat: loop back to A whenever playback passes B. Only while
