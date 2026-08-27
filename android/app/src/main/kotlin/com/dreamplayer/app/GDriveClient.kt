@@ -252,12 +252,24 @@ class GDriveClient(private val context: Context) {
 
     private fun launchLoopbackAuth(activity: Activity, clientId: String) {
         val state = pendingState ?: UUID.randomUUID().toString()
-        // Bind ephemeral loopback port and wait for the redirect.
+        // Fixed loopback port so the URI can be whitelisted in the
+        // Cloud Console (Web clients reject custom schemes and any
+        // unlisted loopback URI -> 400 redirect_uri_mismatch). Register
+        // exactly `http://127.0.0.1:8765/oauth2redirect` in
+        // APIs & Services -> Credentials -> your OAuth client ->
+        // Authorized redirect URIs.
+        val fixedPort = 8765
         val serverSocket = try {
-            java.net.ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1"))
-        } catch (e: Exception) {
-            mainHandler.post { pendingResult?.error("gdrive_auth", "Cannot bind loopback: ${e.message}", null); pendingResult = null }
-            return
+            java.net.ServerSocket(fixedPort, 1, java.net.InetAddress.getByName("127.0.0.1"))
+        } catch (_: Exception) {
+            // Port busy (rare) — fall back to ephemeral but the
+            // redirect will mismatch until you also whitelist it.
+            try {
+                java.net.ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1"))
+            } catch (e: Exception) {
+                mainHandler.post { pendingResult?.error("gdrive_auth", "Cannot bind loopback: ${e.message}", null); pendingResult = null }
+                return
+            }
         }
         val port = serverSocket.localPort
         val redirectUri = "http://127.0.0.1:$port/oauth2redirect"
