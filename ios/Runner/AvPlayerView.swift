@@ -814,7 +814,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                         }
                     }
                 }
-            } catch is CancellationError {
+            } catch let error as CancellationError {
                 // Load superseded by a newer open/reload — not a playback failure.
             } catch {
                 self.lastError = String(describing: error)
@@ -858,7 +858,7 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             }
             // Fresh AVPlayer instance after reload — re-apply the saved rate.
             applySpeed(pendingSpeed)
-        } catch is CancellationError {
+        } catch let error as CancellationError {
             // Superseded by a newer load elsewhere — not a playback failure.
         } catch {
             lastError = String(describing: error)
