@@ -63,12 +63,16 @@ class GDriveClient(private val context: Context) {
         var pendingClientSecret: String? = null
         @Volatile
         var pendingVerifier: String? = null
+        @Volatile
+        var pendingRedirectUri: String? = null
         var instance: GDriveClient? = null
 
         fun handleOAuthRedirect(intent: Intent?): Boolean {
+            // Kept for native Android/iOS OAuth clients that use the custom
+            // scheme. Web clients now use loopback (http://127.0.0.1) so this
+            // path is not hit for your current Web credentials.
             val data: Uri = intent?.data ?: return false
             if (data.scheme != "com.dreamplayer.app") return false
-            // Accept both com.dreamplayer.app:/oauth2redirect and host variant.
             val path = data.path ?: ""
             val host = data.host ?: ""
             if (!path.contains("oauth2redirect") && host != "oauth2redirect") return false
@@ -78,6 +82,7 @@ class GDriveClient(private val context: Context) {
             val result = pendingResult ?: return true
             val clientId = pendingClientId
             val clientSecret = pendingClientSecret
+            val redirectUri = pendingRedirectUri ?: REDIRECT_URI
             if (error != null) {
                 pendingResult = null
                 pendingState = null
@@ -102,7 +107,6 @@ class GDriveClient(private val context: Context) {
                 }
                 return true
             }
-            // Exchange code off main thread.
             Thread {
                 try {
                     val inst = instance
@@ -113,12 +117,14 @@ class GDriveClient(private val context: Context) {
                         code = code,
                         clientId = clientId,
                         clientSecret = clientSecret ?: "",
+                        redirectUri = redirectUri,
                     )
                     Handler(Looper.getMainLooper()).post {
                         pendingResult = null
                         pendingState = null
                         pendingClientId = null
                         pendingClientSecret = null
+                        pendingRedirectUri = null
                         result.success(account)
                     }
                 } catch (e: Exception) {
@@ -216,10 +222,104 @@ class GDriveClient(private val context: Context) {
     }
 
     private fun launchAuth(activity: Activity, clientId: String) {
+        val hasSecret = !pendingClientSecret.isNullOrEmpty()
+        if (hasSecret) {
+            // Web client → must use loopback (https://developers.google.com/identity/protocols/oauth2/native-app#redirect-uri_loopback)
+            // Custom schemes are blocked for WEB clients ("access blocked" error).
+            launchLoopbackAuth(activity, clientId)
+        } else {
+            // Native Android / iOS client → custom scheme is allowed.
+            val state = pendingState ?: UUID.randomUUID().toString()
+            pendingRedirectUri = REDIRECT_URI
+            val authUri = Uri.parse(AUTH_URL).buildUpon()
+                .appendQueryParameter("client_id", clientId)
+                .appendQueryParameter("redirect_uri", REDIRECT_URI)
+                .appendQueryParameter("response_type", "code")
+                .appendQueryParameter("scope", SCOPE)
+                .appendQueryParameter("access_type", "offline")
+                .appendQueryParameter("prompt", "consent")
+                .appendQueryParameter("state", state)
+                .build()
+            try {
+                val customTabs = CustomTabsIntent.Builder().build()
+                customTabs.launchUrl(activity, authUri)
+            } catch (_: Exception) {
+                val intent = Intent(Intent.ACTION_VIEW, authUri)
+                activity.startActivity(intent)
+            }
+        }
+    }
+
+    private fun launchLoopbackAuth(activity: Activity, clientId: String) {
         val state = pendingState ?: UUID.randomUUID().toString()
+        // Bind ephemeral loopback port and wait for the redirect.
+        val serverSocket = try {
+            java.net.ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1"))
+        } catch (e: Exception) {
+            mainHandler.post { pendingResult?.error("gdrive_auth", "Cannot bind loopback: ${e.message}", null); pendingResult = null }
+            return
+        }
+        val port = serverSocket.localPort
+        val redirectUri = "http://127.0.0.1:$port/oauth2redirect"
+        pendingRedirectUri = redirectUri
+        // Accept thread — captures code/state from GET /oauth2redirect?code=…&state=…
+        Thread {
+            try {
+                serverSocket.soTimeout = 300_000 // 5 min
+                val socket = serverSocket.accept()
+                val reader = java.io.BufferedReader(java.io.InputStreamReader(socket.getInputStream()))
+                val requestLine = reader.readLine() ?: ""
+                // e.g. GET /oauth2redirect?code=4/…&state=… HTTP/1.1
+                var code: String? = null
+                var returnedState: String? = null
+                var error: String? = null
+                val path = requestLine.split(" ").getOrNull(1) ?: ""
+                val uri = try { Uri.parse("http://127.0.0.1$path") } catch (_: Exception) { null }
+                if (uri != null) {
+                    code = uri.getQueryParameter("code")
+                    returnedState = uri.getQueryParameter("state")
+                    error = uri.getQueryParameter("error")
+                }
+                // Drain headers.
+                while (true) { val h = reader.readLine() ?: break; if (h.isEmpty()) break }
+                // Respond so browser tab closes nicely.
+                val body = if (error == null && code != null) "<html><body>Success — return to DreamPlayer.</body></html>" else "<html><body>Error: ${error ?: "missing code"}</body></html>"
+                val resp = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: ${body.toByteArray().size}\r\nConnection: close\r\n\r\n$body"
+                try { socket.getOutputStream().write(resp.toByteArray()); socket.getOutputStream().flush() } catch (_: Exception) {}
+                try { socket.close() } catch (_: Exception) {}
+                try { serverSocket.close() } catch (_: Exception) {}
+                val result = pendingResult
+                val clientSecret = pendingClientSecret
+                if (result == null) return@Thread
+                if (error != null) {
+                    mainHandler.post { result.error("gdrive_auth", error, null); pendingResult = null; pendingState = null }
+                    return@Thread
+                }
+                if (returnedState != null && returnedState != pendingState) {
+                    mainHandler.post { result.error("gdrive_auth", "State mismatch", null); pendingResult = null; pendingState = null }
+                    return@Thread
+                }
+                if (code == null) {
+                    mainHandler.post { result.error("gdrive_auth", "Missing auth code", null); pendingResult = null; pendingState = null }
+                    return@Thread
+                }
+                try {
+                    val account = exchangeCode(code = code, clientId = clientId, clientSecret = clientSecret ?: "", redirectUri = redirectUri)
+                    mainHandler.post { pendingResult = null; pendingState = null; pendingRedirectUri = null; result.success(account) }
+                } catch (e: Exception) {
+                    mainHandler.post { pendingResult = null; pendingState = null; result.error("gdrive_auth", e.message ?: "Auth failed", null) }
+                }
+            } catch (e: Exception) {
+                try { serverSocket.close() } catch (_: Exception) {}
+                // SocketTimeout = user cancelled; don't surface as error if already handled.
+                if (pendingResult != null) {
+                    mainHandler.post { pendingResult?.error("gdrive_auth", e.message ?: "Auth failed", null); pendingResult = null; pendingState = null }
+                }
+            }
+        }.start()
         val authUri = Uri.parse(AUTH_URL).buildUpon()
             .appendQueryParameter("client_id", clientId)
-            .appendQueryParameter("redirect_uri", REDIRECT_URI)
+            .appendQueryParameter("redirect_uri", redirectUri)
             .appendQueryParameter("response_type", "code")
             .appendQueryParameter("scope", SCOPE)
             .appendQueryParameter("access_type", "offline")
@@ -230,7 +330,6 @@ class GDriveClient(private val context: Context) {
             val customTabs = CustomTabsIntent.Builder().build()
             customTabs.launchUrl(activity, authUri)
         } catch (_: Exception) {
-            // Fallback to plain VIEW intent.
             val intent = Intent(Intent.ACTION_VIEW, authUri)
             activity.startActivity(intent)
         }
@@ -349,12 +448,12 @@ class GDriveClient(private val context: Context) {
         }
     }
 
-    private fun exchangeCode(code: String, clientId: String, clientSecret: String): Map<String, Any?> {
+    private fun exchangeCode(code: String, clientId: String, clientSecret: String, redirectUri: String = pendingRedirectUri ?: REDIRECT_URI): Map<String, Any?> {
         val body = FormBody.Builder()
             .add("code", code)
             .add("client_id", clientId)
             .apply { if (clientSecret.isNotEmpty()) add("client_secret", clientSecret) }
-            .add("redirect_uri", REDIRECT_URI)
+            .add("redirect_uri", redirectUri)
             .add("grant_type", "authorization_code")
             .build()
         val req = Request.Builder().url(TOKEN_URL).post(body).build()
