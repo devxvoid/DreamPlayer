@@ -3795,8 +3795,12 @@ class _BufferedSeekBar extends StatefulWidget {
 
 class _BufferedSeekBarState extends State<_BufferedSeekBar> {
   static const double _trackHeight = 4;
+  static const double _activeTrackHeight = 6;
   static const double _thumbRadius = 7;
-  static const double _touchHeight = 36; // total tappable area
+  static const double _thumbActiveRadius = 11;
+  static const double _touchHeight = 48;
+  static const double _horizontalPadding = 12;
+
   bool _dragging = false;
   double _dragValue = 0;
   final FocusNode _focusNode = FocusNode();
@@ -3809,9 +3813,36 @@ class _BufferedSeekBarState extends State<_BufferedSeekBar> {
 
   double get _clampedMax => widget.max > 0 ? widget.max : 1;
 
-  double _fractionFromOffset(double dx, double width) {
-    final fraction = (dx / width).clamp(0.0, 1.0);
+  double _valueFromOffset(double localX, double totalWidth) {
+    final trackWidth = totalWidth - (_horizontalPadding * 2);
+    if (trackWidth <= 0) return 0;
+    final trackDx = (localX - _horizontalPadding).clamp(0.0, trackWidth);
+    final fraction = trackDx / trackWidth;
     return fraction * _clampedMax;
+  }
+
+  void _handleTouchStart(Offset localPosition, double totalWidth) {
+    final ms = _valueFromOffset(localPosition.dx, totalWidth);
+    setState(() {
+      _dragging = true;
+      _dragValue = ms;
+    });
+    widget.onChangeStart?.call(ms);
+    widget.onChanged?.call(ms);
+  }
+
+  void _handleTouchUpdate(Offset localPosition, double totalWidth) {
+    if (!_dragging) return;
+    final ms = _valueFromOffset(localPosition.dx, totalWidth);
+    setState(() => _dragValue = ms);
+    widget.onChanged?.call(ms);
+  }
+
+  void _handleTouchEnd() {
+    if (!_dragging) return;
+    final ms = _dragValue;
+    setState(() => _dragging = false);
+    widget.onChangeEnd?.call(ms);
   }
 
   void _stepSeek(double deltaMs) {
@@ -3828,6 +3859,8 @@ class _BufferedSeekBarState extends State<_BufferedSeekBar> {
     final currentMs = _dragging ? _dragValue : widget.value;
     final positionFraction = (currentMs / _clampedMax).clamp(0.0, 1.0);
     final bufferFraction = (widget.bufferedMs / _clampedMax).clamp(0.0, 1.0);
+    final isFocused = _focusNode.hasFocus;
+    final currentThumbRadius = _dragging ? _thumbActiveRadius : _thumbRadius;
 
     return Focus(
       focusNode: _focusNode,
@@ -3848,138 +3881,113 @@ class _BufferedSeekBarState extends State<_BufferedSeekBar> {
         }
         return KeyEventResult.ignored;
       },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(8),
-          color: _focusNode.hasFocus
-              ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.12)
-              : Colors.transparent,
-          border: Border.all(
-            color: _focusNode.hasFocus
-                ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.7)
-                : Colors.transparent,
-            width: 2,
-          ),
-        ),
-        child: GestureDetector(
-          onHorizontalDragStart: (details) {
-            final box = context.findRenderObject() as RenderBox?;
-            if (box == null) return;
-            final ms = _fractionFromOffset(
-              box.globalToLocal(details.globalPosition).dx,
-              box.size.width,
-            );
-            setState(() {
-              _dragging = true;
-              _dragValue = ms;
-            });
-            widget.onChangeStart?.call(ms);
-          },
-          onHorizontalDragUpdate: (details) {
-            final box = context.findRenderObject() as RenderBox?;
-            if (box == null) return;
-            final ms = _fractionFromOffset(
-              box.globalToLocal(details.globalPosition).dx,
-              box.size.width,
-            );
-            setState(() => _dragValue = ms);
-            widget.onChanged?.call(ms);
-          },
-          onHorizontalDragEnd: (_) {
-            final ms = _dragValue;
-            setState(() => _dragging = false);
-            widget.onChangeEnd?.call(ms);
-          },
-          onTapUp: (details) {
-            final box = context.findRenderObject() as RenderBox?;
-            if (box == null) return;
-            final ms = _fractionFromOffset(
-              box.globalToLocal(details.globalPosition).dx,
-              box.size.width,
-            );
-            widget.onChangeStart?.call(ms);
-            widget.onChanged?.call(ms);
-            widget.onChangeEnd?.call(ms);
-          },
-          child: SizedBox(
-            height: _touchHeight,
-            child: Center(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    final width = constraints.maxWidth;
-                    final thumbX = positionFraction * width;
-                    final bufferX = bufferFraction * width;
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final totalWidth = constraints.maxWidth;
+          final trackWidth = (totalWidth - (_horizontalPadding * 2)).clamp(0.0, double.infinity);
+          final thumbX = _horizontalPadding + positionFraction * trackWidth;
+          final bufferWidth = bufferFraction * trackWidth;
+          final activeWidth = positionFraction * trackWidth;
 
-                    return Stack(
-                      clipBehavior: Clip.none,
-                      children: [
-                        // Background track
-                        Positioned(
-                          top: (_touchHeight - _trackHeight) / 2,
-                          left: 0,
-                          right: 0,
-                          child: Container(
-                            height: _trackHeight,
-                            decoration: BoxDecoration(
-                              color: Colors.white24,
-                              borderRadius: BorderRadius.circular(2),
-                            ),
-                          ),
-                        ),
-                        // Buffer fill
-                        Positioned(
-                          top: (_touchHeight - _trackHeight) / 2,
-                          left: 0,
-                          child: Container(
-                            width: bufferX.clamp(0, width),
-                            height: _trackHeight,
-                            decoration: BoxDecoration(
-                              color: Colors.white54,
-                              borderRadius: BorderRadius.circular(2),
-                            ),
-                          ),
-                        ),
-                        // Progress fill
-                        Positioned(
-                          top: (_touchHeight - _trackHeight) / 2,
-                          left: 0,
-                          child: Container(
-                            width: thumbX.clamp(0, width),
-                            height: _trackHeight,
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(2),
-                            ),
-                          ),
-                        ),
-                        // Thumb
-                        Positioned(
-                          top: (_touchHeight - _thumbRadius * 2) / 2,
-                          left: (thumbX - _thumbRadius).clamp(
-                            -_thumbRadius,
-                            width - _thumbRadius,
-                          ),
-                          child: Container(
-                            width: _thumbRadius * 2,
-                            height: _thumbRadius * 2,
-                            decoration: const BoxDecoration(
-                              color: Colors.white,
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                        ),
-                      ],
-                    );
-                  },
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTapDown: (details) => _handleTouchStart(details.localPosition, totalWidth),
+            onTapUp: (_) => _handleTouchEnd(),
+            onTapCancel: () => _handleTouchEnd(),
+            onHorizontalDragStart: (details) => _handleTouchStart(details.localPosition, totalWidth),
+            onHorizontalDragUpdate: (details) => _handleTouchUpdate(details.localPosition, totalWidth),
+            onHorizontalDragEnd: (_) => _handleTouchEnd(),
+            onHorizontalDragCancel: () => _handleTouchEnd(),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              height: _touchHeight,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(8),
+                color: isFocused
+                    ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.12)
+                    : Colors.transparent,
+                border: Border.all(
+                  color: isFocused
+                      ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.7)
+                      : Colors.transparent,
+                  width: 2,
                 ),
               ),
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  // Background track (dark)
+                  Positioned(
+                    top: (_touchHeight - _trackHeight) / 2,
+                    left: _horizontalPadding,
+                    width: trackWidth,
+                    child: Container(
+                      height: _trackHeight,
+                      decoration: BoxDecoration(
+                        color: Colors.white24,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  // Buffer fill (gray)
+                  Positioned(
+                    top: (_touchHeight - _trackHeight) / 2,
+                    left: _horizontalPadding,
+                    width: bufferWidth,
+                    child: Container(
+                      height: _trackHeight,
+                      decoration: BoxDecoration(
+                        color: Colors.white54,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  // Active progress fill (white)
+                  Positioned(
+                    top: (_touchHeight - (_dragging ? _activeTrackHeight : _trackHeight)) / 2,
+                    left: _horizontalPadding,
+                    width: activeWidth,
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 100),
+                      height: _dragging ? _activeTrackHeight : _trackHeight,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(3),
+                      ),
+                    ),
+                  ),
+                  // Thumb circle (with glow when dragging)
+                  Positioned(
+                    top: (_touchHeight - currentThumbRadius * 2) / 2,
+                    left: thumbX - currentThumbRadius,
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 100),
+                      width: currentThumbRadius * 2,
+                      height: currentThumbRadius * 2,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.white,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.4),
+                            blurRadius: 4,
+                            spreadRadius: 1,
+                          ),
+                          if (_dragging)
+                            BoxShadow(
+                              color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.6),
+                              blurRadius: 8,
+                              spreadRadius: 3,
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
   }
