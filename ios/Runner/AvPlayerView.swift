@@ -55,11 +55,17 @@ private final class SubtitleOverlayView: UIView {
         label.textColor = UIColor(argb: color)
         if (bg >> 24) != 0 {
             label.backgroundColor = UIColor(argb: bg)
-            layer.cornerRadius = 4
+            // UIKit auto-sets UILabel.opaque = true when backgroundColor is
+            // assigned, which forces the background to render opaque and
+            // silently ignores the alpha byte. Turn it off so the partial
+            // alpha from the ARGB value actually blends with the video.
+            label.opaque = false
             label.layer.cornerRadius = 4
             label.clipsToBounds = true
         } else {
-            label.backgroundColor = nil
+            label.backgroundColor = .clear
+            label.layer.cornerRadius = 0
+            label.clipsToBounds = false
         }
         if outline {
             label.shadowColor = .black
