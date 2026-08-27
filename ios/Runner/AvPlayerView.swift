@@ -59,7 +59,7 @@ private final class SubtitleOverlayView: UIView {
             // assigned, which forces the background to render opaque and
             // silently ignores the alpha byte. Turn it off so the partial
             // alpha from the ARGB value actually blends with the video.
-            label.opaque = false
+            label.isOpaque = false
             label.layer.cornerRadius = 4
             label.clipsToBounds = true
         } else {
