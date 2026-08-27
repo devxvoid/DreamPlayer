@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/video_item.dart';
+import '../services/simkl_client.dart';
 import '../services/smb_client.dart';
 import '../services/tmdb_client.dart';
+import '../services/watched_store.dart';
 import '../widgets/server_form_kit.dart';
 import '../widgets/tv_overscan.dart';
 import '../widgets/tv_text_field.dart';
@@ -41,6 +43,11 @@ class _SmbScreenState extends State<SmbScreen> {
 
   /// True while opening the tapped video's stream URL.
   bool _opening = false;
+
+  /// Watched marks keyed by the same `smb:$id/$_share/${path}` used for
+  /// `TmdService.resolve` and `VideoItem.resumeKey` — shows a green check
+  /// on every file row.
+  Set<String> _watchedKeys = {};
 
   bool get _atBrowseRoot => _browsing == null || (_share.isEmpty && _path.isEmpty);
 
@@ -142,6 +149,88 @@ class _SmbScreenState extends State<SmbScreen> {
     }
   }
 
+  String _watchedKeyFor(SmbEntry entry) {
+    final server = _browsing;
+    if (server == null || entry.isDirectory) return '';
+    return 'smb:${server.id}/$_share/${entry.path}';
+  }
+
+  Future<void> _refreshWatched() async {
+    try {
+      final watched = await WatchedStore.load();
+      if (mounted) setState(() => _watchedKeys = watched);
+    } catch (_) {}
+  }
+
+  Future<void> _toggleWatched(SmbEntry entry) async {
+    final key = _watchedKeyFor(entry);
+    if (key.isEmpty) return;
+    final now = !_watchedKeys.contains(key);
+    setState(() {
+      _watchedKeys = {..._watchedKeys};
+      now ? _watchedKeys.add(key) : _watchedKeys.remove(key);
+    });
+    try {
+      await WatchedStore.set(key, now);
+    } catch (_) {}
+  }
+
+  bool _syncingSimkl = false;
+
+  Future<void> _syncFromSimkl() async {
+    final client = SimklClient();
+    if (!client.isConfigured) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('SIMKL not configured')),
+        );
+      }
+      return;
+    }
+    if (!await client.isAuthenticated()) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Sign in to SIMKL first')),
+        );
+      }
+      return;
+    }
+    setState(() => _syncingSimkl = true);
+    try {
+      final watched = await client.fetchWatched();
+      int marked = 0;
+      for (final entry in _entries) {
+        if (entry.isDirectory) continue;
+        final key = _watchedKeyFor(entry);
+        if (key.isEmpty || _watchedKeys.contains(key)) continue;
+        final meta = _tmdbMeta[entry.path];
+        if (meta == null) continue;
+        final id = meta.movie.id;
+        final isTv = meta.movie.kind == TmdKind.tv;
+        final shouldMark = isTv ? watched.showSeasons.containsKey(id) : watched.movieIds.contains(id);
+        // For episodes, also ensure season is in map (already counts as watched show).
+        if (shouldMark) {
+          await WatchedStore.set(key, true);
+          marked++;
+        }
+      }
+      await _refreshWatched();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(marked > 0 ? 'Marked $marked as watched from SIMKL' : 'Nothing new from SIMKL')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('SIMKL sync failed: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _syncingSimkl = false);
+    }
+  }
+
   Future<void> _loadDirectory(String path) async {
     final server = _browsing;
     if (server == null) return;
@@ -158,6 +247,7 @@ class _SmbScreenState extends State<SmbScreen> {
         _loading = false;
       });
       _prefetchTmdbMeta(entries);
+      _refreshWatched();
     } on PlatformException catch (e) {
       if (mounted) {
         setState(() {
@@ -439,6 +529,14 @@ class _SmbScreenState extends State<SmbScreen> {
               )
             : null,
         actions: [
+          if (browsing != null && _share.isNotEmpty && !_loading)
+            IconButton(
+              tooltip: 'Sync watched from SIMKL',
+              icon: _syncingSimkl
+                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.cloud_done_outlined),
+              onPressed: _syncingSimkl ? null : _syncFromSimkl,
+            ),
           if (browsing != null)
             IconButton(
               tooltip: 'Server list',
@@ -554,10 +652,13 @@ class _SmbScreenState extends State<SmbScreen> {
       itemCount: _entries.length,
       itemBuilder: (context, index) {
         final entry = _entries[index];
+        final key = _watchedKeyFor(entry);
         return _SmbTile(
           entry: entry,
           onTap: () => _openEntry(entry),
           tmdbMeta: _tmdbMeta[entry.path],
+          watched: key.isNotEmpty && _watchedKeys.contains(key),
+          onToggleWatched: () => _toggleWatched(entry),
         );
       },
     );
@@ -703,11 +804,15 @@ class _SmbTile extends StatelessWidget {
     required this.entry,
     required this.onTap,
     this.tmdbMeta,
+    this.watched = false,
+    this.onToggleWatched,
   });
 
   final SmbEntry entry;
   final VoidCallback onTap;
   final TmdMeta? tmdbMeta;
+  final bool watched;
+  final VoidCallback? onToggleWatched;
 
   static String _sizeLabel(int bytes) {
     if (bytes <= 0) return '';
@@ -752,7 +857,28 @@ class _SmbTile extends StatelessWidget {
         overflow: TextOverflow.ellipsis,
       ),
       subtitle: subtitle == null ? null : Text(subtitle),
-      trailing: entry.isDirectory ? const Icon(Icons.chevron_right) : null,
+      trailing: entry.isDirectory
+          ? const Icon(Icons.chevron_right)
+          : Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (watched)
+                  const Padding(
+                    padding: EdgeInsets.only(right: 4),
+                    child: Icon(Icons.check_circle, color: Colors.green, size: 20),
+                  ),
+                if (onToggleWatched != null)
+                  IconButton(
+                    tooltip: watched ? 'Mark as unwatched' : 'Mark as watched',
+                    icon: Icon(
+                      watched ? Icons.check_circle : Icons.check_circle_outline,
+                      color: watched ? Colors.green.shade400 : Theme.of(context).colorScheme.onSurfaceVariant,
+                      size: 22,
+                    ),
+                    onPressed: onToggleWatched,
+                  ),
+              ],
+            ),
       onTap: onTap,
     );
   }
