@@ -207,16 +207,17 @@ class _WebDavScreenState extends State<WebDavScreen> {
   Future<void> _bookmarkCurrentFolder() async {
     final server = _browsing;
     if (server == null || _atBrowseRoot) return;
-    final folderName = _path.replaceAll(RegExp(r'/+$'), '').split('/').last;
-    final id = 'webdav_${server.id}_${_path.hashCode}';
+    final cleanPath = _path.replaceAll(RegExp(r'/+$'), '');
+    final folderName = cleanPath.split('/').last;
+    final id = 'webdav_${server.id}_${cleanPath.hashCode}';
     final folder = LibraryFolder(
       id: id,
       name: folderName,
-      path: 'webdav:${server.id}$_path',
+      path: 'webdav:${server.id}$cleanPath',
       addedAt: DateTime.now(),
       source: LibraryFolderSource.webdav,
       networkServerId: server.id,
-      networkPath: _path,
+      networkPath: cleanPath,
       networkLabel: server.name,
     );
     await LibraryFoldersStore.add(folder);

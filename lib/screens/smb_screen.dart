@@ -181,8 +181,9 @@ class _SmbScreenState extends State<SmbScreen> {
   Future<void> _bookmarkCurrentFolder() async {
     final server = _browsing;
     if (server == null || _share.isEmpty) return;
-    final folderName = _path.isEmpty ? _share : _path.split('/').last;
-    final repoPath = _path.isEmpty ? _share : '$_share/$_path';
+    final cleanPath = _path.replaceAll(RegExp(r'/+$'), '');
+    final folderName = cleanPath.isEmpty ? _share : cleanPath.split('/').last;
+    final repoPath = cleanPath.isEmpty ? _share : '$_share/$cleanPath';
     final id = 'smb_${server.id}_${repoPath.hashCode}';
     final folder = LibraryFolder(
       id: id,
@@ -192,7 +193,7 @@ class _SmbScreenState extends State<SmbScreen> {
       source: LibraryFolderSource.smb,
       networkServerId: server.id,
       networkShare: _share,
-      networkPath: _path,
+      networkPath: cleanPath,
       networkLabel: server.name,
     );
     await LibraryFoldersStore.add(folder);

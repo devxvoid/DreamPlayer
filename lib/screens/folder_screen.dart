@@ -193,7 +193,7 @@ class _FolderScreenState extends State<FolderScreen> {
     try {
       final serverId = widget.folder.networkServerId ?? '';
       final share = widget.folder.networkShare ?? _networkShare;
-      final path = _currentPath;
+      final path = _currentPath.replaceAll(RegExp(r'/+$'), '').replaceAll(RegExp(r'^/+'), '');
       final entries = await SmbClient.instance.listDirectory(serverId, share, path);
       if (!mounted) return;
       setState(() {
