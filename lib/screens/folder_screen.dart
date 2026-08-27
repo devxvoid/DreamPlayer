@@ -3,11 +3,14 @@ import 'package:flutter/services.dart';
 
 import '../models/video_item.dart';
 import '../services/file_browser.dart';
+import '../services/gdrive_client.dart';
 import '../services/jellyfin_client.dart';
 import '../services/library_folders.dart';
 import '../services/resume_store.dart';
+import '../services/smb_client.dart';
 import '../services/tmdb_client.dart';
 import '../services/watched_store.dart';
+import '../services/webdav_client.dart';
 import '../utils/season_group.dart' as sg;
 import '../widgets/season_progress_ring.dart';
 import '../widgets/tv_overscan.dart';
@@ -55,16 +58,37 @@ class _FolderScreenState extends State<FolderScreen> {
   JellyfinServer? _jellyfinServer;
   List<JellyfinItem> _jellyfinEntries = const [];
 
-  bool get _atRoot => _isJellyfin
-      ? _jellyfinCrumbs.isEmpty
-      : _currentPath == widget.folder.path;
+  /// Network modes
+  List<SmbEntry> _smbEntries = const [];
+  // WebDAV / GDrive entries reuse simple maps; keep as dynamic for now.
+  List<Object> _networkEntries = const [];
+
+  bool get _atRoot {
+    if (_isJellyfin) return _jellyfinCrumbs.isEmpty;
+    if (_isSmb || _isWebDav || _isGDrive) return _currentPath == _networkPath;
+    return _currentPath == widget.folder.path;
+  }
 
   bool get _isJellyfin => widget.folder.isJellyfin;
+  bool get _isSmb => widget.folder.source == LibraryFolderSource.smb;
+  bool get _isWebDav => widget.folder.source == LibraryFolderSource.webdav;
+  bool get _isGDrive => widget.folder.source == LibraryFolderSource.gdrive;
+  bool get _isNetworkFolder => widget.folder.isNetwork && !_isJellyfin;
+
+  // Network folder navigation state (SMB/WebDAV/GDrive share + subpath).
+  late String _networkShare;
+  late String _networkPath;
 
   @override
   void initState() {
     super.initState();
     _currentPath = widget.initialPath ?? widget.folder.path;
+    _networkShare = widget.folder.networkShare ?? '';
+    _networkPath = widget.folder.networkPath ?? '';
+    // For network folders, _currentPath tracks the subpath under the share.
+    if (_isNetworkFolder && widget.initialPath == null) {
+      _currentPath = _networkPath;
+    }
     TmdService.instance.addListener(_onMetadataChanged);
     _resolveMeta();
     _load();
@@ -96,6 +120,18 @@ class _FolderScreenState extends State<FolderScreen> {
     });
     if (_isJellyfin) {
       await _loadJellyfin();
+      return;
+    }
+    if (_isSmb) {
+      await _loadSmb();
+      return;
+    }
+    if (_isWebDav) {
+      await _loadWebDav();
+      return;
+    }
+    if (_isGDrive) {
+      await _loadGDrive();
       return;
     }
     try {
@@ -148,6 +184,68 @@ class _FolderScreenState extends State<FolderScreen> {
         _error = e is JellyfinException
             ? e.message
             : JellyfinClient.friendlyError(e);
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _loadSmb() async {
+    try {
+      final serverId = widget.folder.networkServerId ?? '';
+      final share = widget.folder.networkShare ?? _networkShare;
+      final path = _currentPath;
+      final entries = await SmbClient.instance.listDirectory(serverId, share, path);
+      if (!mounted) return;
+      setState(() {
+        _smbEntries = entries;
+        _loading = false;
+      });
+      _refreshWatched();
+    } on PlatformException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.message ?? 'Could not list this folder';
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _loadWebDav() async {
+    try {
+      final serverId = widget.folder.networkServerId ?? '';
+      final basePath = widget.folder.networkPath ?? '';
+      final path = _currentPath.isEmpty ? basePath : _currentPath;
+      final entries = await WebDavClient.instance.listDirectory(serverId, path);
+      if (!mounted) return;
+      setState(() {
+        _networkEntries = entries;
+        _loading = false;
+      });
+      _refreshWatched();
+    } on PlatformException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.message ?? 'Could not list this folder';
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _loadGDrive() async {
+    try {
+      final accountId = widget.folder.networkServerId ?? '';
+      final folderId = _currentPath.isEmpty ? (widget.folder.networkPath ?? 'root') : _currentPath;
+      final entries = await GDriveClient.instance.listDirectory(accountId, folderId);
+      if (!mounted) return;
+      setState(() {
+        _networkEntries = entries;
+        _loading = false;
+      });
+      _refreshWatched();
+    } on PlatformException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.message ?? 'Could not list this folder';
         _loading = false;
       });
     }
@@ -217,6 +315,39 @@ class _FolderScreenState extends State<FolderScreen> {
     await _loadJellyfin();
   }
 
+  Future<void> _openSmbEntry(SmbEntry entry) async {
+    if (entry.isDirectory) {
+      setState(() {
+        _currentPath = entry.path;
+        _loading = true;
+      });
+      await _loadSmb();
+      return;
+    }
+    final serverId = widget.folder.networkServerId ?? '';
+    final share = widget.folder.networkShare ?? _networkShare;
+    final uri = await SmbClient.instance.openShare(serverId, share, entry.path);
+    final resumeKey = 'smb:$serverId/$share/${entry.path}';
+    final item = VideoItem(
+      id: 'smb_${widget.folder.id}_${entry.path.hashCode}',
+      title: entry.name,
+      uri: uri,
+      resumeKey: resumeKey,
+      duration: Duration.zero,
+      sizeBytes: entry.size,
+    );
+    try {
+      await TmdService.instance.resolve(item);
+    } catch (_) {}
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => TmdDetailsScreen(video: item),
+      ),
+    );
+    await _loadSmb();
+  }
+
   VideoItem _toVideoItem(FileEntry entry) {
     // Bookmarked-tree videos come back as content:// URIs (no real file
     // path), so hand those to the player's `uri` field.
@@ -282,6 +413,26 @@ class _FolderScreenState extends State<FolderScreen> {
       if (server == null || item.isFolder) return null;
       return _jellyfin.videoItem(server, item).resumeKey;
     }
+    if (_isSmb) {
+      final e = entry as SmbEntry;
+      if (e.isDirectory) return null;
+      final serverId = widget.folder.networkServerId ?? '';
+      final share = widget.folder.networkShare ?? _networkShare;
+      return 'smb:$serverId/$share/${e.path}';
+    }
+    if (_isWebDav) {
+      // WebDAV entries are maps with 'path'
+      if (entry is Map && entry['isDirectory'] == true) return null;
+      final id = widget.folder.networkServerId ?? '';
+      final p = (entry is Map ? entry['path'] as String? : null) ?? '';
+      return 'webdav:$id$p';
+    }
+    if (_isGDrive) {
+      if (entry is Map && entry['isDirectory'] == true) return null;
+      final acc = widget.folder.networkServerId ?? '';
+      final fid = (entry is Map ? entry['id'] as String? : null) ?? '';
+      return 'gdrive:$acc/$fid';
+    }
     return (entry as FileEntry).isDirectory ? null : entry.resumeKey;
   }
 
@@ -316,7 +467,8 @@ class _FolderScreenState extends State<FolderScreen> {
       Navigator.of(context).pop();
       return;
     }
-    setState(() => _currentPath = _parentOf(_currentPath) ?? widget.folder.path);
+    final fallback = _isNetworkFolder ? _networkPath : widget.folder.path;
+    setState(() => _currentPath = _parentOf(_currentPath) ?? fallback);
     await _load();
   }
 
@@ -375,7 +527,13 @@ class _FolderScreenState extends State<FolderScreen> {
     final folders = <Object>[];
     final videos = <Object>[];
     for (final e in entries) {
-      final isFolder = _isJellyfin ? (e as JellyfinItem).isFolder : (e as FileEntry).isDirectory;
+      final isFolder = _isJellyfin
+          ? (e as JellyfinItem).isFolder
+          : _isSmb
+              ? (e as SmbEntry).isDirectory
+              : _isWebDav || _isGDrive
+                  ? (e as Map)['isDirectory'] == true
+                  : (e as FileEntry).isDirectory;
       (isFolder ? folders : videos).add(e);
     }
     // Build season groups for episode videos; movies stay ungrouped.
@@ -400,6 +558,17 @@ class _FolderScreenState extends State<FolderScreen> {
           resumeProgress: progress,
           onToggleWatched: () => _toggleWatched(item),
           onTap: () => _openJellyfinItem(item),
+        );
+      }
+      if (_isSmb) {
+        final smb = e as SmbEntry;
+        return _FolderTile(
+          entry: FileEntry(name: smb.name, path: smb.path, isDirectory: smb.isDirectory, size: smb.size, resumeKey: _watchedKeyForEntry(smb)),
+          tmdbMeta: smb.isDirectory ? null : _tmdbForSmb(smb),
+          watched: _watchedKeys.contains(_watchedKeyForEntry(smb)),
+          resumeProgress: progress,
+          onToggleWatched: () => _toggleWatched(smb),
+          onTap: () => _openSmbEntry(smb),
         );
       }
       final fileEntry = e as FileEntry;
@@ -481,23 +650,41 @@ class _FolderScreenState extends State<FolderScreen> {
 
   bool _isEpisode(Object e) {
     if (_isJellyfin) return (e as JellyfinItem).type == 'Episode';
+    if (_isSmb) return ParsedFileName.parse((e as SmbEntry).name).isEpisode;
+    if (_isWebDav || _isGDrive) {
+      final name = (e as Map)['name'] as String? ?? '';
+      return ParsedFileName.parse(name).isEpisode;
+    }
     return ParsedFileName.parse((e as FileEntry).name).isEpisode;
   }
 
   int _seasonOf(Object e) {
     if (_isJellyfin) return (e as JellyfinItem).parentIndexNumber ?? 0;
+    if (_isSmb) return ParsedFileName.parse((e as SmbEntry).name).season;
+    if (_isWebDav || _isGDrive) {
+      final name = (e as Map)['name'] as String? ?? '';
+      return ParsedFileName.parse(name).season;
+    }
     return ParsedFileName.parse((e as FileEntry).name).season;
   }
 
   int _episodeOf(Object e) {
     if (_isJellyfin) return (e as JellyfinItem).indexNumber ?? 0;
+    if (_isSmb) return ParsedFileName.parse((e as SmbEntry).name).episode;
+    if (_isWebDav || _isGDrive) {
+      final name = (e as Map)['name'] as String? ?? '';
+      return ParsedFileName.parse(name).episode;
+    }
     return ParsedFileName.parse((e as FileEntry).name).episode;
   }
 
-  /// The entries for the current mode (files or Jellyfin items), unified so
-  /// the body doesn't branch for emptiness checks.
-  List<Object> get _currentEntries =>
-      _isJellyfin ? _jellyfinEntries : _entries;
+  /// The entries for the current mode (files / Jellyfin / network), unified.
+  List<Object> get _currentEntries {
+    if (_isJellyfin) return _jellyfinEntries;
+    if (_isSmb) return _smbEntries;
+    if (_isWebDav || _isGDrive) return _networkEntries;
+    return _entries;
+  }
 
   /// Cached TMDB meta for a video file, looked up under the same identity key
   /// its tile/tap uses so the poster and the opened details screen agree.
@@ -505,6 +692,13 @@ class _FolderScreenState extends State<FolderScreen> {
     if (_isJellyfin) return null;
     return TmdService.instance
         .metaFor(TmdStore.identityKeyFor(_toVideoItem(entry)));
+  }
+
+  TmdMeta? _tmdbForSmb(SmbEntry entry) {
+    final serverId = widget.folder.networkServerId ?? '';
+    final share = widget.folder.networkShare ?? _networkShare;
+    final key = 'smb:$serverId/$share/${entry.path}';
+    return TmdService.instance.metaFor(key);
   }
 
   /// Cached TMDB meta for a Jellyfin playable (same key as its tap).

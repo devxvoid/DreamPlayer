@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/video_item.dart';
+import '../services/library_folders.dart';
 import '../services/tmdb_client.dart';
 import '../services/webdav_client.dart';
 import '../widgets/server_form_kit.dart';
@@ -203,6 +204,29 @@ class _WebDavScreenState extends State<WebDavScreen> {
     }
   }
 
+  Future<void> _bookmarkCurrentFolder() async {
+    final server = _browsing;
+    if (server == null || _atBrowseRoot) return;
+    final folderName = _path.replaceAll(RegExp(r'/+$'), '').split('/').last;
+    final id = 'webdav_${server.id}_${_path.hashCode}';
+    final folder = LibraryFolder(
+      id: id,
+      name: folderName,
+      path: 'webdav:${server.id}$_path',
+      addedAt: DateTime.now(),
+      source: LibraryFolderSource.webdav,
+      networkServerId: server.id,
+      networkPath: _path,
+      networkLabel: server.name,
+    );
+    await LibraryFoldersStore.add(folder);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Bookmarked $folderName to Home (WebDAV · ${server.name})')),
+      );
+    }
+  }
+
   void _addServer() => _showServerDialog();
 
   void _editServer(WebDavServer server) => _showServerDialog(existing: server);
@@ -238,6 +262,12 @@ class _WebDavScreenState extends State<WebDavScreen> {
               )
             : null,
         actions: [
+          if (browsing != null && !_atBrowseRoot)
+            IconButton(
+              tooltip: 'Bookmark this folder to Home',
+              icon: const Icon(Icons.bookmark_add_outlined),
+              onPressed: _bookmarkCurrentFolder,
+            ),
           if (browsing != null)
             IconButton(
               tooltip: 'Server list',

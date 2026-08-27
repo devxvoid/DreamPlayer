@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../config/cloud_keys.dart';
 import '../models/video_item.dart';
 import '../services/gdrive_client.dart';
+import '../services/library_folders.dart';
 import '../services/tmdb_client.dart';
 import '../widgets/tv_overscan.dart';
 import '../widgets/tv_tile.dart';
@@ -213,6 +214,29 @@ class _GDriveScreenState extends State<GDriveScreen> {
     }
   }
 
+  Future<void> _bookmarkCurrentFolder() async {
+    final account = _active;
+    if (account == null || _crumbs.isEmpty) return;
+    final folder = _crumbs.last;
+    final id = 'gdrive_${account.id}_${folder.id}';
+    final lf = LibraryFolder(
+      id: id,
+      name: folder.name,
+      path: 'gdrive:${account.id}/${folder.id}',
+      addedAt: DateTime.now(),
+      source: LibraryFolderSource.gdrive,
+      networkServerId: account.id,
+      networkPath: folder.id,
+      networkLabel: account.email,
+    );
+    await LibraryFoldersStore.add(lf);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Bookmarked ${folder.name} to Home (GDrive)')),
+      );
+    }
+  }
+
   Future<void> _signOut(GDriveAccount account) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -258,6 +282,12 @@ class _GDriveScreenState extends State<GDriveScreen> {
               )
             : null,
         actions: [
+          if (account != null && _crumbs.isNotEmpty)
+            IconButton(
+              tooltip: 'Bookmark this folder to Home',
+              icon: const Icon(Icons.bookmark_add_outlined),
+              onPressed: _bookmarkCurrentFolder,
+            ),
           if (account != null)
             IconButton(
               tooltip: 'Accounts',

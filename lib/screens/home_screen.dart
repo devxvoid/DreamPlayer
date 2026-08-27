@@ -265,12 +265,12 @@ class _HomeScreenState extends State<HomeScreen>
     if (confirmed != true) return;
     await LibraryFoldersStore.remove(folder.id);
     // Release the native library bookmark so its grant doesn't linger (only
-    // for on-device folders — Jellyfin bookmarks have no native grant).
-    if (!folder.isJellyfin) {
+    // for on-device folders — network/Jellyfin bookmarks have no native grant).
+    if (folder.source == LibraryFolderSource.files) {
       try {
         await FileBrowserService.instance.removeLibraryBookmark(folder.id);
       } catch (_) {}
-    } else {
+    } else if (folder.isJellyfin) {
       // Drop the cached server-side metadata too so a re-add re-fetches fresh.
       try {
         await _client.removeFolderMeta(folder.id);

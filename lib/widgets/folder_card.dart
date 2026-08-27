@@ -198,6 +198,44 @@ class _FolderCardState extends State<FolderCard> {
     return KeyEventResult.ignored;
   }
 
+  static String _networkLabel(LibraryFolder folder) {
+    switch (folder.source) {
+      case LibraryFolderSource.smb:
+        return folder.networkLabel?.isNotEmpty == true ? 'SMB · ${folder.networkLabel}' : 'SMB';
+      case LibraryFolderSource.webdav:
+        return folder.networkLabel?.isNotEmpty == true ? 'WebDAV · ${folder.networkLabel}' : 'WebDAV';
+      case LibraryFolderSource.gdrive:
+        return 'GDrive';
+      case LibraryFolderSource.ftp:
+        return folder.networkLabel?.isNotEmpty == true ? 'FTP · ${folder.networkLabel}' : 'FTP';
+      case LibraryFolderSource.upnp:
+        return 'DLNA';
+      case LibraryFolderSource.jellyfin:
+        return 'Jellyfin';
+      case LibraryFolderSource.files:
+        return '';
+    }
+  }
+
+  static Color _networkColor(LibraryFolder folder) {
+    switch (folder.source) {
+      case LibraryFolderSource.smb:
+        return const Color(0xFF1976D2);
+      case LibraryFolderSource.webdav:
+        return const Color(0xFFEF6C00);
+      case LibraryFolderSource.gdrive:
+        return const Color(0xFF2E7D32);
+      case LibraryFolderSource.ftp:
+        return const Color(0xFF6A1B9A);
+      case LibraryFolderSource.upnp:
+        return const Color(0xFF455A64);
+      case LibraryFolderSource.jellyfin:
+        return const Color(0xFF00B8A9);
+      case LibraryFolderSource.files:
+        return Colors.transparent;
+    }
+  }
+
   static bool _isSelectKey(KeyEvent e) =>
       e.physicalKey == PhysicalKeyboardKey.enter ||
       e.physicalKey == PhysicalKeyboardKey.select ||
@@ -217,11 +255,12 @@ class _FolderCardState extends State<FolderCard> {
     final title = hasMeta
         ? movie.title
         : (hasJellyfin ? info.name : folder.name);
+    final networkTag = folder.isNetwork ? _networkLabel(folder) : null;
     final subtitle = hasMeta
         ? [
             if (movie.year != null) '${movie.year}',
             movie.kind == TmdKind.tv ? 'TV Series' : 'Movie',
-            if (folder.isJellyfin) 'Jellyfin',
+            if (networkTag != null && networkTag.isNotEmpty) networkTag,
           ].join(' · ')
         : hasJellyfin
             ? [
@@ -231,7 +270,7 @@ class _FolderCardState extends State<FolderCard> {
               ].where((s) => s.isNotEmpty).join(' · ')
             : [
                 if (folder.name.isNotEmpty) folder.name,
-                if (folder.isJellyfin) 'Jellyfin',
+                if (networkTag != null && networkTag.isNotEmpty) networkTag,
               ].join(' · ');
 
     // Poster: TMDB when matched, else the Jellyfin server art, else the
@@ -334,13 +373,13 @@ class _FolderCardState extends State<FolderCard> {
                                 background: kindColor,
                               ),
                             ),
-                          if (folder.isJellyfin)
-                            const Positioned(
+                          if (folder.isNetwork)
+                            Positioned(
                               top: 8,
                               left: 8,
                               child: _FolderBadge(
-                                label: 'Jellyfin',
-                                background: Color(0xFF00B8A9),
+                                label: _networkLabel(folder),
+                                background: _networkColor(folder),
                               ),
                             ),
                           if (_isShow &&

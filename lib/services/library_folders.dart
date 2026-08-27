@@ -12,6 +12,21 @@ enum LibraryFolderSource {
 
   /// A Jellyfin / Emby folder, listed through the server API.
   jellyfin,
+
+  /// SMB / LAN share folder (jcifs-ng on Android), listed via [SmbClient].
+  smb,
+
+  /// WebDAV folder, listed via [WebDavClient].
+  webdav,
+
+  /// Google Drive folder, listed via [GDriveClient].
+  gdrive,
+
+  /// FTP / SFTP folder, listed via [FtpClient].
+  ftp,
+
+  /// UPnP / DLNA container, listed via [UpnpClient].
+  upnp,
 }
 
 /// A folder the user explicitly chose to add to the library (e.g. a TV show
@@ -28,17 +43,22 @@ class LibraryFolder {
     this.source = LibraryFolderSource.files,
     this.jellyfinServerUrl,
     this.jellyfinItemId,
+    this.networkServerId,
+    this.networkShare,
+    this.networkPath,
+    this.networkLabel,
   });
 
   /// Bookmark id from the folder picker (`FileEntry.bookmarkId`), or a
-  /// source-specific id (e.g. `jellyfin_<host>_<item>`) for Jellyfin.
+  /// source-specific id (e.g. `jellyfin_<host>_<item>` / `smb_<id>_<share>`) .
   final String id;
 
   /// Display name of the folder (also the TMDB search query).
   final String name;
 
-  /// `tree:<id>` for SAF bookmarks, an absolute path, or (for Jellyfin) the
-  /// synthetic `jellyfin:<itemId>` path used as the folder's identifier.
+  /// `tree:<id>` for SAF bookmarks, an absolute path, or synthetic ids for
+  /// network sources (`smb:<server>/<share>/<path>`, `webdav:<id>/<path>`,
+  /// `gdrive:<account>/<folderId>`, `ftp:<id>/<path>`, `upnp:<device>/<id>`).
   final String path;
   final DateTime addedAt;
 
@@ -52,7 +72,15 @@ class LibraryFolder {
   /// Jellyfin folder/series id whose children are listed. Jellyfin only.
   final String? jellyfinItemId;
 
+  /// Network share identifiers — SMB/WebDAV/GDrive/FTP/UPnP. Only the fields
+  /// relevant to [source] are set; the rest are null.
+  final String? networkServerId;
+  final String? networkShare;
+  final String? networkPath;
+  final String? networkLabel;
+
   bool get isJellyfin => source == LibraryFolderSource.jellyfin;
+  bool get isNetwork => source != LibraryFolderSource.files;
 
   /// Stable identity for TMDB metadata (`folder:<id>` in TmdStore) — the
   /// `folder:` prefix keeps it clear of per-video identity keys.
@@ -66,11 +94,20 @@ class LibraryFolder {
         'source': source.name,
         'jellyfinServerUrl': jellyfinServerUrl,
         'jellyfinItemId': jellyfinItemId,
+        'networkServerId': networkServerId,
+        'networkShare': networkShare,
+        'networkPath': networkPath,
+        'networkLabel': networkLabel,
       };
 
   factory LibraryFolder.fromJson(Map<String, dynamic> json) {
     final source = switch (json['source'] as String?) {
       'jellyfin' => LibraryFolderSource.jellyfin,
+      'smb' => LibraryFolderSource.smb,
+      'webdav' => LibraryFolderSource.webdav,
+      'gdrive' => LibraryFolderSource.gdrive,
+      'ftp' => LibraryFolderSource.ftp,
+      'upnp' => LibraryFolderSource.upnp,
       _ => LibraryFolderSource.files,
     };
     return LibraryFolder(
@@ -83,6 +120,10 @@ class LibraryFolder {
       source: source,
       jellyfinServerUrl: json['jellyfinServerUrl'] as String?,
       jellyfinItemId: json['jellyfinItemId'] as String?,
+      networkServerId: json['networkServerId'] as String?,
+      networkShare: json['networkShare'] as String?,
+      networkPath: json['networkPath'] as String?,
+      networkLabel: json['networkLabel'] as String?,
     );
   }
 }
