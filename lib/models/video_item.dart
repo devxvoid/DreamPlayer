@@ -64,7 +64,6 @@ class VideoExternalSub {
 /// Where a video came from, derived from the source-specific [VideoItem]
 /// identifiers so the UI can show where playback is served from.
 enum PlaybackSource {
-  gdrive('Google Drive'),
   webdav('WebDAV'),
   ftp('FTP'),
   cxSmb('CX SMB'),
@@ -170,7 +169,6 @@ class VideoItem {
   PlaybackSource? get playbackSource {
     final key = resumeKey;
     if (key != null) {
-      if (key.startsWith('gdrive:')) return PlaybackSource.gdrive;
       if (key.startsWith('ftp_')) return PlaybackSource.ftp;
       if (key.startsWith('webdav_')) return PlaybackSource.webdav;
       if (key.startsWith('cx:')) return PlaybackSource.cxSmb;

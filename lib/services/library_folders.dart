@@ -19,9 +19,6 @@ enum LibraryFolderSource {
   /// WebDAV folder, listed via [WebDavClient].
   webdav,
 
-  /// Google Drive folder, listed via [GDriveClient].
-  gdrive,
-
   /// FTP / SFTP folder, listed via [FtpClient].
   ftp,
 
@@ -58,7 +55,7 @@ class LibraryFolder {
 
   /// `tree:<id>` for SAF bookmarks, an absolute path, or synthetic ids for
   /// network sources (`smb:<server>/<share>/<path>`, `webdav:<id>/<path>`,
-  /// `gdrive:<account>/<folderId>`, `ftp:<id>/<path>`, `upnp:<device>/<id>`).
+  /// `ftp:<id>/<path>`, `upnp:<device>/<id>`).
   final String path;
   final DateTime addedAt;
 
@@ -72,7 +69,7 @@ class LibraryFolder {
   /// Jellyfin folder/series id whose children are listed. Jellyfin only.
   final String? jellyfinItemId;
 
-  /// Network share identifiers — SMB/WebDAV/GDrive/FTP/UPnP. Only the fields
+  /// Network share identifiers — SMB/WebDAV/FTP/UPnP. Only the fields
   /// relevant to [source] are set; the rest are null.
   final String? networkServerId;
   final String? networkShare;
@@ -105,7 +102,6 @@ class LibraryFolder {
       'jellyfin' => LibraryFolderSource.jellyfin,
       'smb' => LibraryFolderSource.smb,
       'webdav' => LibraryFolderSource.webdav,
-      'gdrive' => LibraryFolderSource.gdrive,
       'ftp' => LibraryFolderSource.ftp,
       'upnp' => LibraryFolderSource.upnp,
       _ => LibraryFolderSource.files,

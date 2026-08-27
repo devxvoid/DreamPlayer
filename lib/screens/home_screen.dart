@@ -8,7 +8,6 @@ import '../app.dart' show appRouteObserver;
 import '../models/video_item.dart';
 import '../services/continue_watching.dart';
 import '../services/file_browser.dart';
-import '../services/gdrive_client.dart';
 import '../services/jellyfin_client.dart';
 import '../services/library_folders.dart';
 import '../services/tmdb_client.dart';
@@ -16,7 +15,6 @@ import '../services/webdav_client.dart';
 import '../widgets/folder_card.dart';
 import '../widgets/tv_text_field.dart';
 import 'ftp_screen.dart';
-import 'gdrive_screen.dart';
 import 'player_screen.dart';
 import '../widgets/tv_overscan.dart';
 import '../widgets/video_card.dart';
@@ -231,12 +229,11 @@ class _HomeScreenState extends State<HomeScreen>
   /// Opens a library folder: the show/movie details screen with the folder's
   /// files (episodes) listed below it.
   void _openFolder(LibraryFolder folder) async {
-    // Network bookmarks (SMB/WebDAV/GDrive) open the folder browser directly
+    // Network bookmarks (SMB/WebDAV) open the folder browser directly
     // so the file list appears immediately — TmdDetailsScreen's file list
     // only knows FileBrowser/Jellyfin.
     if (folder.source == LibraryFolderSource.smb ||
         folder.source == LibraryFolderSource.webdav ||
-        folder.source == LibraryFolderSource.gdrive ||
         folder.source == LibraryFolderSource.ftp ||
         folder.source == LibraryFolderSource.upnp) {
       await Navigator.of(context).push(
@@ -358,9 +355,7 @@ class _HomeScreenState extends State<HomeScreen>
       await FileBrowserService.instance.resolvePath(entry.video.path!);
     }
     if (!mounted) return;
-    var video = await _restoreGDriveSource(entry.video);
-    if (!mounted) return;
-    video = await _restoreWebDavSource(video);
+    var video = await _restoreWebDavSource(entry.video);
     if (!mounted) return;
     final restored = await _restoreJellyfinSource(video);
     if (!mounted) return;
@@ -429,34 +424,6 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   /// Google Drive playback URLs need a fresh Bearer token on every open
-  /// (expiry ~1h). Rebuild the source from the stable resume key
-  /// `gdrive:<account>/<fileId>` so a stale Continue-watching entry still
-  /// plays after the token rotated.
-  Future<VideoItem> _restoreGDriveSource(VideoItem video) async {
-    final key = video.resumeKey;
-    if (key == null || !key.startsWith('gdrive:')) return video;
-    final rest = key.substring('gdrive:'.length);
-    final slash = rest.indexOf('/');
-    if (slash <= 0) return video;
-    final accountId = rest.substring(0, slash);
-    final fileId = rest.substring(slash + 1);
-    if (accountId.isEmpty || fileId.isEmpty) return video;
-    try {
-      final token = await GDriveClient.instance.getFreshAccessToken(accountId);
-      return VideoItem(
-        id: video.id,
-        title: video.title,
-        uri: 'https://www.googleapis.com/drive/v3/files/$fileId?alt=media',
-        resumeKey: key,
-        duration: video.duration,
-        sizeBytes: video.sizeBytes,
-        httpHeaders: {'Authorization': 'Bearer $token'},
-      );
-    } on PlatformException {
-      return video;
-    }
-  }
-
   /// Jellyfin stream URLs embed the session's `api_key`, which rotates on
   /// re-login. Rebuild the URL from the stable resume key
   /// (`jellyfin:<host>/<item>`) against the current saved server + token.
@@ -701,12 +668,6 @@ class _HomeScreenState extends State<HomeScreen>
               children: [
                 ListTile(
                   leading: const Icon(Icons.cloud_outlined),
-                  title: const Text('Google Drive'),
-                  subtitle: const Text('Browse your Google Drive'),
-                  onTap: () => Navigator.of(context).pop('gdrive'),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.cloud_outlined),
                   title: const Text('WebDAV'),
                   subtitle: const Text('Add a WebDAV server'),
                   onTap: () => Navigator.of(context).pop('webdav'),
@@ -780,10 +741,6 @@ class _HomeScreenState extends State<HomeScreen>
   /// menu and the TV-mode app-bar buttons.
   Future<void> _openSource(String action) async {
     switch (action) {
-      case 'gdrive':
-        await Navigator.of(
-          context,
-        ).push(MaterialPageRoute<void>(builder: (_) => const GDriveScreen()));
       case 'webdav':
         await Navigator.of(
           context,

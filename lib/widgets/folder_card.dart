@@ -204,8 +204,6 @@ class _FolderCardState extends State<FolderCard> {
         return folder.networkLabel?.isNotEmpty == true ? 'SMB · ${folder.networkLabel}' : 'SMB';
       case LibraryFolderSource.webdav:
         return folder.networkLabel?.isNotEmpty == true ? 'WebDAV · ${folder.networkLabel}' : 'WebDAV';
-      case LibraryFolderSource.gdrive:
-        return 'GDrive';
       case LibraryFolderSource.ftp:
         return folder.networkLabel?.isNotEmpty == true ? 'FTP · ${folder.networkLabel}' : 'FTP';
       case LibraryFolderSource.upnp:
@@ -223,8 +221,6 @@ class _FolderCardState extends State<FolderCard> {
         return const Color(0xFF1976D2);
       case LibraryFolderSource.webdav:
         return const Color(0xFFEF6C00);
-      case LibraryFolderSource.gdrive:
-        return const Color(0xFF2E7D32);
       case LibraryFolderSource.ftp:
         return const Color(0xFF6A1B9A);
       case LibraryFolderSource.upnp:

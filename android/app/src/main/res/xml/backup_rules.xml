@@ -5,6 +5,4 @@
 <full-backup-content>
     <exclude domain="sharedpref" path="dreamplayer.webdavServers.xml"/>
     <exclude domain="sharedpref" path="dreamplayer.webdavSecrets.xml"/>
-    <exclude domain="sharedpref" path="dreamplayer.gdriveAccounts.xml"/>
-    <exclude domain="sharedpref" path="dreamplayer.gdriveSecrets.xml"/>
 </full-backup-content>
