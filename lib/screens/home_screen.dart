@@ -200,7 +200,19 @@ class _HomeScreenState extends State<HomeScreen>
   Future<void> _addFolderToLibrary() async {
     final FileEntry? picked;
     try {
-      picked = await FileBrowserService.instance.pickLibraryFolder();
+      picked = await FileBrowserService.instance
+          .pickLibraryFolder()
+          .timeout(const Duration(seconds: 60));
+    } on TimeoutException {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'The folder picker timed out. Please try again.',
+          ),
+        ),
+      );
+      return;
     } on PlatformException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
