@@ -26,6 +26,7 @@ import 'jellyfin_screen.dart';
 import '../services/trakt_sync.dart';
 import '../utils/startup_permissions.dart';
 import 'smb_screen.dart';
+import 'folder_screen.dart';
 import 'tmd_details_screen.dart';
 import 'upnp_screen.dart';
 import 'webdav_screen.dart';
@@ -230,6 +231,22 @@ class _HomeScreenState extends State<HomeScreen>
   /// Opens a library folder: the show/movie details screen with the folder's
   /// files (episodes) listed below it.
   void _openFolder(LibraryFolder folder) async {
+    // Network bookmarks (SMB/WebDAV/GDrive) open the folder browser directly
+    // so the file list appears immediately — TmdDetailsScreen's file list
+    // only knows FileBrowser/Jellyfin.
+    if (folder.source == LibraryFolderSource.smb ||
+        folder.source == LibraryFolderSource.webdav ||
+        folder.source == LibraryFolderSource.gdrive ||
+        folder.source == LibraryFolderSource.ftp ||
+        folder.source == LibraryFolderSource.upnp) {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => FolderScreen(folder: folder),
+        ),
+      );
+      await _loadLibrary();
+      return;
+    }
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => TmdDetailsScreen(

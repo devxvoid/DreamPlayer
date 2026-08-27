@@ -194,7 +194,15 @@ class _FolderScreenState extends State<FolderScreen> {
       final serverId = widget.folder.networkServerId ?? '';
       final share = widget.folder.networkShare ?? _networkShare;
       final path = _currentPath.replaceAll(RegExp(r'/+$'), '').replaceAll(RegExp(r'^/+'), '');
+      // ignore: avoid_print
+      print('FolderScreen _loadSmb server=$serverId share=$share path=$path');
       final entries = await SmbClient.instance.listDirectory(serverId, share, path);
+      // ignore: avoid_print
+      print('FolderScreen _loadSmb got ${entries.length} entries');
+      for (final e in entries) {
+        // ignore: avoid_print
+        print('  SmbEntry ${e.name} dir=${e.isDirectory} path=${e.path}');
+      }
       if (!mounted) return;
       setState(() {
         _smbEntries = entries;
