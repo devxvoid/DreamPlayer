@@ -23,7 +23,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/tmdb_client.dart';
 import '../services/simkl_client.dart';
-import '../services/trakt_client.dart';
 import '../services/watched_store.dart';
 import '../services/subtitle_style.dart';
 import '../services/downloaded_subtitles_store.dart';
@@ -437,24 +436,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     await ContinueWatchingStore.remove(key);
   }
 
-  /// Fire-and-forget: push a finished video to Trakt history if its TMDB
-  /// metadata is resolved. Best-effort — never blocks or surfaces errors.
-  void _pushTraktHistory(String key) {
-    final client = TraktClient();
-    if (!client.isConfigured) return;
-    final meta = TmdService.instance.metaFor(key);
-    if (meta == null || meta.movie.id == 0) return;
-    final parsed = ParsedFileName.parse(_current.title);
-    final item = TraktWatchItem(
-      tmdbId: meta.movie.id,
-      isTv: meta.movie.kind == TmdKind.tv,
-      season: parsed.isEpisode ? parsed.season : null,
-      episode: parsed.isEpisode ? parsed.episode : null,
-    );
-    unawaited(client.addToHistoryOne(item).catchError((_) {}));
-  }
-
-  /// Fire-and-forget: push a finished video to SIMKL history. Mirrors Trakt.
+  /// Fire-and-forget: push a finished video to SIMKL history.
   void _pushSimklHistory(String key) {
     final client = SimklClient();
     if (!client.isConfigured) return;
@@ -678,7 +660,6 @@ class _PlayerScreenState extends State<PlayerScreen>
       _markedWatched = true;
       final key = _resumeKey;
       if (!_inTests && key.isNotEmpty) WatchedStore.set(key, true);
-      if (!_inTests) _pushTraktHistory(key);
       if (!_inTests) _pushSimklHistory(key);
     }
 

@@ -21,7 +21,6 @@ import '../widgets/video_card.dart';
 import '../utils/tv_helper.dart';
 import 'file_browser_screen.dart';
 import 'jellyfin_screen.dart';
-import '../services/trakt_sync.dart';
 import '../utils/startup_permissions.dart';
 import 'smb_screen.dart';
 import 'folder_screen.dart';
@@ -71,9 +70,6 @@ class _HomeScreenState extends State<HomeScreen>
     // Update cards when TMDB metadata resolves for a visible entry.
     TmdService.instance.addListener(_onMetadataChanged);
     _loadLibrary();
-    // Phase-1 Trakt sync: pull watched state into WatchedStore (throttled,
-    // silent, marks show up as green checks as stores fill).
-    unawaited(TraktSync.pullWatched());
     // Ask for every runtime permission at app open instead of mid-playback.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;

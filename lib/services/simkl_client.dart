@@ -237,7 +237,7 @@ class SimklClient {
     final expiresIn = (body['expires_in'] as num?)?.toInt() ?? 0;
     final data = await _load();
     data['accessToken'] = accessToken;
-    // SIMKL has no refresh token; keep the field for parity with Trakt.
+    // SIMKL has no refresh token.
     if (body['refresh_token'] != null) data['refreshToken'] = body['refresh_token'];
     data['expiresAt'] = expiresIn > 0
         ? DateTime.now().millisecondsSinceEpoch + expiresIn * 1000
