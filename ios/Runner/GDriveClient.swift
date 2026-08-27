@@ -170,7 +170,10 @@ final class GDriveClient: NSObject {
             }
         }
         session.presentationContextProvider = self
-        session.prefersEphemeralSession = false
+        if #available(iOS 13.0, *) {
+            // prefersEphemeralSession is 13+ but some Xcode SDKs miss it;
+            // keep the session non-ephemeral by default.
+        }
         authSession = session
         session.start()
     }
