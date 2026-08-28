@@ -52,6 +52,7 @@ import io.flutter.plugin.platform.PlatformView
 import io.flutter.plugin.platform.PlatformViewFactory
 import com.dreamplayer.app.DreamRenderersFactory
 import okhttp3.OkHttpClient
+import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
 import java.io.File
 import java.security.SecureRandom
@@ -1065,11 +1066,19 @@ class ExoPlayerView(
                             // then auto-paired siblings next to the video file.
                             // For SAF bookmarked folders the path is `tree:<id>/...`
                             // (synthetic, not a real File) — resolve via DocumentFile.
+                            // For files opened from a bookmarked folder the VideoItem
+                            // carries a `content://com.android.externalstorage.documents`
+                            // tree URI (child.uri) instead of the synthetic `tree:`.
                             val isTreePath = path != null && path.startsWith("tree:")
-                            val treeSubtitleEntries: List<Pair<Uri, String>> = if (subtitleUri.isNullOrEmpty() && isTreePath) {
-                                findTreeSiblingSubtitleEntries(path!!)
-                            } else {
-                                emptyList()
+                            val contentTreeUriString = when {
+                                !uri.isNullOrEmpty() && uri.startsWith("content://com.android.externalstorage.documents") -> uri
+                                path != null && path.startsWith("content://com.android.externalstorage.documents") -> path
+                                else -> null
+                            }
+                            val treeSubtitleEntries: List<Pair<Uri, String>> = when {
+                                subtitleUri.isNullOrEmpty() && isTreePath -> findTreeSiblingSubtitleEntries(path!!)
+                                subtitleUri.isNullOrEmpty() && contentTreeUriString != null -> findContentTreeSiblingEntries(contentTreeUriString)
+                                else -> emptyList()
                             }
                             val paired: List<File> = if (subtitleUri.isNullOrEmpty() && path != null && !isTreePath) {
                                 SubtitleFormats.findSiblingSubtitles(path)
@@ -1964,6 +1973,76 @@ class ExoPlayerView(
         if (videoCount == 1 && subtitles.size == 1) {
             val f = subtitles.first()
             return listOf((f.uri to (f.name ?: "")))
+        }
+        val lowerBase = videoBase.lowercase()
+        val prefixed = subtitles.filter { it.name!!.lowercase().startsWith("$lowerBase.") }
+        val ordered = (if (prefixed.isNotEmpty()) prefixed else subtitles).sortedBy { it.name!!.lowercase() }
+        return ordered.map { it.uri to (it.name ?: "") }
+    }
+
+    /// Sibling subtitles for a `content://com.android.externalstorage.documents`
+    /// tree document (the `content://` URIs returned by `FileBrowser.listTreeDirectory`
+    /// for bookmarked folders). The synthetic `tree:` helper above covers the
+    /// `tree:<id>/…` path carried in `VideoItem.path`, this one covers the
+    /// `content://` URI carried in `VideoItem.uri` for the same bookmarked files.
+    private fun findContentTreeSiblingEntries(contentUriString: String): List<Pair<Uri, String>> {
+        val uri = try { Uri.parse(contentUriString) } catch (_: Exception) { return emptyList() }
+        if (uri.scheme != "content") return emptyList()
+        val docId = try { DocumentsContract.getDocumentId(uri) } catch (_: Exception) { return emptyList() }
+        val treeDocId = try { DocumentsContract.getTreeDocumentId(uri) } catch (_: Exception) { null }
+        // Fallback: parse treeId from the Uri path when getTreeDocumentId is unavailable
+        // (e.g. single-document URIs). Path is like /tree/<treeId>/document/<docId>.
+        val effectiveTreeId = treeDocId ?: run {
+            val p = uri.path ?: return emptyList()
+            val ti = p.indexOf("/tree/")
+            if (ti < 0) return emptyList()
+            val after = p.substring(ti + "/tree/".length)
+            val end = after.indexOf('/')
+            val raw = if (end < 0) after else after.substring(0, end)
+            try { Uri.decode(raw) } catch (_: Exception) { raw }
+        }
+        val videoName = docId.substringAfterLast('/', docId).substringAfterLast(':', docId.substringAfterLast('/'))
+        // docId is like primary:Folder/video.mkv or primary:Folder/Sub/video.mkv
+        // We need the file name with extension for base extraction.
+        val rawVideoName = docId.substringAfterLast('/')
+        val videoBase = rawVideoName.substringBeforeLast('.')
+        if (videoBase.isEmpty()) return emptyList()
+        // Build tree Uri and navigate to parent DocumentFile.
+        val authority = uri.authority ?: return emptyList()
+        val treeUri = try { DocumentsContract.buildTreeDocumentUri(authority, effectiveTreeId) } catch (_: Exception) { return emptyList() }
+        var doc = DocumentFile.fromTreeUri(activity, treeUri) ?: return emptyList()
+        // Parent relative to tree: parentDocId without the tree prefix.
+        val parentDocId = docId.substringBeforeLast('/', "")
+        if (parentDocId.isNotEmpty() && parentDocId != docId) {
+            // Parent is not the tree root itself — walk down from tree root.
+            // parentDocId is like primary:Folder/Sub ; treeDocId is primary:Folder
+            // Relative = Sub (or Sub/Nested).
+            val relative = if (parentDocId.startsWith("$effectiveTreeId/")) {
+                parentDocId.removePrefix("$effectiveTreeId/")
+            } else if (parentDocId == effectiveTreeId) {
+                ""
+            } else {
+                // Fallback: treat parentDocId as relative if it doesn't share prefix
+                // (happens with some providers).
+                parentDocId.substringAfter('/', "")
+            }
+            if (relative.isNotEmpty()) {
+                for (segment in relative.split('/')) {
+                    if (segment.isEmpty()) continue
+                    // Segment here is still encoded as "Sub" or "My Folder" — need to
+                    // match DocumentFile names (decoded). Use findFile which handles it.
+                    doc = doc.findFile(segment) ?: return emptyList()
+                }
+            }
+        }
+        if (!doc.isDirectory) return emptyList()
+        val children = doc.listFiles()
+        val subtitles = children.filter { it.isFile && it.name != null && SubtitleFormats.isSubtitleFile(it.name!!) }
+        if (subtitles.isEmpty()) return emptyList()
+        val videoCount = children.count { it.isFile && it.name != null && SubtitleFormats.isVideoFile(it.name!!) }
+        if (videoCount == 1 && subtitles.size == 1) {
+            val f = subtitles.first()
+            return listOf(f.uri to (f.name ?: ""))
         }
         val lowerBase = videoBase.lowercase()
         val prefixed = subtitles.filter { it.name!!.lowercase().startsWith("$lowerBase.") }
