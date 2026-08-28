@@ -1113,7 +1113,13 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
 
         let audioTracks = audioTrackMaps()
         let activeAudio = engine.audioTracks.first(where: { $0.id == engine.activeAudioTrackIndex })
-        let selectedAudio = engine.activeAudioTrackIndex ?? audioTracks.first(where: { ($0["selected"] as? Bool) == true })?["index"] as? Int ?? -1
+        // Emit the sequential flat index (array position) of the active track,
+        // matching Android's convention so the Dart side can look up
+        // `audioTracks[selectedAudioTrack]` (e.g. for the on-screen language).
+        let selectedAudio: Int = {
+            guard let active = engine.activeAudioTrackIndex else { return -1 }
+            return audioTracks.firstIndex(where: { ($0["index"] as? Int) == active }) ?? -1
+        }()
 
         let subtitleTracks = subtitleTrackMaps()
         let selectedSubtitle = engine.activeSubtitleTrackIndex ?? -1

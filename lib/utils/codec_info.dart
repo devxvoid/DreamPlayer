@@ -93,10 +93,12 @@ String formatAudioCodec(String? codec) {
   if (codec == null || codec.isEmpty) return 'Unknown';
   final c = codec.toLowerCase();
   const map = {
-    'eac3': 'E-AC3',
-    'ec3': 'E-AC3',
+    'eac3': 'E-AC-3',
+    'ec3': 'E-AC-3',
     'ac3': 'AC-3',
+    'ac-3': 'AC-3',
     'dts': 'DTS',
+    'dca': 'DTS',
     'dtshd': 'DTS-HD',
     'dts_hd': 'DTS-HD',
     'dtsx': 'DTS:X',
@@ -104,14 +106,18 @@ String formatAudioCodec(String? codec) {
     'truehd': 'TrueHD',
     'mlp': 'TrueHD',
     'aac': 'AAC',
+    'mp4a': 'AAC',
     'flac': 'FLAC',
+    'alac': 'ALAC',
     'opus': 'Opus',
     'vorbis': 'Vorbis',
     'mp3': 'MP3',
     'libmp3lame': 'MP3',
+    'pcm': 'PCM',
     'pcm_s16le': 'PCM',
     'pcm_s24le': 'PCM 24-bit',
     'pcm_f32le': 'PCM 32-bit float',
+    's302m': 'AES3',
   };
   return map[c] ?? codec.toUpperCase();
 }
@@ -175,18 +181,34 @@ String formatMedia3Audio(String? mime, String? codecs) {
   final primary = c.split(RegExp(r'[.\s/]')).first;
   const codecMap = {
     'dts': 'DTS',
+    'dca': 'DTS',
     'dts-hd': 'DTS-HD',
+    'dtshd': 'DTS-HD',
     'dtsx': 'DTS:X',
     'mlp': 'TrueHD',
     'truehd': 'TrueHD',
     'ac-3': 'AC-3',
-    'ec-3': 'E-AC3',
+    'ac3': 'AC-3',
+    'ec-3': 'E-AC-3',
+    'eac3': 'E-AC-3',
     'aac': 'AAC',
     'mp4a': 'AAC',
     'flac': 'FLAC',
+    'alac': 'ALAC',
     'opus': 'Opus',
     'vorbis': 'Vorbis',
     'mp3': 'MP3',
+    'pcm': 'PCM',
+    'pcm_s16le': 'PCM',
+    'pcm_s24le': 'PCM 24-bit',
+    'pcm_f32le': 'PCM 32-bit float',
+    's302m': 'AES3',
+    'wavpack': 'WavPack',
+    'tta': 'TTA',
+    'ape': 'Monkey\'s Audio',
+    'wmalossless': 'WMA Lossless',
+    'atrac': 'ATRAC',
+    'qdm2': 'QDesign',
   };
   final fromCodecs = codecMap[primary];
   if (fromCodecs != null) return fromCodecs;
