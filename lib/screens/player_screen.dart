@@ -35,6 +35,7 @@ import 'opensubtitles_sheet.dart';
 import '../utils/codec_info.dart';
 import '../utils/tv_helper.dart';
 import '../widgets/format_chip.dart';
+import 'player_error.dart';
 
 /// Whether the app is running under `flutter test`.
 const bool _inTests = bool.fromEnvironment('FLUTTER_TEST');
@@ -106,6 +107,15 @@ class _PlayerScreenState extends State<PlayerScreen>
   bool _transcodeRetried = false;
   bool _transcodeActive = false;
   String? _transcodeServerUrl;
+
+  /// Video-decode auto-fallback to the software codec: tried at most once per
+  /// video. Some devices' hardware H.265/HEVC decoders advertise 10-bit
+  /// Main10 capability but fail at runtime (`ERROR_CODE_DECODING_FAILED`),
+  /// while FFmpeg/software decode plays the same file fine (mpv/VLC do).
+  /// When that happens we transparently reopen in software and restore the
+  /// user's decoder mode after the file closes.
+  bool _swRetried = false;
+  DecoderMode? _decoderOverride;
 
   String? _liveVideoCodec;
   String? _liveVideoCodecRaw;
@@ -322,6 +332,9 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   Future<void> _openCurrent() async {
     final video = _current;
+    // A new video means a previous software-decode fallback was for the last
+    // file only — restore the user's original decoder mode now.
+    await _restoreDecoderOverride();
     _markedWatched = false;
     _autoPlayFired = false;
     _autoFetchFired = false;
@@ -440,12 +453,35 @@ class _PlayerScreenState extends State<PlayerScreen>
     return SidecarSubtitleService.instance.ensureLocal(video, resolved);
   }
 
-  /// Transient IO errors worth retrying (network blips).
-  static bool _isRetryableIoError(String code) =>
-      code == 'error_code_io_unspecified' ||
-      code == 'error_code_io_network_connection_failed' ||
-      code == 'error_code_io_network_connection_timeout' ||
-      code == 'error_code_timeout';
+  /// If the user picked a non-software decoder and the hardware path just
+  /// failed, switch to software once, reopen at the current position, and
+  /// remember the original mode so we can restore it on the next open or
+  /// when the screen is disposed.
+  void _trySoftwareDecodeFallback() {
+    if (_swRetried) return;
+    if (_decoderMode == DecoderMode.sw) return;
+    _swRetried = true;
+    _decoderOverride ??= _decoderMode;
+    _decoderMode = DecoderMode.sw;
+    unawaited(DecoderModeStore.save(DecoderMode.sw));
+    _error = 'Hardware decoder failed — retrying with software…';
+    setState(() {});
+    _reopenAt(_position, _duration);
+  }
+
+  /// Restores the user's original decoder mode after a software fallback
+  /// (called at the start of the next open and on dispose). No-op when no
+  /// override is active.
+  Future<void> _restoreDecoderOverride() async {
+    final orig = _decoderOverride;
+    _decoderOverride = null;
+    _swRetried = false;
+    if (orig != null && _decoderMode != orig) {
+      _decoderMode = orig;
+      await DecoderModeStore.save(orig);
+      if (mounted) setState(() {});
+    }
+  }
 
   /// Reopen the current video at [pos], resetting the retry counter on
   /// success so a later error starts fresh.
@@ -557,70 +593,10 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   /// Maps a native PlaybackException to something a user can act on.
-  String _friendlyError(ExoPlayerEvent e) {
-    final code = e.error ?? '';
-    switch (code) {
-      case 'error_code_io_bad_http_status':
-        final detail = e.errorMessage?.isNotEmpty == true
-            ? '\n${e.errorMessage}'
-            : '';
-        return 'Server returned an error status for this file$detail. The '
-            'source may have expired (e.g. a file handoff from a file '
-            'manager) — reopen it from its source and try again.';
-      case 'error_code_io_file_not_found':
-      case 'error_code_io_no_permission':
-        return 'The video file could not be accessed. It may have been '
-            'moved, deleted, or its access permission has expired — reopen '
-            'it from its source.';
-      case 'error_code_io_unspecified':
-        return 'Connection interrupted while playing. '
-            'The file may have been moved, the network may be unstable, or '
-            'the server may have timed out. Try playing the file again, or '
-            'check the connection to the source.';
-      case 'error_code_io_network_connection_failed':
-      case 'error_code_io_network_connection_timeout':
-      case 'error_code_timeout':
-        return 'Could not reach the server. Check your network connection '
-            'and try again.';
-      case 'error_code_io_cleartext_not_permitted':
-        return 'Plain HTTP is blocked for this source. Use HTTPS if the '
-            'server supports it.';
-      case 'UnsupportedDolbyVisionProfile5':
-        return e.errorMessage?.isNotEmpty == true
-            ? e.errorMessage!
-            : 'This device cannot decode Dolby Vision Profile 5. Play the '
-                  'HDR10 or SDR version of the file, or watch it on a Dolby '
-                  'Vision-capable device.';
-      case 'error_code_unsupported_audio':
-        return 'The audio format is not supported on this device. '
-            'Try a different audio track if the file has multiple, '
-            'or play a version with a supported audio codec (AAC, AC3, E-AC3, DTS, FLAC).';
-      case 'error_code_unsupported_video':
-        return 'The video format is not supported on this device. '
-            'Common unsupported formats: MPEG-2, VC-1, H.265 on older devices. '
-            'Try a re-encoded version (H.264/AVC or hardware-supported HEVC).';
-      case 'error_code_unsupported_format':
-      case 'error_code_unsupported_type':
-        return 'This file format is not supported. The container (e.g. .m2ts, .ts, .vob) '
-            'may use codecs this device cannot decode. Try a remuxed or re-encoded version.';
-      case 'error_code_undecodable':
-        return 'The file could not be decoded. It may be corrupt, use an '
-            'unsupported codec, or have DRM protection.';
-      case 'error_code_decoder_init_failed':
-      case 'error_code_decoder_query_failed':
-        return 'Hardware decoder initialization failed. '
-            'Try a file with a codec supported by this device\'s hardware '
-            '(H.264, HEVC, VP9).';
-      case 'error_code_audio_track_init_failed':
-        return 'Audio output could not be initialized. '
-            'Check if another app is using the audio system, or try a different audio track.';
-      default:
-        final detail = e.errorMessage?.isNotEmpty == true
-            ? '\n${e.errorMessage}'
-            : '';
-        return 'Playback failed ($code).$detail';
-    }
-  }
+  /// Media3 exposes these via `errorCodeName` as `ERROR_CODE_*` strings.
+  /// The mapping itself lives in [friendlyPlayerError] so it can be
+  /// unit-tested in isolation.
+  String _friendlyError(ExoPlayerEvent e) => friendlyPlayerError(e);
 
   void _onExoEvent(ExoPlayerEvent e) {
     final wasPlaying = _playing;
@@ -638,7 +614,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       // Auto-retry on transient IO errors (network blip). Uses exponential
       // backoff: 2s, 4s, 8s, 16s, 32s — gives a flaky NAS / Wi-Fi enough
       // time to recover before we give up.
-      if (_isRetryableIoError(code) &&
+      if (isRetryableIoError(code) &&
           _ioRetries < _maxIoRetries &&
           !_retrying) {
         _ioRetries++;
@@ -666,6 +642,14 @@ class _PlayerScreenState extends State<PlayerScreen>
           !JellyfinClient.isTranscodeUri(_current.uri)) {
         _transcodeRetried = true;
         _tryTranscodeFallback(friendly);
+        return;
+      }
+      // Video decoder failed (commonly: a device that advertises HEVC Main10
+      // support in its hardware decoder but then errors mid-playback). VLC
+      // and mpv use FFmpeg software decode and play these files fine, so we
+      // reopen once with software decode and let the user keep watching.
+      if (isVideoDecodeError(code)) {
+        _trySoftwareDecodeFallback();
         return;
       }
       _error = friendly;
@@ -1106,6 +1090,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     _swipeOverlayTimer?.cancel();
     _singleTapTimer?.cancel();
     _dtSeekTimer?.cancel();
+    // Put the user's original decoder mode back if we forced software for the
+    // current file's hardware-decoder failure.
+    unawaited(_restoreDecoderOverride());
     _saveResume(_position);
     _stopTranscodeJob();
     // Restore system brightness so it doesn't stick after the player closes.

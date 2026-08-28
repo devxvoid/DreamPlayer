@@ -3,6 +3,13 @@
 All notable changes to DreamPlayer are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## 0.3.7
+
+### Fixed
+
+- **Raw "Playback failed (ERROR_CODE_…)" errors are now actionable** — the Dart friendly-error mapping matched snake_case codes (`error_code_io_*`, `error_code_decoder_init_failed`, …) that Media3 never emits, so every real `PlaybackException` fell through to the generic "Playback failed (CODE).message" string. The mapping is now driven off Media3's actual `errorCodeName` strings (`ERROR_CODE_IO_*`, `ERROR_CODE_DECODING_FAILED`, `ERROR_CODE_PARSING_*`, `ERROR_CODE_AUDIO_TRACK_*`, plus the custom `UnsupportedDolbyVisionProfile5`), covering network/server timeouts, expired handoff URLs, file-not-found/no-permission, all decoder init/query/format failures, audio-track init failures, container-parse errors, and the cleartext-not-permitted case. The mapping is extracted to `lib/screens/player_error.dart` and unit-tested in `test/player_error_test.dart` (9 new tests). Same fix applied to `_isRetryableIoError` so the existing exponential-backoff auto-retry actually fires on the right codes.
+- **Hardware-decoder failure (HEVC Main10 on MediaTek G81 / budget chips) now auto-falls back to software decode, like VLC and mpv** — some devices' hardware H.265/HEVC decoders advertise 10-bit Main10 support but then fail at runtime with `ERROR_CODE_DECODING_FAILED`; the same file plays fine through FFmpeg software decode (verified on Infinix Hot 50i, MediaTek G81: VLC/mpv play `Strike the Blood Final [Ma10p_1080p][x265_flac].mkv` smoothly). On a video-decode error the player now transparently switches `decoderMode` to `sw`, reopens at the current position (you see a brief "Hardware decoder failed — retrying with software…" message), and restores the user's original decoder mode when the player closes or a different file opens. The override is per-file only, so the next video returns to your preferred mode automatically. Triggered for `ERROR_CODE_DECODING_FAILED`, `ERROR_CODE_DECODER_INIT_FAILED`, `ERROR_CODE_DECODER_QUERY_FAILED`, `ERROR_CODE_DECODING_FORMAT_UNSUPPORTED`, `ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES`, and `ERROR_CODE_DECODING_RESOURCES_RECLAIMED`. The decoder chip in the ⓘ info sheet shows "· software" so the user can see the fallback engaged.
+
 ## 0.3.6
 
 ### Fixed
