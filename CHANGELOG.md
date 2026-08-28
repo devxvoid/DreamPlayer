@@ -3,6 +3,22 @@
 All notable changes to DreamPlayer are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## 0.3.5
+
+### Changed
+
+- **Top-chip row is now HDR + audio only** — persistent player chips show only HDR format and audio codec; all other diagnostics (resolution, decoder, transcode, boost, spatial) live exclusively in the ⓘ info sheet. Removes persistence clutter and prevents overlap in PiP.
+- **Network activity / bandwidth indicator removed** — the live speed/buffer readout on the player and in the ⓘ sheet was dropped per user request.
+
+### Fixed
+
+- **iOS audio track selection on network sources (WebDAV / FTP / SFTP / Jellyfin)** — `AetherEngine` cannot re-probe the container in place when the reader is a loopback/`ByteRangeSource` (WebDAV auth, FTP, Jellyfin direct-play). Selection now proactively reloads the session from the current position, waits for `.playing`/`.paused` (engine has no `.ready` case — `PlaybackState` is `.idle/.loading/.seeking/.playing/.paused/.ended/.error`), re-applies the chosen track via flat→native `id` conversion, and emits. Verified on Jellyfin/WebDAV/FTP.
+- **iOS audio track played the opposite language (English↔Korean swapped)** — `audioTrackMaps` was emitting native `id` as `index` while Dart treated `index` as flat position, so `t.index == selected` and `engine.selectAudioTrack(index:)` were crossed. iOS now mirrors Android's contract: `index = flat position`, `selectedAudioTrack = flat position` (`firstIndex(where: id == active)`), and `engineAudioId(forFlatPosition:)` converts at the engine boundary (`selectAudioTrack` expects native `id`). Picking English now plays English.
+- **iOS audio chip shows proper codec + language** — FFmpeg/AetherEngine tags like `dca`, `ac3`, `eac3`, `alac` now map to `DTS`/`AC-3`/`E-AC3`/`ALAC` etc., and the live chip appends `· <Language>` via the selected track's language (with `und`/`zxx`/`mul`/`unknown` treated as empty).
+- **SMB mid-playback `io_unspecified` → `EOFException`** — `SmbDataSource` left a permanent hole when a prefetch read failed (`nextWritePos` already advanced) and set `bufEof` on any `END_OF_INPUT` even with pending holes, causing `MatroskaExtractor` to throw `EOFException` mid-file. Now rewinds `nextWritePos` on failure with handle reconnect, tracks `eofAt`/`fatalError` with 12-strike guard, and only sets `bufEof` when the contiguous frontier reaches `eofAt`. Verified on real NAS playback.
+- **Network-share sidecar subtitles** — prioritized `external (sidecar) > server external > embedded`, with network-share discovery for SMB/WebDAV/FTP/Jellyfin/CX `content://` (cached to `file://`). Added `docs/tutorials/play-smb-nas-videos.md` update.
+- **iOS `indicatedBitrate` type** — `AVPlayerItemAccessLogEvent.indicatedBitrate` is `Double` (`bits/sec`), not `Int64`.
+
 ## 0.3.4
 
 ### Fixed
