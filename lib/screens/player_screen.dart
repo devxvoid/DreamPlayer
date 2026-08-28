@@ -118,6 +118,11 @@ class _PlayerScreenState extends State<PlayerScreen>
   HdrFormat _liveHdr = HdrFormat.sdr;
   String? _liveDecoderName;
   bool? _isHwDecoder;
+  /// Live network telemetry pushed by the native player (0 for local files).
+  int _liveBandwidthBytesPerSec = 0;
+  int _liveBandwidthPeakBytesPerSec = 0;
+  int _liveBandwidthBytesDownloaded = 0;
+  String _liveSourceScheme = '';
   List<ExoAudioTrack> _audioTracks = const [];
   int _selectedAudioTrackIndex = -1;
 
@@ -140,12 +145,9 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// video.
   bool _inPip = false;
 
-  /// Format chips flash for a few seconds when a video starts, then vanish —
-  /// the persistent badges used to leak into the pip window and clutter long
-  /// watching sessions. The ⓘ top-bar button re-opens them as an info sheet.
-  bool _chipsVisible = false;
-  Timer? _chipsTimer;
-  bool _chipsFlashedForOpen = false;
+  /// Format chips stay visible under the title while controls are showing.
+  /// Pip hides them (floating window = video only). The ⓘ top-bar button
+  /// opens a richer info sheet for the full decoder / network details.
 
   VideoFitMode _fitMode = VideoFitMode.fit;
 
@@ -324,8 +326,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     _autoPlayFired = false;
     _autoFetchFired = false;
     _readingAutoSelected = false;
-    // Chips flash again for each newly opened video.
-    _chipsFlashedForOpen = false;
     // A-B loop points are per-video.
     _abA = null;
     _abB = null;
@@ -630,25 +630,23 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (e.isHwDecoder != null) _isHwDecoder = e.isHwDecoder;
     _liveSpatial = e.spatialAudio;
     _liveBass = e.bassBoost;
+    _liveBandwidthBytesPerSec = e.bandwidthBytesPerSec;
+    _liveBandwidthPeakBytesPerSec = e.bandwidthPeakBytesPerSec;
+    _liveBandwidthBytesDownloaded = e.bandwidthBytesDownloaded;
+    _liveSourceScheme = e.sourceScheme;
     if (e.inPip != _inPip) {
       _inPip = e.inPip;
       if (_inPip) {
-        // Floating window shows ONLY the video: drop every overlay.
+        // Floating window shows ONLY the video: drop every overlay. The
+        // chip row lives inside the controls overlay, so hiding controls
+        // hides the chips automatically.
         _hideTimer?.cancel();
-        _chipsTimer?.cancel();
-        _chipsVisible = false;
         _controlsVisible = false;
       } else {
         // Expanding back restores the controls.
         _controlsVisible = true;
         _restartHideTimer();
       }
-    }
-    // Flash the format chips once per open, when the metadata is actually
-    // known (first STATE_READY).
-    if (!_chipsFlashedForOpen && e.state == _nativeStateReady && !_inPip) {
-      _chipsFlashedForOpen = true;
-      _flashChips();
     }
     _audioTracks = e.audioTracks;
     _selectedAudioTrackIndex = e.selectedAudioTrack;
@@ -1023,7 +1021,6 @@ class _PlayerScreenState extends State<PlayerScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _hideTimer?.cancel();
-    _chipsTimer?.cancel();
     _sleepTicker?.cancel();
     _swipeOverlayTimer?.cancel();
     _singleTapTimer?.cancel();
@@ -1062,19 +1059,6 @@ class _PlayerScreenState extends State<PlayerScreen>
         }
       });
     }
-  }
-
-  /// Shows the format chips for a few seconds, then fades them out. Fired
-  /// once per open on the first STATE_READY (metadata actually known); the
-  /// pip window and long sessions keep a clean picture afterwards.
-  void _flashChips() {
-    _chipsTimer?.cancel();
-    if (!mounted) return;
-    setState(() => _chipsVisible = true);
-    _chipsTimer = Timer(const Duration(seconds: 5), () {
-      _chipsTimer = null;
-      if (mounted) setState(() => _chipsVisible = false);
-    });
   }
 
   void _restartHideTimer() {
@@ -1442,26 +1426,42 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
-  /// Read-only "Video info" sheet behind the top-bar ⓘ button — the format
-  /// chips only flash for a few seconds at video start, so this is where the
-  /// details stay reachable (including the full decoder component name that
-  /// used to live in a chip tooltip).
+  /// Read-only "Video info" sheet behind the top-bar ⓘ button. Surfaces
+  /// every detail the chip row can show, plus the full source URL, live
+  /// network speed (peak + current), bytes downloaded, audio channel /
+  /// sample-rate, chapter count, full decoder path, and file size.
   Future<void> _openVideoInfoSheet() async {
     if (_touchLocked) return;
     _showControls();
     final video = _current;
+    // Resolve a few helpers outside the rows list to keep the literal tidy.
+    final sourceLabel = _sourceLabel(video);
+    final sourceUrl = (video.uri?.isNotEmpty == true)
+        ? video.uri!
+        : (video.path?.isNotEmpty == true ? video.path! : '');
+    final isNetwork = _liveSourceScheme == 'http' || _liveSourceScheme == 'https';
+    final bwCurrent = isNetwork
+        ? _formatBytesPerSec(_liveBandwidthBytesPerSec)
+        : '— (local)';
+    final bwPeak = isNetwork && _liveBandwidthPeakBytesPerSec > 0
+        ? _formatBytesPerSec(_liveBandwidthPeakBytesPerSec)
+        : null;
+    final bwTotal = isNetwork && _liveBandwidthBytesDownloaded > 0
+        ? _formatBytes(_liveBandwidthBytesDownloaded)
+        : null;
+    final fileSize = (video.sizeBytes ?? 0) > 0 ? _formatBytes(video.sizeBytes!) : null;
+    final speedLabel = (_playbackSpeed - 1.0).abs() > 0.001
+        ? '${_playbackSpeed.toStringAsFixed(2)}×'
+        : null;
     final rows = <({String label, String value})>[
       (label: 'Title', value: video.title),
+      (label: 'Source', value: sourceLabel),
+      if (sourceUrl.isNotEmpty && sourceUrl != video.title)
+        (label: 'URL', value: sourceUrl),
+      if (fileSize != null) (label: 'File size', value: fileSize),
       (label: 'HDR', value: _hdrLabel),
       if (_videoCodecInfoLabel != null)
         (label: 'Video', value: _videoCodecInfoLabel!),
-      if (_audioInfoLabel != null || _liveAudioPassthrough)
-        (
-          label: 'Audio',
-          value: _liveAudioPassthrough
-              ? '${_audioInfoLabel ?? "Audio"} · Passthrough'
-              : _audioInfoLabel!,
-        ),
       if (_resolutionInfoLabel != null)
         (label: 'Resolution', value: _resolutionInfoLabel!),
       if (Platform.isAndroid && _liveDecoderName != null)
@@ -1469,10 +1469,25 @@ class _PlayerScreenState extends State<PlayerScreen>
           label: 'Decoder',
           value: '$_liveDecoderName${(_isHwDecoder ?? true) ? " · hardware" : " · software"}',
         ),
+      if (_audioInfoLabel != null || _liveAudioPassthrough)
+        (
+          label: 'Audio',
+          value: _liveAudioPassthrough
+              ? '${_audioInfoLabel ?? "Audio"} · Passthrough'
+              : _audioInfoLabel!,
+        ),
+      if (_liveAudioChannelCount != null && _liveAudioChannelCount! > 0)
+        (
+          label: 'Audio ch.',
+          value: '$_liveAudioChannelCount ch',
+        ),
       if (_transcodeActive ||
           video.isTranscoded ||
           JellyfinClient.isTranscodeUri(video.uri ?? ''))
         (label: 'Stream', value: 'Server transcoding'),
+      if (isNetwork) (label: 'Network', value: bwCurrent),
+      if (bwPeak != null) (label: 'Peak speed', value: bwPeak),
+      if (bwTotal != null) (label: 'Bytes read', value: bwTotal),
       if (Platform.isAndroid && _liveSpatial == 'on')
         (label: 'Spatial audio', value: 'On'),
       if (Platform.isAndroid && _audioBoost > 1.01)
@@ -1480,6 +1495,9 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (Platform.isAndroid && _nightMode) (label: 'Night mode', value: 'On'),
       if (Platform.isAndroid && _liveBass > 0)
         (label: 'Bass boost', value: '$_liveBass/3'),
+      if (speedLabel != null) (label: 'Speed', value: speedLabel),
+      if (_chapters.isNotEmpty)
+        (label: 'Chapters', value: '${_chapters.length}'),
     ];
     await showModalBottomSheet<void>(
       context: context,
@@ -3015,6 +3033,62 @@ class _PlayerScreenState extends State<PlayerScreen>
     return '${two(m)}:${two(s)}';
   }
 
+  /// Pretty-print a bytes/sec value as a chip-friendly speed: "5.2 MB/s",
+  /// "780 KB/s", "—", etc. Used by the live network chip and the ⓘ sheet.
+  String _formatBytesPerSec(int bytesPerSec) {
+    if (bytesPerSec <= 0) return '—';
+    const kb = 1024;
+    const mb = kb * 1024;
+    const gb = mb * 1024;
+    if (bytesPerSec >= gb) {
+      return '${(bytesPerSec / gb).toStringAsFixed(2)} GB/s';
+    }
+    if (bytesPerSec >= mb) {
+      final v = bytesPerSec / mb;
+      return v >= 10
+          ? '${v.toStringAsFixed(0)} MB/s'
+          : '${v.toStringAsFixed(1)} MB/s';
+    }
+    if (bytesPerSec >= kb) {
+      return '${(bytesPerSec / kb).toStringAsFixed(0)} KB/s';
+    }
+    return '$bytesPerSec B/s';
+  }
+
+  /// Pretty-print a byte count for the ⓘ sheet "Bytes read" row.
+  String _formatBytes(int bytes) {
+    if (bytes <= 0) return '0 B';
+    const kb = 1024;
+    const mb = kb * 1024;
+    const gb = mb * 1024;
+    if (bytes >= gb) return '${(bytes / gb).toStringAsFixed(2)} GB';
+    if (bytes >= mb) return '${(bytes / mb).toStringAsFixed(1)} MB';
+    if (bytes >= kb) return '${(bytes / kb).toStringAsFixed(0)} KB';
+    return '$bytes B';
+  }
+
+  /// Human-readable source label for the ⓘ sheet. Matches the
+  /// PlaybackSource badge in library cards.
+  String _sourceLabel(VideoItem video) {
+    final uri = video.uri ?? '';
+    final scheme = _liveSourceScheme;
+    if (scheme == 'http' || scheme == 'https') {
+      if (uri.contains('Jellyfin') || uri.toLowerCase().contains('jellyfin')) {
+        return 'Jellyfin (HTTP)';
+      }
+      return uri.startsWith('http') ? 'Network (HTTP)' : 'WebDAV';
+    }
+    if (scheme == 'file' || scheme.isEmpty) {
+      return 'Local file';
+    }
+    if (scheme == 'content') return 'Document (SAF)';
+    if (scheme == 'ftp' || scheme == 'sftp') return 'FTP/SFTP';
+    if (scheme.startsWith('dreamplayersmb')) return 'SMB';
+    if (scheme.startsWith('dreamplayerwebdav')) return 'WebDAV';
+    if (scheme == 'asset') return 'App asset';
+    return scheme;
+  }
+
   /// Horizontal-swipe seek preview: timestamp pill showing where the finger
   /// will land (and by how much it moves).
   Widget _buildSeekPreview() {
@@ -3055,8 +3129,52 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
   }
 
-  /// HDR shown on the chip: prefer the metadata hint (authoritative for
-  /// Dolby Vision), falling back to live detection when metadata is silent.
+  /// Build the "Network" chip shown under the title. Three modes:
+  ///   1. Local files (file://, content://) → green "Local" badge.
+  ///   2. Network sources (http/https) with a live speed → live "5.2 MB/s".
+  ///   3. Other network sources (SMB / WebDAV / FTP / Jellyfin mDNS) →
+  ///      a short label like "SMB" / "WebDAV" / "Jellyfin" — the speed is
+  ///      not measurable (FFmpeg custom sources, mDNS-discovered streams).
+  Widget? _buildNetworkChip(VideoItem video) {
+    final scheme = _liveSourceScheme;
+    final hasLiveSpeed = (scheme == 'http' || scheme == 'https') &&
+        _liveBandwidthBytesPerSec > 0;
+    if (hasLiveSpeed) {
+      return Tooltip(
+        message:
+            'Live network speed — peak ${_formatBytesPerSec(_liveBandwidthPeakBytesPerSec)}',
+        child: FormatChip(
+          label: _formatBytesPerSec(_liveBandwidthBytesPerSec),
+          color: const Color(0xFF42A5F5),
+        ),
+      );
+    }
+    if (scheme == 'http' || scheme == 'https') {
+      // HTTP source without a measured speed yet (engine still loading, or
+      // iOS FFmpeg custom source). Show the source type for clarity.
+      final label = (video.uri ?? '').toLowerCase().contains('jellyfin')
+          ? 'Jellyfin'
+          : 'HTTP';
+      return FormatChip(label: label, color: const Color(0xFF42A5F5));
+    }
+    if (scheme == 'file' || scheme == 'content' || scheme == 'asset' || scheme.isEmpty) {
+      return const FormatChip(label: 'Local', color: Color(0xFF66BB6A));
+    }
+    if (scheme == 'ftp' || scheme == 'sftp') {
+      return const FormatChip(label: 'FTP/SFTP', color: Color(0xFFAB47BC));
+    }
+    if (scheme.startsWith('dreamplayersmb')) {
+      return const FormatChip(label: 'SMB', color: Color(0xFF42A5F5));
+    }
+    if (scheme.startsWith('dreamplayerwebdav')) {
+      return const FormatChip(label: 'WebDAV', color: Color(0xFFFF7043));
+    }
+    if (scheme == 'tree' || scheme == 'document') {
+      return const FormatChip(label: 'SAF', color: Color(0xFF66BB6A));
+    }
+    return FormatChip(label: scheme, color: const Color(0xFF90A4AE));
+  }
+
   HdrFormat get _effectiveHdr {
     if (_current.hdrFormat != HdrFormat.sdr) return _current.hdrFormat;
     if (_liveHdr != HdrFormat.sdr) return _liveHdr;
@@ -3215,6 +3333,18 @@ class _PlayerScreenState extends State<PlayerScreen>
             child: FormatChip(label: 'Spatial', color: const Color(0xFF4DB6AC)),
           )
         : null;
+    // Network chip: live bandwidth for http/https sources ("5.2 MB/s"),
+    // "Local" for file/content, "SMB/WebDAV/FTP/Jellyfin" for the rest. Always
+    // shown — confirms the source type at a glance even when there's no
+    // measured speed (e.g. the FFmpeg custom-source path on iOS).
+    final networkChip = _buildNetworkChip(video);
+    // Speed chip: only when the user has changed playback speed from 1×.
+    final speedChip = (_playbackSpeed - 1.0).abs() > 0.001
+        ? FormatChip(
+            label: '${_playbackSpeed.toStringAsFixed(2).replaceAll(RegExp(r'0+$'), '').replaceAll(RegExp(r'\.$'), '')}×',
+            color: const Color(0xFF80CBC4),
+          )
+        : null;
     final chips = [
       hdrChip,
       ?videoChip,
@@ -3222,6 +3352,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       ?resolutionChip,
       ?decoderChip,
       ?transcodeChip,
+      ?networkChip,
+      ?speedChip,
       ?boostChip,
       ?nightChip,
       ?spatialChip,
@@ -3557,20 +3689,13 @@ class _PlayerScreenState extends State<PlayerScreen>
                         ),
                         if (chips.isNotEmpty) ...[
                           const SizedBox(height: 4),
-                          AnimatedOpacity(
-                            duration: const Duration(milliseconds: 300),
-                            opacity: _chipsVisible ? 1 : 0,
-                            child: IgnorePointer(
-                              ignoring: !_chipsVisible,
-                              child: Padding(
-                                padding:
-                                    const EdgeInsets.symmetric(horizontal: 8),
-                                child: Wrap(
-                                  spacing: 8,
-                                  runSpacing: 4,
-                                  children: chips,
-                                ),
-                              ),
+                          Padding(
+                            padding:
+                                const EdgeInsets.symmetric(horizontal: 8),
+                            child: Wrap(
+                              spacing: 8,
+                              runSpacing: 4,
+                              children: chips,
                             ),
                           ),
                         ],

@@ -446,6 +446,23 @@ class ExoPlayerView(
                 ) {
                     // Keep last name until next init so the badge doesn't flicker.
                 }
+
+                /// Media3 reports a smoothed bandwidth estimate (bytes/sec) every
+                /// few seconds while it loads data. We capture it for the live
+                /// "Network" chip and accumulate total bytes for the ⓘ sheet.
+                override fun onBandwidthEstimate(
+                    eventTime: AnalyticsListener.EventTime,
+                    totalBytesLoaded: Long,
+                    bandwidthEstimate: Long,
+                ) {
+                    bandwidthBytesDownloaded = totalBytesLoaded
+                    bandwidthBytesPerSec = bandwidthEstimate
+                    if (bandwidthEstimate > bandwidthPeakBytesPerSec) {
+                        bandwidthPeakBytesPerSec = bandwidthEstimate
+                    }
+                    bandwidthLastSampleMs = android.os.SystemClock.elapsedRealtime()
+                    handler.post { emit() }
+                }
             })
         }
 
@@ -469,6 +486,21 @@ class ExoPlayerView(
     /// Auto-paired sideloaded subtitle: `(uri, display label)`.
     private var currentSubtitle: Pair<String, String>? = null
     private var subtitleOn = false
+
+    // --- Network bandwidth telemetry (Media3 AnalyticsListener) ---
+    /// Total bytes downloaded since the current item opened.
+    @Volatile private var bandwidthBytesDownloaded: Long = 0L
+    /// Most recent bandwidth sample, bytes/sec (smoothed by Media3). Shown
+    /// live in the top-bar chip.
+    @Volatile private var bandwidthBytesPerSec: Long = 0L
+    /// Highest bytes/sec seen this session, for the ⓘ sheet.
+    @Volatile private var bandwidthPeakBytesPerSec: Long = 0L
+    /// Monotonic ms timestamp of the most recent bandwidth sample.
+    @Volatile private var bandwidthLastSampleMs: Long = 0L
+    /// URI scheme of the current source, captured at open. Used to gate
+    /// the network chip: only http/https show a live speed; file/content
+    /// URIs show "Local".
+    @Volatile private var currentUriScheme: String = ""
 
     private var sink: EventChannel.EventSink? = null
 
@@ -1032,6 +1064,19 @@ class ExoPlayerView(
                     hdr10Content = false
                     chapters = emptyList()
                     currentVideoDecoderName = null
+                    // Reset bandwidth telemetry for the new item.
+                    bandwidthBytesDownloaded = 0L
+                    bandwidthBytesPerSec = 0L
+                    bandwidthPeakBytesPerSec = 0L
+                    bandwidthLastSampleMs = 0L
+                    // Capture the source URI scheme so the top-bar chip can
+                    // decide between "Local" and a live http(s) speed.
+                    val resolvedUri = when {
+                        !uri.isNullOrEmpty() -> android.net.Uri.parse(uri)
+                        !path.isNullOrEmpty() -> android.net.Uri.fromFile(java.io.File(path))
+                        else -> null
+                    }
+                    currentUriScheme = resolvedUri?.scheme?.lowercase() ?: ""
                     // Reset any pinch-zoom from a previous session.
                     playerView.zoomScale = 1f
                     playerView.applyForced()
@@ -1703,6 +1748,15 @@ class ExoPlayerView(
         map["bassBoost"] = bassBoostLevel
         map["spatialAudio"] = spatialStatus()
         map["inPip"] = inPip
+        // Bandwidth telemetry for the live "Network" chip and ⓘ sheet. Gated
+        // on http/https so local files report zero (not 0 B/s from "no
+        // bandwidth event" — the chip would otherwise show a stale 0 B/s
+        // for SMB/WebDAV which don't fire Media3 bandwidth events).
+        val isNetwork = currentUriScheme == "http" || currentUriScheme == "https"
+        map["bandwidthBytesPerSec"] = if (isNetwork) bandwidthBytesPerSec else 0L
+        map["bandwidthPeakBytesPerSec"] = if (isNetwork) bandwidthPeakBytesPerSec else 0L
+        map["bandwidthBytesDownloaded"] = if (isNetwork) bandwidthBytesDownloaded else 0L
+        map["sourceScheme"] = currentUriScheme
         if (chapters.isNotEmpty()) {
             map["chapters"] = chapters.map {
                 mapOf(
