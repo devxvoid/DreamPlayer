@@ -533,8 +533,37 @@ Run DreamPlayer on an Android TV box/panel as a real 10-foot app. **Status: Phas
 3. ~~Horizontal-swipe seek~~ — DONE (2026-08-22, time-only pill; frame thumbnails impossible for DV/HDR via MMR).
 4. Android release signing (deferred — see CI/Deployment).
 5. ~~Spatial audio chip (Android)~~ — DONE (2026-08-25, `76f68e3`): teal **"Spatial"** chip in the player top bar when the platform Spatializer is actually engaged — `spatialStatus()` in `ExoPlayerView.kt` returns on/available/unavailable from `AudioManager.spatializer` (`isAvailable` + `isEnabled` + multichannel track, API 33-gated; minSdk stays 21). `canBeSpatialized(attrs, format)` with a mapped channel mask confirms engagement; `OnSpatializerStateChangedListener` re-emits when routing/toggle changes mid-playback (registered once per open, removed on dispose). Dart: `ExoPlayerEvent.spatialAudio` → chip gated on `Platform.isAndroid && _liveSpatial == 'on'`. **API gotcha**: `getSpatializerType()`/`SPATIALIZER_TYPE_*` are hidden SystemApi despite floating docs — verify against the SDK jar (`javap android/media/Spatializer.class`); listener callbacks take `(Spatializer, boolean)`. iOS native AVPlayer path gets Apple Spatial Audio free for Atmos; FFmpeg custom-source path would need `AVAudioEngine` + `AVAudioEnvironmentNode` (deferred). Fire TV passthrough already delivers real Atmos to the AVR. **Rejected**: custom HRTF rendering (Resonance Audio etc.) — reimplements what both OSes do natively.
+6. **"Play with external app" (2026-08-28, user feedback, NOT YET IMPLEMENTED — implementation deferred until the user wants it shipped)**: a user replied to a release post with *"the app is good for organizing files, but does not play because it uses Media 3. It's better to include a powerful player like MPV and also the option to allow the use of an external player"*. The user has already replied to that feedback themselves. When this is implemented, it should be an **Android-only `Intent.ACTION_VIEW` chooser** added as a row in the player ⋮ sheet — fires `Intent.createChooser(intent, "Play with…")` with the current video's URI (`file://` for local paths, `content://` for SAF/CX-Explorer hand-offs, `http(s)://` for Jellyfin/WebDAV/URL playback) and a `video/*` MIME. The OS shows a chooser of every installed player that registers for video (MX Player, VLC, Nova, Just Player, Kodi, Plex, …). No engine work, no media3 changes. **iOS is intentionally out of scope**: iOS sandboxing prevents one app from launching another's video player — `UIActivityViewController` can hand a file off to Files/AirDrop/save, but it cannot launch MX Player or VLC, so there is no equivalent feature. Document the limitation in any user-facing reply. The "MPV" half of the feedback is **out of scope** (see "Player engine choice" below).
 
 ~~Rejected by user (2026-08-22)~~ — **implemented 2026-08-26 at the user's request**; see "Picture-in-Picture" in Implemented features.
+
+### Player engine choice (2026-08-28, user feedback response)
+
+A user feedback asked why we use Media3 instead of "a powerful player like MPV". This is the canonical answer if the same question comes up again — keep it in release notes and replies.
+
+**TL;DR**: Media3 is the *correct* engine for this project. MPV is a regression, not an upgrade. External-player handoff is a separate, low-cost option that addresses the spirit of the feedback (let the user pick).
+
+**Why Media3 is the right choice (not a workaround)**
+
+- **Media3 is what every serious Android player uses today.** Google's official, actively-maintained playback engine — the successor to ExoPlayer 2.x. It powers YouTube, Google Play Movies, the official Android sample players, and (under the hood) Nova Video Player, Just Player, Plex, and most pro-tier Android players that aren't a VLC/fork. "Media 3" is a *brand*, not a limitation; the same way "FFmpeg" or "V8" is a brand.
+- **We need hardware Dolby Vision, and Media3 is the only Flutter-friendly path that delivers it.** Our `#1` project goal is "Dolby Vision playback where the display supports it" — verified on-device (OnePlus CPH2573): the DV P8 test file decodes on Qualcomm's `c2.qti.dv.decoder` at 4K60 with zero dropped frames and real HDR reaches the panel via the hybrid-composition `SurfaceView`. (See "DOLBY VISION PLAYBACK WORKS" at the top of this file for the verification trail.)
+- **Hardware HDR pipeline.** Media3 + the hybrid-composition `PlatformViewLink` + the `c2.qti.hevc.decoder` + `applyHdrHeadroom` window machinery composes video as `BT2020_ITU_PQ` with `hdr metadata types=9` (DV) / `3` (HDR10+/HDR10) on the physical display — verified via `dumpsys SurfaceFlinger`. This is the entire reason we built the in-app native player instead of using a Flutter texture.
+
+**Why we already tried MPV and removed it (`media_kit`/`libmpv`)**
+
+Documented in "Playback research notes" above; the short version:
+
+1. **Dolby Vision RPU parsing fails.** mpv v0.36 + FFmpeg 6.0 cannot read the DOVI configuration record in DV P8 MKVs. Result: pink/green output. (mpv PR #16818 was the upstream fix attempt; it never landed for our FFmpeg version.)
+2. **No HDR to the panel.** `media_kit` renders into a Flutter texture. Flutter textures have **no HDR path on any platform** (media-kit issue #615). The decoded HDR10 buffer is tone-mapped to SDR before the panel ever sees it. So even when mpv *decodes* HDR10 correctly, the user sees washed-out colors.
+3. **4K60 performance.** `hwdec:no` (the only setting that gives correct colors with mpv) is software decode — too slow for 4K60 on Snapdragon 678. `gpu-next` is a frozen frame because media-kit renders via the legacy `gpu` path.
+
+So adding mpv back would re-break **the thing the user came here for** (real DV + HDR on supported panels). The exit interview was: keep Media3 + native SurfaceView for DV/HDR; ship native FFmpeg audio extension for DTS/DTS-HD/TrueHD/FLAC; that's the same engine stack Nova Video Player uses (ExoPlayer + FFmpeg audio).
+
+**iOS side is AetherEngine, not MPV either.** AetherEngine is AVPlayer + FFmpeg demux/decode + native HDR/DV passthrough for Apple containers. Same trade-off: native AVPlayer for the HDR/DV fast path, FFmpeg only where AVPlayer is too limited (WebDAV, custom containers). iOS has no MPV port that we trust for this scope.
+
+**If MPV is ever added back, it must be opt-in and behind a clear warning.** A future opt-in "MP engine" toggle could route SDR/SDR-HEVC files through libmpv for users who want its filter/subtitle power — but DV/HDR10/HDR10+/HLG files MUST stay on Media3 + native SurfaceView or the panel stops receiving HDR. There is no way to get both from the same engine on Android today.
+
+**The "external player" half of the feedback IS implementable cheaply.** See item 6 in the Player feature backlog above. When we want to ship it: an Android `Intent.ACTION_VIEW` chooser in the player ⋮ sheet, iOS is out of scope (sandbox limitation).
 
 ### iOS monetization — Apple Developer + IAP paywall (planned, 2026-08-25)
 

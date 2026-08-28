@@ -1084,8 +1084,12 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
               let event = log.events.last else {
             return (bandwidthBytesPerSec, bandwidthPeakBytesPerSec, bandwidthTotalBytes)
         }
-        let bitsPerSec = max(0, event.indicatedBitrate)
-        let bytesPerSec = bitsPerSec / 8
+        // AVPlayerItemAccessLog.indicatedBitrate is a Double in Swift's
+        // bridging (it surfaces as Double even though the underlying ObjC
+        // value is int64 bits-per-second). Coerce to Int64 to match the
+        // band-rollup state below.
+        let bitsPerSec = max(0.0, event.indicatedBitrate)
+        let bytesPerSec: Int64 = Int64(bitsPerSec / 8.0)
         // Update the rolling peak (in-memory only; reset on open).
         if bytesPerSec > bandwidthPeakBytesPerSec {
             bandwidthPeakBytesPerSec = bytesPerSec
@@ -1096,7 +1100,8 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         // when raw byte counters aren't available; it's monotonic and good
         // enough for the "Bytes read" field in the info sheet.
         if let last = lastBandwidthSampleMs {
-            let deltaMs = Int64((Date().timeIntervalSince1970 * 1000.0) - last)
+            let nowMs = Date().timeIntervalSince1970 * 1000.0
+            let deltaMs = Int64(nowMs - last)
             if deltaMs > 0 && bytesPerSec > 0 {
                 bandwidthTotalBytes += bytesPerSec * deltaMs / 1000
             }
