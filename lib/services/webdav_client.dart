@@ -157,4 +157,25 @@ class WebDavClient {
     }
     return result;
   }
+
+  /// Performs a GET on [url] and returns the body bytes on HTTP 200, or null
+  /// on any other status (404/403/5xx). When [serverId] is given the request
+  /// uses that server's saved credentials + self-signed trust (password never
+  /// crosses to Dart); otherwise [headers]/[allowSelfSigned] are used as-is
+  /// for generic http(s) sources. Used to probe + download sidecar subtitle
+  /// URLs, keeping the payload local instead of streaming it.
+  Future<Uint8List?> fetchUrl({
+    String? serverId,
+    required String url,
+    Map<String, String> headers = const {},
+    bool allowSelfSigned = false,
+  }) async {
+    final result = await _channel.invokeMethod<Uint8List>('fetchUrl', {
+      if (serverId != null && serverId.isNotEmpty) 'id': serverId,
+      'url': url,
+      if (headers.isNotEmpty) 'headers': headers,
+      if (allowSelfSigned) 'allowSelfSigned': true,
+    });
+    return result;
+  }
 }

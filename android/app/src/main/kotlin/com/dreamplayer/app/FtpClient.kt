@@ -38,6 +38,9 @@ class FtpClient(private val context: Context) {
             "mkv", "mp4", "mov", "avi", "webm", "m4v", "ts", "m2ts", "mts",
             "wmv", "flv", "mpg", "mpeg", "3gp", "3g2", "vob", "divx", "xvid", "m2v",
         )
+
+        /// Cap for a fetched sidecar subtitle file (50 MiB).
+        private const val MAX_ALT_SUB_BYTES = 50 * 1024 * 1024
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -83,11 +86,126 @@ class FtpClient(private val context: Context) {
                     runAsync(result) {
                         val server = id?.let { serverById(it) }
                             ?: throw RuntimeException("FTP server not found")
-                        listDirectory(server, path)
+                        listDirectory(server, path, videoOnly = true)
+                    }
+                }
+                // Nova-parity: the sidecar service needs the *full* directory
+                // listing (videos AND sidecar subs) to pair by name — the
+                // regular `listDirectory` filters to video extensions only and
+                // would strip the `.srt` so `_findFtp` never sees it.
+                "listDirectoryAll" -> {
+                    val id = call.argument<String>("id")
+                    val path = call.argument<String>("path") ?: "/"
+                    runAsync(result) {
+                        val server = id?.let { serverById(it) }
+                            ?: throw RuntimeException("FTP server not found")
+                        listDirectory(server, path, videoOnly = false)
+                    }
+                }
+                // Nova-parity sidecar prefetch: read a subtitle file's bytes so
+                // the Dart side can write it to a local cache and hand the engine
+                // a file:// track (AVP issue #1605) instead of streaming the
+                // remote ftp:// URL (which is fragile to reconnect/seek).
+                "fetchBytes" -> {
+                    val id = call.argument<String>("id")
+                    val path = call.argument<String>("path") ?: "/"
+                    val maxBytes = call.argument<Number>("maxBytes")?.toInt() ?: MAX_ALT_SUB_BYTES
+                    runAsync(result) {
+                        val server = id?.let { serverById(it) }
+                            ?: throw RuntimeException("FTP server not found")
+                        altSubBytes(server, path, maxBytes)
                     }
                 }
                 else -> result.notImplemented()
             }
+        }
+    }
+
+    /// Reads up to [maxBytes] of the file at [remotePath] on [server] into a
+    /// ByteArray (null on 404/no-access so sidecar discovery treats it as "no
+    /// subtitle"). Mirrors FtpDataSource's FTP/SFTP open logic.
+    private fun altSubBytes(server: FtpServer, remotePath: String, maxBytes: Int): ByteArray? = try {
+        if (server.isSftp) {
+            val jsch = JSch()
+            val session = jsch.getSession(server.username.ifEmpty { "anonymous" }, server.host, server.port)
+            if (server.password.isNotEmpty()) session.setPassword(server.password)
+            val config = Properties()
+            config["StrictHostKeyChecking"] = "no"
+            session.setConfig(config)
+            session.timeout = 10000
+            session.connect(10000)
+            try {
+                val channel = session.openChannel("sftp") as ChannelSftp
+                try {
+                    channel.connect(5000)
+                    val len = channel.lstat(remotePath).size
+                    if (len <= 0) return null
+                    channel.get(remotePath).use { ins ->
+                        readCapped(ins, len.toInt(), maxBytes)
+                    }
+                } finally {
+                    try { channel.disconnect() } catch (_: Exception) {}
+                }
+            } finally {
+                try { session.disconnect() } catch (_: Exception) {}
+            }
+        } else {
+            val ftp = FTPClient().apply {
+                connectTimeout = 10000
+                defaultTimeout = 15000
+            }
+            ftp.connect(server.host, server.port)
+            try {
+                val user = server.username.ifEmpty { "anonymous" }
+                val pass = server.password.ifEmpty { "anonymous@" }
+                if (!ftp.login(user, pass)) return null
+                ftp.enterLocalPassiveMode()
+                ftp.setFileType(FTP.BINARY_FILE_TYPE)
+                val stream = ftp.retrieveFileStream(remotePath) ?: return null
+                try {
+                    val len = ftpFileSize(ftp, remotePath)
+                    val cap = if (len > 0) len.toInt() else maxBytes
+                    stream.use { readCapped(it, cap, maxBytes) }
+                } finally {
+                    try { stream.close() } catch (_: Exception) {}
+                }
+            } finally {
+                try { ftp.logout() } catch (_: Exception) {}
+                try { ftp.disconnect() } catch (_: Exception) {}
+            }
+        }
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun readCapped(ins: java.io.InputStream, knownSize: Int, maxBytes: Int): ByteArray? {
+        val read = minOf(if (knownSize > 0) knownSize else maxBytes, maxBytes)
+        val buf = ByteArray(read)
+        var off = 0
+        var left = read
+        while (left > 0) {
+            val n = ins.read(buf, off, left)
+            if (n < 0) break
+            off += n
+            left -= n
+        }
+        return if (off == 0) null else buf.copyOf(off)
+    }
+
+    private fun ftpFileSize(ftp: FTPClient, path: String): Long {
+        try {
+            ftp.sendCommand("SIZE", path)
+            if (ftp.replyCode == 213) {
+                return ftp.replyString.trim().substringAfter("213").trim().toLongOrNull() ?: -1L
+            }
+        } catch (_: Exception) {}
+        return try {
+            val parent = path.substringBeforeLast('/', "/")
+            val name = path.substringAfterLast('/')
+            ftp.listFiles(if (parent.isEmpty()) "/" else parent)
+                .firstOrNull { it.name == name }?.size ?: -1L
+        } catch (_: Exception) {
+            -1L
         }
     }
 
@@ -346,13 +464,13 @@ class FtpClient(private val context: Context) {
         }
     }
 
-    fun listDirectory(server: FtpServer, path: String): List<Map<String, Any?>> {
+    fun listDirectory(server: FtpServer, path: String, videoOnly: Boolean = true): List<Map<String, Any?>> {
         val effective = effectivePath(server.path, path)
-        return if (server.isSftp) listSftpDirectory(server, effective)
-        else listFtpDirectory(server, effective)
+        return if (server.isSftp) listSftpDirectory(server, effective, videoOnly)
+        else listFtpDirectory(server, effective, videoOnly)
     }
 
-    private fun listFtpDirectory(server: FtpServer, effective: String): List<Map<String, Any?>> {
+    private fun listFtpDirectory(server: FtpServer, effective: String, videoOnly: Boolean): List<Map<String, Any?>> {
         val ftp = FTPClient().apply {
             connectTimeout = 10000
             defaultTimeout = 15000
@@ -374,7 +492,7 @@ class FtpClient(private val context: Context) {
                 val name = f.name ?: return@mapNotNull null
                 if (name == "." || name == "..") return@mapNotNull null
                 val isDir = f.isDirectory
-                if (!isDir && !isVideo(name)) return@mapNotNull null
+                if (!isDir && videoOnly && !isVideo(name)) return@mapNotNull null
                 val childPath = joinPath(effective, name)
                 mapOf(
                     "name" to name,
@@ -393,7 +511,7 @@ class FtpClient(private val context: Context) {
         }
     }
 
-    private fun listSftpDirectory(server: FtpServer, effective: String): List<Map<String, Any?>> {
+    private fun listSftpDirectory(server: FtpServer, effective: String, videoOnly: Boolean): List<Map<String, Any?>> {
         val jsch = JSch()
         val session = jsch.getSession(server.username.ifEmpty { "anonymous" }, server.host, server.port)
         if (server.password.isNotEmpty()) session.setPassword(server.password)
@@ -411,7 +529,7 @@ class FtpClient(private val context: Context) {
                     val name = entry.filename
                     if (name == "." || name == "..") return@mapNotNull null
                     val isDir = entry.attrs.isDir
-                    if (!isDir && !isVideo(name)) return@mapNotNull null
+                    if (!isDir && videoOnly && !isVideo(name)) return@mapNotNull null
                     val childPath = joinPath(effective, name)
                     mapOf(
                         "name" to name,

@@ -414,6 +414,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// block playback).
   Future<List<VideoExternalSub>> _resolveExternalSubtitles(VideoItem video) async {
     final existing = video.externalSubtitles;
+    List<VideoExternalSub> resolved;
     // Source already attached its own external subs (Jellyfin, folder
     // bookmark, etc.) — use them as-is, but enforce the
     // "external > embedded always" priority by promoting the first
@@ -423,13 +424,20 @@ class _PlayerScreenState extends State<PlayerScreen>
     // (Jellyfin only does so for explicitly-flagged sidecars; most DLNA
     // servers never fill the field).
     if (existing.isNotEmpty) {
-      return promoteFirstExternalAsDefault(existing);
+      resolved = promoteFirstExternalAsDefault(existing);
+    } else if (_inTests) {
+      return const [];
+    } else {
+      final sidecars = await SidecarSubtitleService.instance.find(video);
+      // `SidecarSubtitleService.find` already marks the first match
+      // `isDefault: true`, so no promotion needed here.
+      resolved = sidecars;
     }
-    if (_inTests) return const [];
-    final sidecars = await SidecarSubtitleService.instance.find(video);
-    // `SidecarSubtitleService.find` already marks the first match
-    // `isDefault: true`, so no promotion needed here.
-    return sidecars;
+    if (_inTests) return resolved;
+    // Nova-parity: copy any remotely-streamed sidecar (SMB/FTP/HTTP external
+    // subs) to a local cache file so the engine reads it locally rather than
+    // re-streaming the remote URL (AVP issue #1605).
+    return SidecarSubtitleService.instance.ensureLocal(video, resolved);
   }
 
   /// Transient IO errors worth retrying (network blips).

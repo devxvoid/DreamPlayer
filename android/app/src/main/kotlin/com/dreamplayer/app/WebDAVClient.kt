@@ -23,6 +23,9 @@ import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import android.util.Log
+
+private const val TAG = "WebDAVClient"
 
 /// In-app WebDAV browser (channel `dreamplayer/webdav`).
 ///
@@ -53,6 +56,12 @@ class WebDAVClient(private val context: Context) {
             "mkv", "mp4", "mov", "avi", "webm", "m4v", "ts", "m2ts", "mts",
             "wmv", "flv", "mpg", "mpeg", "3gp", "3g2", "vob", "divx", "xvid", "m2v",
         )
+
+        /// Reasonable cap for a downloaded subtitle sidecar (50 MiB — far larger
+        /// than any real .srt/.ass/.vtt/.sub; protects against a misconfigured
+        /// server answering a wrong URL with a huge file, mirroring Nova's
+        /// MAX_SUB_SIZE guard).
+        private const val MAX_SUB_BYTES = 50 * 1024 * 1024
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -125,6 +134,33 @@ class WebDAVClient(private val context: Context) {
                         result.error("bad_args", "WebDAV server not found", null)
                     } else {
                         result.success(server.authorizationHeader)
+                    }
+                }
+                "fetchUrl" -> {
+                    // Downloads [url] and returns its bytes when the HTTP status
+                    // is 200, otherwise null. Auth/trust come from either a saved
+                    // WebDAV server ([id]) or explicit [headers]/[allowSelfSigned]
+                    // for generic http(s) sources. Used to probe a candidate
+                    // sidecar subtitle URL and fetch it to a local cache file
+                    // (Nova-style), so the engine never has to stream an
+                    // authenticated subtitle over the network.
+                    val id = call.argument<String>("id")
+                    val url = call.argument<String>("url") ?: ""
+                    val headersArg = call.argument<Map<String, String>>("headers")
+                    val allowSelfSigned = call.argument<Boolean>("allowSelfSigned") ?: false
+                    if (url.isEmpty()) {
+                        result.error("bad_args", "URL is required", null)
+                        return@setMethodCallHandler
+                    }
+                    runAsync(result) {
+                        val server = id?.let { serverById(it) }
+                        fetchUrl(
+                            url,
+                            headers = if (server != null) {
+                                mapOf("Authorization" to server.authorizationHeader)
+                            } else headersArg ?: emptyMap(),
+                            selfSigned = if (server != null) server.allowSelfSigned else allowSelfSigned,
+                        )
                     }
                 }
                 else -> result.notImplemented()
@@ -301,6 +337,7 @@ class WebDAVClient(private val context: Context) {
         path: String,
         allowSelfSigned: Boolean,
     ): List<Map<String, Any?>> {
+        Log.d(TAG, "listDirectory: baseUrl=$baseUrl path=$path selfSigned=$allowSelfSigned")
         val root = path == "/" || path.isEmpty()
         // Always request slash-terminated directory URLs. Some servers (and
         // reverse proxies in front of them) emit a 301 Location for a missing
@@ -376,6 +413,58 @@ class WebDAVClient(private val context: Context) {
     ): Int = newCall(url, username, password, method = "GET", allowSelfSigned = allowSelfSigned)
         .execute().use { it.code }
 
+    /// GETs [url] (with the given [headers] / TLS policy) and returns the body
+    /// bytes on HTTP 200, capped at [MAX_SUB_BYTES]; returns null on any other
+    /// status (404/403/5xx) or read limit, so callers can treat a miss as "not
+    /// a subtitle URL". Never throws for non-200 responses (auth/404 should be
+    /// ordinary "not found", not a failure that aborts sidecar discovery).
+    fun fetchUrl(
+        url: String,
+        headers: Map<String, String>,
+        selfSigned: Boolean,
+    ): ByteArray? {
+        val builder = Request.Builder()
+            .url(url)
+            .get()
+            .apply {
+                headers.forEach { (k, v) -> header(k, v) }
+            }
+        val target = if (selfSigned) permissiveClient else client
+        target.newCall(builder.build())
+            .execute()
+            .use { response ->
+                val code = response.code
+                if (code != 200) {
+                    Log.d(TAG, "fetchUrl $url -> $code")
+                    return null
+                }
+                val body = response.body
+                    ?: return null
+                val bytes = try {
+                    body.byteStream().use { input ->
+                        val out = java.io.ByteArrayOutputStream()
+                        val buf = ByteArray(16 * 1024)
+                        var total = 0
+                        while (true) {
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            total += n
+                            if (total > MAX_SUB_BYTES) {
+                                Log.w(TAG, "fetchUrl too large $total bytes")
+                                return null
+                            }
+                            out.write(buf, 0, n)
+                        }
+                        out.toByteArray()
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "fetchUrl read failed $e")
+                    return null
+                }
+                return bytes
+            }
+    }
+
     private fun newCall(
         url: String,
         username: String,
@@ -406,10 +495,12 @@ class WebDAVClient(private val context: Context) {
         password: String,
         allowSelfSigned: Boolean,
     ): String {
+        Log.d(TAG, "PROPFIND $url user=${username.ifEmpty { "<none>" }} selfSigned=$allowSelfSigned")
         val response = newCall(url, username, password, method = "PROPFIND", depth = 1, allowSelfSigned = allowSelfSigned)
             .execute()
         return try {
             val code = response.code
+            Log.d(TAG, "PROPFIND $url -> $code")
             if (code != 207 && code != 200) {
                 throw RuntimeException("HTTP $code")
             }

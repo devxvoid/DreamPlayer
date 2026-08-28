@@ -210,6 +210,26 @@ class SmbClient {
         .toList();
   }
 
+  /// Full directory listing (videos AND sidecar subtitles) without the
+  /// video-only filter and without the native subtitle-attachment logic, so
+  /// the sidecar service can pair subtitles by name (Nova parity). Mirrors
+  /// the FTP `listDirectoryAll` channel method.
+  Future<List<SmbEntry>> listDirectoryAll(
+    String serverId,
+    String share,
+    String path,
+  ) async {
+    final result = await _channel.invokeListMethod<dynamic>('listDirectoryAll', {
+      'id': serverId,
+      'share': share,
+      'path': path,
+    });
+    if (result == null) return const [];
+    return result
+        .map((e) => SmbEntry.fromMap(e as Map<dynamic, dynamic>))
+        .toList();
+  }
+
   /// Opens a file on the share for streaming and returns a playable URL.
   /// iOS serves it via an AetherEngineSMB `SMBConnection` custom source
   /// (`dreamplayersmb://<token>`); each call returns its own URL so a folder
@@ -229,6 +249,20 @@ class SmbClient {
 
   Future<void> closeShare(String serverId) async {
     await _channel.invokeMethod<void>('closeShare', {'id': serverId});
+  }
+
+  /// Nova-parity sidecar prefetch: reads a subtitle file's bytes directly off
+  /// the share (via the same jcifs-ng machinery as the playback data source).
+  /// Returns null when the file doesn't exist / is unreadable, so sidecar
+  /// discovery can treat it as "no subtitle".
+  Future<Uint8List?> fetchBytes(String serverId, String share, String path,
+      {int maxBytes = 50 * 1024 * 1024}) async {
+    return _channel.invokeMethod<Uint8List>('fetchBytes', {
+      'id': serverId,
+      'share': share,
+      'path': path,
+      'maxBytes': maxBytes,
+    });
   }
 
   /// LAN scan for reachable SMB hosts (native subnet 445 probe + name

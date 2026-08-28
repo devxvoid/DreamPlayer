@@ -9,6 +9,7 @@ import jcifs.CIFSContext
 import jcifs.Config
 import jcifs.smb.NtlmPasswordAuthenticator
 import jcifs.smb.SmbFile
+import jcifs.smb.SmbRandomAccessFile
 import jcifs.context.SingletonContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -275,6 +276,10 @@ class SMBClient(private val context: Context) {
         private const val SCAN_TIMEOUT_MS = 500
         private const val PROBE_TIMEOUT_MS = 1500
 
+        /// Cap for a fetched sidecar subtitle file (50 MiB — far larger than any
+        /// real .srt/.ass/.vtt; protects against a misread/wrong file).
+        private const val MAX_ALT_SUB_BYTES = 50 * 1024 * 1024
+
         /// Share names probed on every server browse, since SMB2 can't
         /// enumerate shares. NAS boxes (Synology/QNAP/OpenMediaVault/Windows)
         /// almost always expose one of these.
@@ -373,6 +378,30 @@ class SMBClient(private val context: Context) {
                         }
                     }
                 }
+                // Nova-parity sidecar enumeration: return the *full* directory
+                // listing (videos AND subtitle sidecars) without the native
+                // subtitle-attachment logic, so the sidecar service can pair
+                // by name. The regular `listDirectory` filters to videos and
+                // only attaches subtitles to their video entry — which would
+                // hide the `.srt` from the sidecar fallback.
+                "listDirectoryAll" -> {
+                    val id = call.argument<String>("id")
+                    val shareName = call.argument<String>("share")
+                    val path = call.argument<String>("path") ?: ""
+                    if (id == null || shareName == null) {
+                        result.error("bad_args", "Missing id or share", null)
+                    } else {
+                        executor.execute {
+                            try {
+                                result.success(listDirectoryAll(id, shareName, path))
+                            } catch (e: jcifs.smb.SmbAuthException) {
+                                result.error("smb_auth", "Login failed — check username/password/domain", null)
+                            } catch (e: Exception) {
+                                result.error("smb_error", e.message, null)
+                            }
+                        }
+                    }
+                }
                 "discoverServers" -> {
                     quickExecutor.execute {
                         try {
@@ -413,8 +442,63 @@ class SMBClient(private val context: Context) {
                 "closeShare" -> {
                     result.success(null)
                 }
+                // Nova-parity sidecar prefetch: read a subtitle file's bytes
+                // straight off the share (same jcifs-ng handle machinery as
+                // SmbDataSource), so the Dart side can write it to a local
+                // cache and hand the engine a file:// track (AVP issue #1605).
+                "fetchBytes" -> {
+                    val args = call.arguments as? Map<*, *>
+                    val id = args?.get("id") as? String
+                    val share = args?.get("share") as? String
+                    val path = args?.get("path") as? String
+                    val maxBytes = (args?.get("maxBytes") as? Number)?.toInt() ?: MAX_ALT_SUB_BYTES
+                    if (id == null || share == null) {
+                        result.error("bad_args", "Missing id or share", null)
+                    } else {
+                        executor.execute {
+                            try {
+                                result.success(altSubBytes(id, share, path ?: "", maxBytes))
+                            } catch (e: jcifs.smb.SmbAuthException) {
+                                result.error("smb_auth", "Login failed — check username/password/domain", null)
+                            } catch (e: Exception) {
+                                result.error("smb_error", e.message, null)
+                            }
+                        }
+                    }
+                }
                 else -> result.notImplemented()
             }
+        }
+    }
+
+    /// Reads up to [maxBytes] of the file at [share]/[path] on the saved server
+    /// [id] into a ByteArray (nil-safe: returns null on 404/no access so sidecar
+    /// discovery treats it as "no subtitle"). Mirrors SmbDataSource's credential
+    /// resolution so passwords never touch Dart.
+    private fun altSubBytes(id: String, share: String, path: String, maxBytes: Int): ByteArray? {
+        val creds = SmbStore.resolve(context, id) ?: return null
+        val base = "smb://${creds.host}:${creds.port}/$share"
+        val url = if (path.isEmpty()) base else "$base/$path"
+        // jcifs-ng SmbFile/Defaults handle capitalization; reuse SmbStore's
+        // NtlmPasswordAuthenticator via creds.context().
+        return try {
+            SmbRandomAccessFile(SmbFile(url, creds.context()), "r").use { raf ->
+                val len = raf.length()
+                if (len <= 0) return null
+                val read = minOf(len.toInt(), maxBytes)
+                val buf = ByteArray(read)
+                var off = 0
+                var left = read
+                while (left > 0) {
+                    val n = raf.read(buf, off, left)
+                    if (n < 0) break
+                    off += n
+                    left -= n
+                }
+                if (off == 0) null else buf.copyOf(off)
+            }
+        } catch (e: Exception) {
+            null
         }
     }
 
@@ -592,6 +676,39 @@ class SMBClient(private val context: Context) {
                 "subtitlePaths" to matches,
             ) else entry
         }.toMutableList()
+        dirs.sortBy { it["name"].toString().lowercase(Locale.ROOT) }
+        files.sortBy { it["name"].toString().lowercase(Locale.ROOT) }
+        return dirs + files
+    }
+
+    /// Full directory listing (videos + sidecar subtitles) without the native
+    /// video→subtitle attachment, so the sidecar service can pair by name
+    /// (Nova `RawListerFactory.getFileList()` parity). Mirrors the FTP
+    /// `listDirectoryAll` channel method.
+    private fun listDirectoryAll(
+        serverId: String,
+        shareName: String,
+        path: String,
+    ): List<Map<String, Any?>> {
+        val creds = SmbStore.resolve(context, serverId)
+            ?: throw IllegalStateException("Unknown server")
+        val ctx = creds.context()
+        val dirUrl = "smb://${creds.host}:${creds.port}/$shareName/" +
+            if (path.isEmpty()) "" else "$path/"
+        val entries = SmbFile(dirUrl, ctx).listFiles() ?: emptyArray()
+        val dirs = mutableListOf<Map<String, Any?>>()
+        val files = mutableListOf<Map<String, Any?>>()
+        for (f in entries) {
+            val name = f.name
+            if (name == "." || name == "..") continue
+            val isDir = f.isDirectory()
+            val relPath = if (path.isEmpty()) name else "$path/$name"
+            if (isDir) {
+                dirs.add(entryMap(name, relPath, true, 0L, 0L))
+            } else {
+                files.add(entryMap(name, relPath, false, f.length(), f.lastModified()))
+            }
+        }
         dirs.sortBy { it["name"].toString().lowercase(Locale.ROOT) }
         files.sortBy { it["name"].toString().lowercase(Locale.ROOT) }
         return dirs + files

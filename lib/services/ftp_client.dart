@@ -157,4 +157,30 @@ class FtpClient {
         .map((e) => FtpEntry.fromMap(e as Map<dynamic, dynamic>))
         .toList();
   }
+
+  /// Full directory listing (videos AND sidecar subtitles) without the
+  /// video-only filter the browser uses — the sidecar service needs every
+  /// entry to pair subtitles by name (Nova `RawListerFactory.getFileList()`).
+  Future<List<FtpEntry>> listDirectoryAll(String serverId, String path) async {
+    final result = await _channel.invokeListMethod<dynamic>('listDirectoryAll', {
+      'id': serverId,
+      'path': path,
+    });
+    if (result == null) return const [];
+    return result
+        .map((e) => FtpEntry.fromMap(e as Map<dynamic, dynamic>))
+        .toList();
+  }
+
+  /// Nova-parity sidecar prefetch: reads a subtitle file's bytes so the caller
+  /// can write them to a local cache. Returns null on 404/no-access — sidecar
+  /// discovery treats that as "no subtitle".
+  Future<Uint8List?> fetchBytes(String serverId, String path,
+      {int maxBytes = 50 * 1024 * 1024}) async {
+    return _channel.invokeMethod<Uint8List>('fetchBytes', {
+      'id': serverId,
+      'path': path,
+      'maxBytes': maxBytes,
+    });
+  }
 }

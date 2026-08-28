@@ -76,4 +76,170 @@ void main() {
       expect(promoted[0].isDefault, isTrue);
     });
   });
+
+  group('urlBasePath', () {
+    test('empty when URL has no path', () {
+      expect(SidecarSubtitleService.urlBasePath('http://192.168.1.16:8080'),
+          isEmpty);
+    });
+
+    test('returns a single mount segment', () {
+      expect(SidecarSubtitleService.urlBasePath('http://192.168.1.16:8080/dav'),
+          '/dav');
+    });
+
+    test('returns a multi-segment base path', () {
+      expect(
+          SidecarSubtitleService.urlBasePath('https://nas/dav/root'),
+          '/dav/root');
+    });
+
+    test('strips a trailing slash', () {
+      expect(
+          SidecarSubtitleService.urlBasePath('http://host:8080/dav/'),
+          '/dav');
+    });
+  });
+
+  group('relativeToBasePath', () {
+    test('empty base returns urlPath unchanged', () {
+      expect(SidecarSubtitleService.relativeToBasePath('', 'Movies/TestSub/a.mp4'),
+          'Movies/TestSub/a.mp4');
+    });
+
+    test('strips a /dav mount prefix (leading-slash normalization)', () {
+      // urlBasePath yields `/dav`, _parseHttpUri yields `dav/Movies/...` —
+      // the ordering bug that hid all WebDAV sidecars on a /dav-mounted server.
+      expect(
+          SidecarSubtitleService.relativeToBasePath('/dav',
+              'dav/Movies/TestSub/Test Video.en.mp4'),
+          'Movies/TestSub/Test Video.en.mp4');
+    });
+
+    test('urlPath exactly equal to base returns empty', () {
+      expect(SidecarSubtitleService.relativeToBasePath('/dav', 'dav'), isEmpty);
+    });
+
+    test('unrelated base leaves urlPath untouched', () {
+      expect(
+          SidecarSubtitleService.relativeToBasePath('/other',
+              'dav/Movies/TestSub/a.mp4'),
+          'dav/Movies/TestSub/a.mp4');
+    });
+
+    test('no base path match (server URL bare, file deep) is a no-op', () {
+      expect(
+          SidecarSubtitleService.relativeToBasePath('', 'Movies/a.mp4'),
+          'Movies/a.mp4');
+    });
+  });
+
+  group('buildSubs pairing (path form must match)', () {
+    final decodedVideo = 'Movies/TestSub/Test Video.en.mp4';
+    final decodedSidecar = 'Movies/TestSub/Test Video.en.srt';
+
+    test('decoded video path pairs with decoded sidecar', () {
+      // This is what `_findWebDavOrHttp` now produces after the
+      // `Uri.decodeComponent` fix — the two MOST match.
+      final subs = SidecarSubtitleService.instance.buildSubs(
+        source: [(decodedSidecar.split('/').last, decodedSidecar)],
+        videoPath: decodedVideo,
+        buildFullUri: (p) => 'http://192.168.1.16:8080/dav/$p',
+      );
+      expect(subs, hasLength(1));
+      expect(subs.first.isDefault, isTrue);
+      expect(subs.first.label, 'Test Video.en');
+    });
+
+    test('percent-encoded video path does NOT pair (the %20 bug)', () {
+      // Regression guard: if the videoPath were still `Test%20Video.en.mp4`
+      // it must never pair with the decoded `Test Video.en.srt`.
+      final subs = SidecarSubtitleService.instance.buildSubs(
+        source: [(decodedSidecar.split('/').last, decodedSidecar)],
+        videoPath: 'Movies/TestSub/Test%20Video.en.mp4',
+        buildFullUri: (p) => 'http://192.168.1.16:8080/dav/$p',
+      );
+      expect(subs, isEmpty);
+    });
+  });
+
+  group('candidateSiblingUrls (Nova-style direct probes)', () {
+    test('empty for unparseable URI', () {
+      expect(SidecarSubtitleService.candidateSiblingUrls(''), isEmpty);
+    });
+
+    test('empty for URL with no path', () {
+      expect(
+          SidecarSubtitleService.candidateSiblingUrls('http://192.168.1.16:8080'),
+          isEmpty);
+    });
+
+    test('first candidate is the same-name .srt, properly encoded', () {
+      // Encoded input (as the WebDAV screen builds it) must produce a SINGLE-encoded
+      // candidate (`Test%20Video.en.srt`, NOT `Test%2520...`). Regression guard
+      // for the double-encoding bug that would miss every space-named file.
+      final candidates = SidecarSubtitleService.candidateSiblingUrls(
+        'http://192.168.1.16:8080/dav/Movies/TestSub/Test%20Video.en.mp4',
+      );
+      expect(candidates, isNotEmpty);
+      final (firstUrl, firstName) = candidates.first;
+      expect(firstName, 'Test Video.en.srt');
+      expect(firstUrl,
+          'http://192.168.1.16:8080/dav/Movies/TestSub/Test%20Video.en.srt');
+      expect(firstUrl.contains('%2520'), isFalse, reason: 'must not double-encode');
+    });
+
+    test('decoded input also yields a valid single-encoded URL', () {
+      final candidates = SidecarSubtitleService.candidateSiblingUrls(
+        'http://host/dav/Movies/Test Video.en.mp4',
+      );
+      final (firstUrl, _) = candidates.first;
+      expect(firstUrl, 'http://host/dav/Movies/Test%20Video.en.srt');
+    });
+
+    test('covers every supported extension; srt first', () {
+      final urls = SidecarSubtitleService.candidateSiblingUrls(
+        'http://host/Movies/Show.S01E01.mkv',
+      );
+      expect(urls.first.$1.endsWith('.srt'), isTrue);
+      expect(
+        urls.every((e) => e.$1.startsWith('http://host/Movies/Show.S01E01.')),
+        isTrue,
+      );
+    });
+
+    test('video at server root builds a root-level candidate', () {
+      final candidates = SidecarSubtitleService.candidateSiblingUrls(
+        'http://host/file.mp4',
+      );
+      expect(candidates.first.$1, 'http://host/file.srt');
+    });
+  });
+
+  group('SidecarSubtitleService.ensureLocal', () {
+    test('passes through already-local file:// and unknown schemes', () async {
+      final video = VideoItem(id: 'x', title: 'x', duration: Duration.zero);
+      final local = _sub('file:///cache/show.srt', isDefault: true);
+      final exotic = _sub('webvtt:magnet://nope/show.vtt');
+      final out = await SidecarSubtitleService.instance
+          .ensureLocal(video, [local, exotic]);
+      expect(out[0].uri, 'file:///cache/show.srt');
+      expect(out[0].isDefault, isTrue);
+      expect(out[1].uri, 'webvtt:magnet://nope/show.vtt');
+    });
+
+    test('remote fetch failure degrades to original URI (never drops track)',
+        () async {
+      // In a headless test the SMB/FTP/WebDAV MethodChannels are absent, so
+      // the native fetch throws (caught) → the original remote URI is kept so
+      // the engine can still stream it. This is the "never drop a sidecar"
+      // contract behind the Nova-style local-copy prefetch.
+      final video = VideoItem(id: 'x', title: 'x', duration: Duration.zero);
+      final smb = _sub('smb://server/share/Show.eng.srt', isDefault: true);
+      final out =
+          await SidecarSubtitleService.instance.ensureLocal(video, [smb]);
+      expect(out.single.uri, 'smb://server/share/Show.eng.srt');
+      expect(out.single.isDefault, isTrue);
+    });
+  });
 }
