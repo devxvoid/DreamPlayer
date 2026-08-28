@@ -585,7 +585,7 @@ class _JellyfinTile extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
     final icon = item.isFolder ? Icons.folder : Icons.play_circle_outline;
     final color = item.isFolder ? colorScheme.primary : colorScheme.secondary;
-    final subtitle = item.isFolder ? null : item.durationLabel;
+    final subtitle = item.isFolder ? null : item.sizeLabel;
     final posterUrl = posterUrlOf(tmdbMeta);
     return TvTile(
       leading: posterUrl != null

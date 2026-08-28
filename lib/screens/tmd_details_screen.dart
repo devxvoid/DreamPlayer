@@ -1876,7 +1876,7 @@ class _JellyfinEntryTile extends StatelessWidget {
     final subtitle = <String>[
       if (item.seasonLabel.isNotEmpty) item.seasonLabel,
       if (episode != null) episode!.nameLabel,
-      if (item.durationLabel.isNotEmpty) item.durationLabel,
+      if (item.sizeLabel.isNotEmpty) item.sizeLabel,
     ].where((s) => s.isNotEmpty).join(' · ');
 
     final posterUrl = posterUrlOf(tmdbMeta);

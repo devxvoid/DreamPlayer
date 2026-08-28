@@ -118,13 +118,31 @@ void main() {
         'Width': 1920,
         'Height': 1080,
         'MediaSources': [
-          {'Id': 'src1'},
+          {'Id': 'src1', 'Size': 4509715660},
         ],
       });
       expect(item.isPlayable, true);
       expect(item.mediaSourceId, 'src1');
       expect(item.duration, const Duration(seconds: 420));
       expect(item.resolution, '1920x1080');
+      expect(item.sizeBytes, 4509715660);
+      expect(item.sizeLabel, '4.2 GB');
+    });
+
+    test('fromJson falls back to top-level Size when MediaSources lacks it', () {
+      final item = JellyfinItem.fromJson({
+        'Id': 'abc',
+        'Name': 'Show S01E01',
+        'IsFolder': false,
+        'Type': 'Episode',
+        'MediaType': 'Video',
+        'Size': 1048576,
+        'MediaSources': [
+          {'Id': 'src1'},
+        ],
+      });
+      expect(item.sizeBytes, 1048576);
+      expect(item.sizeLabel, '1.0 MB');
     });
 
     test('fromJson extracts IndexNumber/ParentIndexNumber for seasonLabel', () {

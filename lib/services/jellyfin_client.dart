@@ -164,6 +164,7 @@ class JellyfinItem {
     this.indexNumber,
     this.parentIndexNumber,
     this.parentId,
+    this.sizeBytes,
     this.externalSubtitles = const [],
     this.chapters = const [],
   });
@@ -193,6 +194,10 @@ class JellyfinItem {
 
   /// Parent folder id (`ParentId`) for sibling listing (auto-play next).
   final String? parentId;
+
+  /// File size in bytes from `MediaSources[0].Size` (or the top-level `Size`).
+  /// Used on file rows instead of our own duration label.
+  final int? sizeBytes;
 
   /// External subtitle tracks reported by the server (SRT/ASS/VTT files
   /// sitting next to the video on the server, served via `DeliveryUrl`).
@@ -224,14 +229,32 @@ class JellyfinItem {
     return '${m}m';
   }
 
+  /// Human-readable file size (`4.2 GB`) matching the WebDAV/file-browser
+  /// rows, or '' when the server didn't report a size.
+  String get sizeLabel {
+    final bytes = sizeBytes;
+    if (bytes == null || bytes <= 0) return '';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    var value = bytes.toDouble();
+    var unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+      value /= 1024;
+      unit++;
+    }
+    return '${value.toStringAsFixed(value >= 100 ? 0 : 1)} ${units[unit]}';
+  }
+
   factory JellyfinItem.fromJson(Map<String, dynamic> json) {
     final mediaSources = json['MediaSources'] as List? ?? const [];
     final firstSource = mediaSources.isNotEmpty ? mediaSources.first : null;
     String? mediaSourceId;
+    int? sizeBytes;
     List<JellyfinExternalSub> externalSubs = const [];
     List<VideoChapter> chapters = const [];
     if (firstSource is Map<String, dynamic>) {
       mediaSourceId = firstSource['Id'] as String?; // ignore: unnecessary_null_comparison
+      sizeBytes = (firstSource['Size'] as num?)?.toInt() ??
+          (json['Size'] as num?)?.toInt();
       // Parse external subtitle tracks from MediaStreams.
       final streams = firstSource['MediaStreams'] as List? ?? const [];
       externalSubs = streams
@@ -291,6 +314,7 @@ class JellyfinItem {
       indexNumber: (json['IndexNumber'] as num?)?.toInt(),
       parentIndexNumber: (json['ParentIndexNumber'] as num?)?.toInt(),
       parentId: json['ParentId'] as String?,
+      sizeBytes: sizeBytes,
       externalSubtitles: externalSubs,
       chapters: chapters,
     );
