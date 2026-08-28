@@ -40,10 +40,21 @@ object SmbEngine {
     @Synchronized
     fun initialize() {
         if (initialized) return
+        // Ensure jcifs-ng uses the bundled BouncyCastle, not Android's stripped
+        // system "BC" provider (which lacks algorithms jcifs-ng relies on).
+        // Installing the real BouncyCastleProvider at priority 1 shadows it.
+        try {
+            java.security.Security.removeProvider("BC")
+        } catch (_: Exception) {}
+        try {
+            java.security.Security.insertProviderAt(
+                org.bouncycastle.jce.provider.BouncyCastleProvider(), 1
+            )
+        } catch (_: Exception) {}
         try {
             SingletonContext.init(properties())
         } catch (_: Exception) {
-            // Context already initialized elsewhere — defaults still work.
+            return
         }
         Config.registerSmbURLHandler()
         initialized = true
@@ -476,26 +487,63 @@ class SMBClient(private val context: Context) {
         val creds = SmbStore.resolve(context, serverId)
             ?: throw IllegalStateException("Unknown server")
         val ctx = creds.context()
-        val names = LinkedHashSet<String>()
-        names.addAll(SmbStore.shares(context, serverId))
+        // Case-insensitive dedup — "Videos" and "videos" are the same share
+        // on Windows/SMB. Preserve the first-seen casing (usually the server's
+        // real name from enumeration).
+        android.util.Log.d("SMBClient", "listShares: serverId=$serverId host=${creds.host} port=${creds.port}")
+        val lowerToName = LinkedHashMap<String, String>()
+        fun addName(n: String) {
+            val lower = n.lowercase(Locale.ROOT)
+            if (!lowerToName.containsKey(lower)) lowerToName[lower] = n
+        }
+        SmbStore.shares(context, serverId).forEach { addName(it) }
         var authFailed = false
+        // Try proper share enumeration first (SMB2 via MS-SRVS RAP). This
+        // catches custom share names that aren't in COMMON_SHARES. If the
+        // server denies enumeration, fall back to probing well-known names.
+        try {
+            val root = SmbFile("smb://${creds.host}:${creds.port}/", ctx)
+            val files = root.listFiles()
+            android.util.Log.d("SMBClient", "listShares: enumeration returned ${files?.size ?: 0} entries")
+            files?.forEach { f ->
+                val raw = f.name.trimEnd('/', '\\')
+                if (raw.isEmpty() || raw == "." || raw == "..") return@forEach
+                // Filter IPC$ / admin hidden shares — not browsable media.
+                if (raw.equals("IPC\$", ignoreCase = true)) return@forEach
+                if (raw.endsWith("$")) return@forEach
+                addName(raw)
+            }
+            android.util.Log.d("SMBClient", "listShares: after enumeration lowerToName=${lowerToName.keys}")
+        } catch (e: jcifs.smb.SmbAuthException) {
+            android.util.Log.d("SMBClient", "listShares: enumeration authFailed $e")
+            authFailed = true
+        } catch (e: Exception) {
+            android.util.Log.d("SMBClient", "listShares: enumeration failed ${e.message}")
+            // Enumeration not supported / denied — fall through to probing.
+        }
         for (name in COMMON_SHARES) {
+            val lower = name.lowercase(Locale.ROOT)
+            if (lowerToName.containsKey(lower)) continue
             try {
                 if (SmbFile("smb://${creds.host}:${creds.port}/$name/", ctx).exists()) {
-                    names.add(name)
+                    android.util.Log.d("SMBClient", "listShares: probe found $name")
+                    addName(name)
                 }
             } catch (e: jcifs.smb.SmbAuthException) {
+                android.util.Log.d("SMBClient", "listShares: probe $name authFailed")
                 // Wrong/empty credentials get SmbAuthException — remember it and
                 // keep probing, but report a bad login if nothing was found.
                 authFailed = true
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                android.util.Log.d("SMBClient", "listShares: probe $name failed ${e.message}")
                 // not a disk share / no access — skip
             }
         }
-        if (authFailed && names.isEmpty()) {
+        android.util.Log.d("SMBClient", "listShares: final lowerToName=${lowerToName.keys} authFailed=$authFailed")
+        if (authFailed && lowerToName.isEmpty()) {
             throw IllegalStateException("Login failed — check username/password/domain")
         }
-        return names.sortedBy { it.lowercase(Locale.ROOT) }
+        return lowerToName.values.sortedBy { it.lowercase(Locale.ROOT) }
             .map { name ->
                 mapOf(
                     "name" to name,

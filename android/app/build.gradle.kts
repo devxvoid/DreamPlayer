@@ -29,6 +29,15 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+            // R8 shrinks+obfuscates by default. BouncyCastle registers its
+            // algorithms by string reflection (Provider.put -> class name), so
+            // we keep it unminified in proguard-rules.pro.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
 }
@@ -72,7 +81,14 @@ dependencies {
     implementation("io.github.anilbeesetti:nextlib-media3ext:1.10.1-0.13.0")
     // SMB2/3 client (jcifs-ng) — Nova and CX File Explorer's SMB library;
     // measured ~75 MB/s on the real NAS vs ~4-6 MB/s for smbj.
-    implementation("eu.agno3.jcifs:jcifs-ng:2.1.10")
+    // jcifs-ng 2.1.10's ASN.1 SPNEGO parsing requires BouncyCastle 1.78+
+    // (BC <1.77 has a broken DLApplicationSpecific cast that crashes share
+    // listing). Upgrade the transitive BC to 1.79 — the community-verified
+    // combo (AgNO3/jcifs-ng#365). Keep it pinned so nothing downgrades.
+    implementation("eu.agno3.jcifs:jcifs-ng:2.1.10") {
+        exclude(group = "org.bouncycastle", module = "bcprov-jdk18on")
+    }
+    implementation("org.bouncycastle:bcprov-jdk18on:1.79") { version { strictly("1.79") } }
     // slf4j-nop: jcifs-ng requires an SLF4J binding at runtime; the no-op
     // binding avoids pulling in a logging framework.
     implementation("org.slf4j:slf4j-nop:2.0.13")
