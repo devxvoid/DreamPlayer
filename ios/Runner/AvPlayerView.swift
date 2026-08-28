@@ -898,17 +898,18 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         }
     }
 
-    /// Waits until the engine reaches `.ready` (or `.ended`/`.error`) with a
-    /// timeout.  Used after a fresh `engine.load(...)` so that the follow-up
-    /// `selectAudioTrack` / `selectSubtitleTrack` calls land on a session
-    /// that's actually accepting them (the engine ignores track switches
-    /// while still loading/buffering).
+    /// Waits until the engine reaches a state that accepts track-switch
+    /// commands (`.playing`/`.paused`/`.ended`, or `.error` to bail) with a
+    /// timeout.  The engine's `PlaybackState` doesn't expose a `.ready`
+    /// case — once `engine.load(...)` finishes probing, it transitions to
+    /// `.playing` (or `.paused` if `autoplay` was false).  Track switches
+    /// issued during `.loading`/`.seeking` are silently ignored.
     private func waitForEngineReady(timeout: TimeInterval) async {
         guard let engine = self.engine else { return }
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             switch engine.state {
-            case .ready, .ended:
+            case .playing, .paused, .ended:
                 return
             case .error:
                 return
