@@ -404,14 +404,12 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                     result(self.stateMap())
                 case "setAudioTrack":
                     let index = (args?["index"] as? NSNumber)?.intValue ?? -1
-                    // The Dart picker hands us the native track `id` (== the
-                    // `index` field in the audioTracks map), but the engine's
-                    // `selectAudioTrack(index:)` expects the track's position
-                    // in the `audioTracks` array.  Convert id → position so
-                    // the call lands on the right track even when ids are not
-                    // sequential (and is a no-op when they are).
-                    let pos = self.engineAudioPosition(forId: index)
-                    self.engine?.selectAudioTrack(index: pos)
+                    // Dart sends the flat position (0,1,…) matching the
+                    // `index` field in audioTrackMaps, just like Android.
+                    // The engine's `selectAudioTrack(index:)` expects the
+                    // native track `id`, so convert flat → id.
+                    let trackId = self.engineAudioId(forFlatPosition: index)
+                    self.engine?.selectAudioTrack(index: trackId)
                     // Network / custom-IO sources (WebDAV, FTP/SFTP, Jellyfin
                     // direct-play over HTTP) cannot switch the audio track in
                     // place: the engine must re-probe the container, but its
@@ -434,10 +432,8 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                             // Wait for the freshly loaded engine to reach
                             // .ready so selectAudioTrack is honored.
                             await self.waitForEngineReady(timeout: 3.0)
-                            // Re-resolve the position against the fresh
-                            // audioTracks (ids are the same, but be defensive).
-                            let pos2 = self.engineAudioPosition(forId: index)
-                            self.engine?.selectAudioTrack(index: pos2)
+                            let trackId2 = self.engineAudioId(forFlatPosition: index)
+                            self.engine?.selectAudioTrack(index: trackId2)
                             self.emit()
                         }
                     }
@@ -920,14 +916,12 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         }
     }
 
-    /// Converts a Dart-sent audio track id (the `index` field in the
-    /// `audioTracks` map, == `AudioTrack.id`) to the track's position in the
-    /// engine's `audioTracks` array.  `engine.selectAudioTrack(index:)`
-    /// expects that position.  Falls back to the id itself when the track
-    /// isn't found (a no-op when ids are already sequential).
-    private func engineAudioPosition(forId id: Int) -> Int {
-        guard let engine = self.engine, id >= 0 else { return id }
-        return engine.audioTracks.firstIndex(where: { $0.id == id }) ?? id
+    /// Converts a Dart flat position (the `index` field in the
+    /// `audioTracks` map) to the engine's native audio track `id`.
+    /// `engine.selectAudioTrack(index:)` expects that `id`.
+    private func engineAudioId(forFlatPosition pos: Int) -> Int {
+        guard let engine = self.engine, pos >= 0, pos < engine.audioTracks.count else { return pos }
+        return engine.audioTracks[pos].id
     }
 
     /// Builds a fresh `MediaSource` from the stored open info.
@@ -1163,12 +1157,10 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
 
         let audioTracks = audioTrackMaps()
         let activeAudio = engine.audioTracks.first(where: { $0.id == engine.activeAudioTrackIndex })
-        // Emit the sequential flat index (array position) of the active track,
-        // matching Android's convention so the Dart side can look up
-        // `audioTracks[selectedAudioTrack]` (e.g. for the on-screen language).
+        // Flat position of the active track, matching Android's convention.
         let selectedAudio: Int = {
             guard let active = engine.activeAudioTrackIndex else { return -1 }
-            return audioTracks.firstIndex(where: { ($0["index"] as? Int) == active }) ?? -1
+            return engine.audioTracks.firstIndex(where: { $0.id == active }) ?? -1
         }()
 
         let subtitleTracks = subtitleTrackMaps()
@@ -1313,9 +1305,9 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     private func audioTrackMaps() -> [[String: Any]] {
         guard let engine else { return [] }
         let active = engine.activeAudioTrackIndex
-        return engine.audioTracks.map { t in
+        return engine.audioTracks.enumerated().map { (pos, t) in
             var m: [String: Any] = [
-                "index": t.id,
+                "index": pos,
                 "codecs": t.codec,
                 "mime": "",
                 "channels": t.channels,
