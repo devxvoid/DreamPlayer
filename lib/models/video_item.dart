@@ -98,6 +98,8 @@ class VideoItem {
     this.allowSelfSigned = false,
     this.jellyfinServerId,
     this.jellyfinItemId,
+    this.webdavServerId,
+    this.ftpServerId,
     this.externalSubtitles = const [],
     this.chapters = const [],
     this.isTranscoded = false,
@@ -122,6 +124,13 @@ class VideoItem {
   /// Jellyfin identifiers for the stable resume key (`jellyfin:<host>/<item>`).
   final String? jellyfinServerId;
   final String? jellyfinItemId;
+
+  /// WebDAV server id (used to look up the saved credentials + base URL when
+  /// discovering sibling sidecar subtitle files on the share).
+  final String? webdavServerId;
+
+  /// FTP/SFTP server id (same purpose as [webdavServerId], for FTP shares).
+  final String? ftpServerId;
 
   /// Stable identifier for the resume feature, for sources whose [path]/[uri]
   /// rotate between sessions (e.g. iPad SMB per-file token URLs). Falls back to
@@ -212,6 +221,8 @@ class VideoItem {
       allowSelfSigned: allowSelfSigned,
       jellyfinServerId: jellyfinServerId,
       jellyfinItemId: jellyfinItemId,
+      webdavServerId: webdavServerId,
+      ftpServerId: ftpServerId,
       externalSubtitles: externalSubtitles,
       chapters: chapters,
     );

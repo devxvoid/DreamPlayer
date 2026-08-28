@@ -173,6 +173,7 @@ class _WebDavScreenState extends State<WebDavScreen> {
               ? const {}
               : {'Authorization': authHeader},
           allowSelfSigned: server.allowSelfSigned,
+          webdavServerId: server.id,
         ),
     ];
     final playIndex = playlist.indexWhere((item) => item.title == entry.name);

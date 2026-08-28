@@ -24,6 +24,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/tmdb_client.dart';
 import '../services/simkl_client.dart';
 import '../services/watched_store.dart';
+import '../services/sidecar_subtitle_service.dart';
 import '../services/subtitle_style.dart';
 import '../services/downloaded_subtitles_store.dart';
 import '../services/opensubtitles_client.dart';
@@ -352,6 +353,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         resume = null;
       }
     }
+    final externalSubs = await _resolveExternalSubtitles(video);
     try {
       await _exo?.open(
         video.path ?? '',
@@ -362,7 +364,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         allowSelfSigned: video.allowSelfSigned,
         resumeKey: _resumeKey,
         title: video.title,
-        externalSubtitles: video.externalSubtitles,
+        externalSubtitles: externalSubs,
       );
       // Re-apply the user's persisted fit mode + speed + audio filters.
       _exo?.setFitMode(_fitMode);
@@ -395,6 +397,32 @@ class _PlayerScreenState extends State<PlayerScreen>
       ? _current.withPlaybackInfo(duration: _duration)
       : _current;
 
+  /// Resolves the external subtitle track list for the current video.
+  ///
+  /// **Priority: sidecar files in the same folder > server-supplied
+  /// external subs (Jellyfin DeliveryUrls) > embedded container tracks.**
+  /// If the source already provides external subs (e.g. the WebDAV / SMB /
+  /// FTP browser screens), they're used as-is. Otherwise, when the video
+  /// is opened from a network share that supports directory listing
+  /// (Android only), the parent folder is probed for matching `.srt` /
+  /// `.ass` / `.vtt` / `.sub` / `.ttml` / `.smi` / `.mpl2` files and the
+  /// best match is auto-selected (with the rest still reachable in the CC
+  /// sheet).
+  ///
+  /// Falls through to the existing external list when no sidecars are
+  /// found; the player then falls back to the container's embedded track.
+  /// Errors are swallowed (sidecar discovery is best-effort and must never
+  /// block playback).
+  Future<List<VideoExternalSub>> _resolveExternalSubtitles(VideoItem video) async {
+    final existing = video.externalSubtitles;
+    // Source already attached its own external subs (Jellyfin, folder
+    // bookmark, etc.) — use them as-is.
+    if (existing.isNotEmpty) return existing;
+    if (_inTests) return const [];
+    final sidecars = await SidecarSubtitleService.instance.find(video);
+    return sidecars;
+  }
+
   /// Transient IO errors worth retrying (network blips).
   static bool _isRetryableIoError(String code) =>
       code == 'error_code_io_unspecified' ||
@@ -406,6 +434,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// success so a later error starts fresh.
   Future<void> _reopenAt(Duration pos, Duration dur) async {
     final video = _current;
+    final externalSubs = await _resolveExternalSubtitles(video);
     try {
       await _exo?.open(
         video.path ?? '',
@@ -416,7 +445,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         allowSelfSigned: video.allowSelfSigned,
         resumeKey: _resumeKey,
         title: video.title,
-        externalSubtitles: video.externalSubtitles,
+        externalSubtitles: externalSubs,
       );
       _exo?.setFitMode(_fitMode);
       _exo?.setSpeed(_playbackSpeed);

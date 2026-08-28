@@ -36,6 +36,18 @@ A cross-platform video player for **Android, iOS/iPad, and Android TV** — buil
 
 ### Subtitles
 - **Embedded + sideloaded** — every subtitle file next to the video auto-attaches
+- **Network-share sidecars** — `.srt`/`.ass`/`.vtt`/`.sub`/`.ttml`/`.smi`/`.mpl2` files
+  in the same SMB / WebDAV / FTP folder as the video are auto-discovered and
+  attached as external tracks. The best filename match is auto-selected
+  (`Show.S01E01.eng.srt` matches `Show.S01E01.mkv`). Works on Android for
+  every network source — local files, SMB shares, WebDAV servers, FTP/SFTP
+  servers, Jellyfin libraries, and "Open with" hand-offs. iOS supports the
+  same behaviour for local files (via `AetherPlayerView`); server-side
+  external sub discovery for WebDAV/FTP on iOS is on the roadmap.
+- **Priority: sidecar > server external > embedded.** The first sidecar
+  match is flagged as the default track; the rest are reachable from the
+  CC button. When a folder has zero matches, the player falls back to the
+  container's embedded track automatically.
 - Supports SRT, SSA/ASS, WebVTT, TTML, SAMI, MicroDVD, MPL2, SubViewer
 - Full track picker with Off option; subtitles are anchored to the video, not the screen
 - **Appearance settings** — size, color, background, outline, and sync delay with live preview (in the player's ⋮ menu; delay live on Android via `DelayingParser` + reopen)
@@ -82,6 +94,102 @@ A cross-platform video player for **Android, iOS/iPad, and Android TV** — buil
 - Dolby Vision + HDR10 passthrough to the TV panel
 - Audio passthrough for Atmos/DTS:X over HDMI
 - Tested on Amazon Fire TV Stick 4K (Fire OS 7.1)
+
+## Engines Used
+
+DreamPlayer is a video player app, but the actual video *engine* depends on
+your platform. Different platforms need different engines to do what we
+promise: **Dolby Vision + HDR10 passthrough to the panel, lossless audio
+decoding, and a stable 4K 60 fps picture on a phone.**
+
+| Engine | Platform | What it does | Why we picked it |
+|---|---|---|---|
+| **Media3 / ExoPlayer 1.10.x** | Android phone, tablet, Android TV, Fire TV | The Google-maintained Android playback engine. We use it through a **hybrid-composition `PlatformViewLink`** so the `SurfaceView` is a real SurfaceFlinger layer on the physical display. This is the only path that delivers real HDR/DV to the panel. Built on top of Media3 is our `DreamRenderersFactory` which adds the **nextlib FFmpeg audio extension** for DTS / DTS-HD / E-AC3-JOC / TrueHD / FLAC. | The only engine that does hardware Dolby Vision on Android (`c2.qti.dv.decoder` on the OnePlus, `OMX.MTK.VIDEO.DECODER.DVHE.STH` on the Fire TV) with real HDR composited on the panel. Nova Video Player, Just Player, Plex, MX Player Pro all use it. |
+| **AetherEngine 6.38.x** | iOS / iPad | Native iOS playback built on AVPlayer + FFmpeg demux/decode. The AetherPlayerView exposes a `videoFormat` for `.hdr10 / .hdr10Plus / .dolbyVision`, the engine reads the container, FFmpeg fills in what AVPlayer can't (DTS / DTS-HD / TrueHD, MKV / WebM / TS / AVI containers), and the engine routes bitstream-audio over HDMI. | The only path that combines AVPlayer's hardware HDR / DV fast path on the panel with FFmpeg's container / codec coverage for non-Apple formats. iOS has no ExoPlayer port. |
+| **nextlib `media3ext`** | Android (FFmpeg audio) | The Android FFmpeg extension that adds `FfmpegAudioRenderer` for DTS / DTS-HD / TrueHD / FLAC. Wired into `DreamRenderersFactory` AFTER the stock audio renderer, so it acts as a fallback for the lossless codecs. | The same FFmpeg integration Nova Video Player uses. Video stays on hardware `MediaCodecVideoRenderer`; audio falls back to FFmpeg for the formats the OS can't decode. |
+| **Citadel (SwiftNIO SSH)** | iOS / iPad SFTP | Native SFTP client used by the FTP browser for SFTP playback (`FtpByteRangeSource`). | The only maintained Swift SSH client that compiles cleanly on iOS 17. |
+| **jcifs-ng** | Android SMB | The Java SMB 2/3 client used by the in-app SMB browser + `SmbDataSource` (custom ExoPlayer `DataSource` that streams from the share). | Nova's and CX Explorer's SMB library; measured ~75 MB/s vs ~4–6 MB/s for smbj on the NAS. |
+| **Media3 / DefaultHttpDataSource + OkHttp** | Android HTTP(S) | Standard Media3 HTTP source (with a custom trust-all OkHttp client for self-signed WebDAV). | Reuses Media3's mature HTTP implementation; the self-signed client is opt-in per server. |
+| **WebDAVByteRangeSource** (in `AetherEngineSMB`) | iOS / iPad WebDAV | A `ByteRangeSource` that serves every engine read as an independent HTTP `Range` request with the `Authorization` header, on a permissive or default-trust session. Wrapped in `BufferedSMBReader` for read-ahead. | AetherEngine's own HTTP stack can't carry auth headers or bypass TLS validation; this is the cleanest bridge between the WebDAV client and the engine. |
+
+### Why not just use mpv / libVLC / libVLC-JVM?
+
+We tried. Briefly.
+
+- **mpv / `media_kit`** — mpv v0.36 + FFmpeg 6.0 cannot parse the DOVI
+  configuration record in DV P8 MKVs (renders pink/green on screen).
+  `media_kit` renders into a Flutter texture, and Flutter textures have
+  **no HDR path on any platform** (media-kit issue #615), so even when mpv
+  decodes HDR10 correctly, the display only ever sees SDR. `hwdec:no`
+  (the only setting that gives correct colors with mpv) is too slow for
+  4K 60. Adding mpv back would re-break the things the user came here
+  for (real DV + HDR on supported panels). Documented in
+  `AGENTS.md → Player engine choice` and `Playback research notes`.
+- **libVLC** — works for SD content, but VLC's Android player renders
+  into a `Surface` it doesn't own. To get real HDR passthrough you'd
+  need VLC's `mediacodec-hardware` decoder chain, which still doesn't
+  handle the DOVI RPU correctly on most devices. The VLC-for-Android
+  fork that *does* (libVLC ≥ 4.0 with the `dovi` plugin) is a 100 MB
+  binary, ships its own player UI, and is licensed LGPL-2.1 (the
+  App Store constraint would force us to relink it).
+- **"ffmpeg-kant" / other FFmpeg wrappers** — pure-software decode on a
+  phone. 4K HDR HEVC at 60 fps stutters on every Snapdragon 678 / 7
+  gen 1 / 8 gen 2 device we've tested. No native hardware path.
+
+The exit interview was: keep Media3 + native SurfaceView for the DV/HDR
+fast path; ship native FFmpeg audio for the lossless codecs; reuse
+Media3 for everything else. That's the same engine stack Nova Video
+Player uses (ExoPlayer + FFmpeg audio) and the same one Just Player uses
+(stock `DefaultRenderersFactory` + nextlib `media3ext`).
+
+## Spatial Audio on Android
+
+DreamPlayer surfaces the **system Spatializer** (Android 13+,
+`AudioManager.getSpatializer()`) as a teal **"Spatial"** chip in the
+player top bar. When the chip is on, your phone is virtualizing the
+surround mix for your output device (stereo headphones, phone speaker,
+or a USB DAC). The Spatializer is implemented by the OEM, so the
+quality / available modes vary by device. The chip turns on only when
+the system reports:
+
+1. The Spatializer is available on this device.
+2. The current routing (headphones, USB, etc.) supports spatialization.
+3. The currently-playing audio track is multichannel (≥ 6 channels for
+   surround, ≥ 8 for Atmos).
+
+To enable spatial audio in DreamPlayer:
+
+1. **Connect headphones or a USB DAC.** Phone speakers don't get
+   spatialized on most devices.
+2. **Open the file you want to play.** A multichannel track is required
+   — a stereo `.aac` won't engage the Spatializer.
+3. **Enable system spatial audio:**
+   - **OnePlus / OPPO** — Settings → Sound & vibration → Spatial Audio
+     → enable, then choose "Music & Video". On ColorOS 13+ this is
+     under Settings → Sound & vibration → Dolby Atmos / OPlus Audio.
+   - **Samsung (One UI 6+)** — Settings → Sounds and vibration → Sound
+     quality and effects → Dolby Atmos for games / movies, **and**
+     "Adapt Sound" / "Dolby Atmos for headphones" if you're on the
+     built-in speakers. The Spatializer only reports available when
+     "Dolby Atmos" is on.
+   - **Xiaomi (MIUI 14+)** — Settings → Sound & vibration → Sound
+     effects → Immersive Sound / Dolby Atmos. On some MIUI builds the
+     option is under "Audio tuner" → "Apply sound effects to media".
+   - **Pixel (Android 14+)** — Settings → Sound & vibration → Spatial
+     audio. The Pixel implementation is limited; some Pixels only
+     spatialize on specific Bluetooth codecs (LDAC / aptX Adaptive).
+   - **Nothing OS / Motorola / ASUS ZenUI** — most ship with the
+     Spatializer disabled. Install **Dirac Audio** / **Dolby Access** /
+     your OEM's audio app and enable spatialization from there; the
+     system Spatializer reports available once the OEM app is active.
+4. **Look for the "Spatial" chip in the player top bar.** When the
+   Spatializer is on for the current track the chip turns teal. Tap
+   the **ⓘ** button next to the title — the "Spatial audio" row reads
+   "On" with the routing info.
+
+The chip is Android-only. iOS uses Apple's own spatial audio for Atmos
+content on the native AVPlayer path; the system toggles it from Control
+Center → AirPlay / Head-tracking, not from inside any third-party app.
 
 ## Screenshots
 
