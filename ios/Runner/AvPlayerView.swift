@@ -1418,8 +1418,11 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     /// the Android side's auto-pairing.
     private static func siblingSubtitles(for videoURL: URL) -> [ExternalSubtitleTrack] {
         let videoBase = videoURL.deletingPathExtension().lastPathComponent.lowercased()
+        let parent = videoURL.deletingLastPathComponent()
+        let didAccess = parent.startAccessingSecurityScopedResource()
+        defer { if (didAccess) { parent.stopAccessingSecurityScopedResource() } }
         guard let files = try? FileManager.default.contentsOfDirectory(
-            at: videoURL.deletingLastPathComponent(),
+            at: parent,
             includingPropertiesForKeys: nil
         ) else { return [] }
 

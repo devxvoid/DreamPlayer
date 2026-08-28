@@ -52,6 +52,7 @@ import io.flutter.plugin.platform.PlatformView
 import io.flutter.plugin.platform.PlatformViewFactory
 import com.dreamplayer.app.DreamRenderersFactory
 import okhttp3.OkHttpClient
+import androidx.documentfile.provider.DocumentFile
 import java.io.File
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
@@ -1062,7 +1063,15 @@ class ExoPlayerView(
                             // Subtitle candidates: explicit subtitleUri wins,
                             // then external subtitles from the server (Jellyfin),
                             // then auto-paired siblings next to the video file.
-                            val paired: List<File> = if (subtitleUri.isNullOrEmpty() && path != null) {
+                            // For SAF bookmarked folders the path is `tree:<id>/...`
+                            // (synthetic, not a real File) — resolve via DocumentFile.
+                            val isTreePath = path != null && path.startsWith("tree:")
+                            val treeSubtitleEntries: List<Pair<Uri, String>> = if (subtitleUri.isNullOrEmpty() && isTreePath) {
+                                findTreeSiblingSubtitleEntries(path!!)
+                            } else {
+                                emptyList()
+                            }
+                            val paired: List<File> = if (subtitleUri.isNullOrEmpty() && path != null && !isTreePath) {
                                 SubtitleFormats.findSiblingSubtitles(path)
                             } else {
                                 emptyList()
@@ -1120,6 +1129,20 @@ class ExoPlayerView(
                                     )
                                     .build()
                             }
+                            // SAF tree subtitles (bookmarked folders, Shield/Galaxy SAF).
+                            val treeConfigs = treeSubtitleEntries.mapIndexed { i, (uri, name) ->
+                                val utf8Uri = SubtitleFormats.toUtf8(activity, uri)
+                                val language = SubtitleFormats.languageFromFileName(name)
+                                MediaItem.SubtitleConfiguration.Builder(utf8Uri)
+                                    .setMimeType(SubtitleFormats.mimeTypeFor(name))
+                                    .setLanguage(language)
+                                    .setRoleFlags(C.ROLE_FLAG_SUBTITLE)
+                                    .setLabel(SubtitleFormats.labelFromFileName(name))
+                                    .setSelectionFlags(
+                                        if (i == 0) C.SELECTION_FLAG_DEFAULT else 0,
+                                    )
+                                    .build()
+                            }
                             // Remote explicit subtitleUri (smb://, http://, content://, file://).
                             val remoteExplicitConfig = if (!subtitleUri.isNullOrEmpty() &&
                                 localCandidates.isEmpty()
@@ -1148,12 +1171,17 @@ class ExoPlayerView(
                             } else {
                                 emptyList()
                             }
-                            val allConfigs = localConfigs + remoteExplicitConfig + externalConfigs
+                            val allConfigs = localConfigs + treeConfigs + remoteExplicitConfig + externalConfigs
                             if (allConfigs.isNotEmpty()) {
                                 currentSubtitle = if (localCandidates.isNotEmpty()) {
                                     localCandidates.first().absolutePath to
                                         SubtitleFormats.labelFromFileName(
                                             localCandidates.first().name,
+                                        )
+                                } else if (treeSubtitleEntries.isNotEmpty()) {
+                                    treeSubtitleEntries.first().first.toString() to
+                                        SubtitleFormats.labelFromFileName(
+                                            treeSubtitleEntries.first().second,
                                         )
                                 } else {
                                     val first = rawExternalSubs?.firstOrNull()
@@ -1900,6 +1928,47 @@ class ExoPlayerView(
             .getBoolean("flutter.dreamplayer.pipEnabled", true)
     } catch (_: Exception) {
         true
+    }
+
+    /// Sibling subtitles for a SAF bookmarked folder (`tree:<id>/...`).
+    /// Mirrors `SubtitleFormats.findSiblingSubtitles` but via `DocumentFile`
+    /// because the synthetic `tree:` path is not a real `File`. Returns
+    /// `Uri` + file-name pairs (content:// URIs) ordered best-match first.
+    private fun findTreeSiblingSubtitleEntries(treePath: String): List<Pair<Uri, String>> {
+        val rest = treePath.removePrefix("tree:")
+        val slash = rest.indexOf('/')
+        val id = if (slash < 0) rest else rest.substring(0, slash)
+        val relative = if (slash < 0) "" else rest.substring(slash + 1)
+        val lastSlash = relative.lastIndexOf('/')
+        val parentRelative = if (lastSlash < 0) "" else relative.substring(0, lastSlash)
+        val videoName = if (lastSlash < 0) relative else relative.substring(lastSlash + 1)
+        if (videoName.isEmpty()) return emptyList()
+        val videoBase = videoName.substringBeforeLast('.')
+        val prefs = activity.getSharedPreferences("dreamplayer.folderBookmarks", Context.MODE_PRIVATE)
+        val stored = prefs.getString("bm.$id", null)
+            ?: prefs.getString("libfolder.$id", null)
+            ?: return emptyList()
+        val treeUri = try { Uri.parse(stored) } catch (_: Exception) { return emptyList() }
+        var doc = DocumentFile.fromTreeUri(activity, treeUri) ?: return emptyList()
+        if (parentRelative.isNotEmpty()) {
+            for (segment in parentRelative.split('/')) {
+                if (segment.isEmpty()) continue
+                doc = doc.findFile(segment) ?: return emptyList()
+            }
+        }
+        if (!doc.isDirectory) return emptyList()
+        val children = doc.listFiles()
+        val videoCount = children.count { it.isFile && it.name != null && SubtitleFormats.isVideoFile(it.name!!) }
+        val subtitles = children.filter { it.isFile && it.name != null && SubtitleFormats.isSubtitleFile(it.name!!) }
+        if (subtitles.isEmpty()) return emptyList()
+        if (videoCount == 1 && subtitles.size == 1) {
+            val f = subtitles.first()
+            return listOf((f.uri to (f.name ?: "")))
+        }
+        val lowerBase = videoBase.lowercase()
+        val prefixed = subtitles.filter { it.name!!.lowercase().startsWith("$lowerBase.") }
+        val ordered = (if (prefixed.isNotEmpty()) prefixed else subtitles).sortedBy { it.name!!.lowercase() }
+        return ordered.map { it.uri to (it.name ?: "") }
     }
 
     /// MainActivity.onPictureInPictureModeChanged forwarded here: re-emit so

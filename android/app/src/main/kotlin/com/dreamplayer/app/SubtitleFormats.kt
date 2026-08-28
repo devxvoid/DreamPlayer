@@ -107,12 +107,13 @@ object SubtitleFormats {
             return subtitles
         }
 
-        val prefixed = subtitles.filter { it.name.startsWith("$videoBase.") }
-        val ordered = prefixed.sortedBy { it.name }
+        val lowerBase = videoBase.lowercase(Locale.ROOT)
+        val prefixed = subtitles.filter { it.name.lowercase(Locale.ROOT).startsWith("$lowerBase.") }
+        val ordered = prefixed.sortedBy { it.name.lowercase(Locale.ROOT) }
         if (ordered.isNotEmpty()) return ordered
 
         // No prefix match: still expose all subtitles so the picker can choose.
-        return subtitles.sortedBy { it.name }
+        return subtitles.sortedBy { it.name.lowercase(Locale.ROOT) }
     }
 
     /// Re-encodes a subtitle file to UTF-8 if it isn't already, writing the

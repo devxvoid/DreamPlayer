@@ -3,6 +3,12 @@
 All notable changes to DreamPlayer are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## 0.3.6
+
+### Fixed
+
+- **External .srt with exactly the same name as the video now auto-loads everywhere** — reported on Galaxy + Shield Pro: a sidecar like `Movie.srt` next to `Movie.mkv` was missed. Root causes fixed: (1) `SubtitleFormats.findSiblingSubtitles` prefix check was case-sensitive (`startsWith`); now `lowercase` on both sides with case-insensitive sort; (2) **SAF bookmarked folders** (`tree:<id>/…` from **+ → Add folder to library**) store videos as `content://` `DocumentFile` URIs — `File.listFiles()` on the synthetic `tree:` path always returned empty, so no sidecar was ever found. `ExoPlayerView` now resolves the tree via `DocumentFile.fromTreeUri` and lists siblings in the parent `DocumentFile`, building `MediaItem.SubtitleConfiguration` from `content://` URIs (with `toUtf8` + `isDefault` on the best filename match). Covers Galaxy internal storage + Shield Pro removable/USB SAF trees + CX `content://` handoffs. (3) **iPad bookmarked folders**: `siblingSubtitles(for:)` now wraps the parent `contentsOfDirectory` in `startAccessingSecurityScopedResource` / `stop…` so Files-app security-scoped bookmarks list correctly.
+
 ## 0.3.5
 
 ### Changed
