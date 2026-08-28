@@ -405,22 +405,27 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                 case "setAudioTrack":
                     let index = (args?["index"] as? NSNumber)?.intValue ?? -1
                     self.engine?.selectAudioTrack(index: index)
-                    // For custom IOReader sources (WebDAV), the engine may need
-                    // to re-probe the container on track switch and hit
-                    // "open failed" if the reader can't rewind.  If that
-                    // happens the engine transitions to .error — detect it
-                    // and do a full reload as a fallback.
-                    if self.lastWebDAVInfo != nil {
-                        // Give the engine a moment to process the switch.
+                    // Network / custom-IO sources (WebDAV, FTP/SFTP, Jellyfin
+                    // direct-play over HTTP) cannot switch the audio track in
+                    // place: the engine must re-probe the container, but its
+                    // loopback/ByteRange reader can't rewind without a fresh
+                    // source.  The engine does not always surface this as an
+                    // error (it can silently no-op the switch), so proactively
+                    // reload the session from the current position and re-apply
+                    // the chosen track to guarantee the selection takes effect.
+                    let scheme = self.currentSourceURL?.scheme?.lowercased()
+                    let isNetworkSource = scheme == "http" || scheme == "https"
+                        || scheme == "ftp" || scheme == "sftp"
+                        || self.lastWebDAVInfo != nil || self.lastFtpUri != nil
+                    if isNetworkSource {
                         Task { @MainActor [weak self] in
-                            try? await Task.sleep(nanoseconds: 500_000_000)
-                            guard let self, let engine else { return }
-                            if case .error = engine.state {
-                                let pos = engine.currentTime
-                                await self.reloadSession(at: pos)
-                                self.engine?.selectAudioTrack(index: index)
-                                self.emit()
-                            }
+                            guard let self, let engine = self.engine else { return }
+                            // Let the engine settle its in-place attempt first.
+                            try? await Task.sleep(nanoseconds: 300_000_000)
+                            let pos = engine.currentTime
+                            await self.reloadSession(at: pos)
+                            self.engine?.selectAudioTrack(index: index)
+                            self.emit()
                         }
                     }
                     result(nil)
