@@ -404,7 +404,14 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                     result(self.stateMap())
                 case "setAudioTrack":
                     let index = (args?["index"] as? NSNumber)?.intValue ?? -1
-                    self.engine?.selectAudioTrack(index: index)
+                    // The Dart picker hands us the native track `id` (== the
+                    // `index` field in the audioTracks map), but the engine's
+                    // `selectAudioTrack(index:)` expects the track's position
+                    // in the `audioTracks` array.  Convert id → position so
+                    // the call lands on the right track even when ids are not
+                    // sequential (and is a no-op when they are).
+                    let pos = self.engineAudioPosition(forId: index)
+                    self.engine?.selectAudioTrack(index: pos)
                     // Network / custom-IO sources (WebDAV, FTP/SFTP, Jellyfin
                     // direct-play over HTTP) cannot switch the audio track in
                     // place: the engine must re-probe the container, but its
@@ -422,9 +429,15 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                             guard let self, let engine = self.engine else { return }
                             // Let the engine settle its in-place attempt first.
                             try? await Task.sleep(nanoseconds: 300_000_000)
-                            let pos = engine.currentTime
-                            await self.reloadSession(at: pos)
-                            self.engine?.selectAudioTrack(index: index)
+                            let curPos = engine.currentTime
+                            await self.reloadSession(at: curPos)
+                            // Wait for the freshly loaded engine to reach
+                            // .ready so selectAudioTrack is honored.
+                            await self.waitForEngineReady(timeout: 3.0)
+                            // Re-resolve the position against the fresh
+                            // audioTracks (ids are the same, but be defensive).
+                            let pos2 = self.engineAudioPosition(forId: index)
+                            self.engine?.selectAudioTrack(index: pos2)
                             self.emit()
                         }
                     }
@@ -883,6 +896,37 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         } catch {
             lastError = String(describing: error)
         }
+    }
+
+    /// Waits until the engine reaches `.ready` (or `.ended`/`.error`) with a
+    /// timeout.  Used after a fresh `engine.load(...)` so that the follow-up
+    /// `selectAudioTrack` / `selectSubtitleTrack` calls land on a session
+    /// that's actually accepting them (the engine ignores track switches
+    /// while still loading/buffering).
+    private func waitForEngineReady(timeout: TimeInterval) async {
+        guard let engine = self.engine else { return }
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            switch engine.state {
+            case .ready, .ended:
+                return
+            case .error:
+                return
+            default:
+                break
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+    }
+
+    /// Converts a Dart-sent audio track id (the `index` field in the
+    /// `audioTracks` map, == `AudioTrack.id`) to the track's position in the
+    /// engine's `audioTracks` array.  `engine.selectAudioTrack(index:)`
+    /// expects that position.  Falls back to the id itself when the track
+    /// isn't found (a no-op when ids are already sequential).
+    private func engineAudioPosition(forId id: Int) -> Int {
+        guard let engine = self.engine, id >= 0 else { return id }
+        return engine.audioTracks.firstIndex(where: { $0.id == id }) ?? id
     }
 
     /// Builds a fresh `MediaSource` from the stored open info.
