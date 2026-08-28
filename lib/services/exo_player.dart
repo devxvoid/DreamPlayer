@@ -272,9 +272,6 @@ class ExoPlayerEvent {
     this.videoDecoderName,
     this.isHwDecoder,
     this.inPip = false,
-    this.bandwidthBytesPerSec = 0,
-    this.bandwidthPeakBytesPerSec = 0,
-    this.bandwidthBytesDownloaded = 0,
     this.sourceScheme = '',
   });
 
@@ -360,19 +357,10 @@ class ExoPlayerEvent {
   /// overlay controls; only the video floats).
   final bool inPip;
 
-  /// Current network bandwidth in bytes/sec. Populated by Media3's
-  /// AnalyticsListener (Android) or AVPlayerItemAccessLog (iOS); 0 for
-  /// non-network sources (file://, content://).
-  final int bandwidthBytesPerSec;
-
-  /// Highest bytes/sec seen since the current item opened.
-  final int bandwidthPeakBytesPerSec;
-
-  /// Approximate total bytes downloaded since the current item opened.
-  final int bandwidthBytesDownloaded;
-
   /// Lower-cased scheme of the current source URI: "file", "content", "http",
   /// "https", "ftp", "sftp", "dreamplayersmb", "dreamplayerwebdav", etc.
+  /// Used by the ⓘ info sheet to label the source ("Local", "WebDAV",
+  /// "Jellyfin", "SMB", …).
   final String sourceScheme;
 
   Duration get position => Duration(milliseconds: positionMs);
@@ -426,15 +414,6 @@ class ExoPlayerEvent {
       videoDecoderName: m['videoDecoderName'] as String?,
       isHwDecoder: m['isHwDecoder'] as bool?,
       inPip: m['inPip'] == true,
-      bandwidthBytesPerSec: m['bandwidthBytesPerSec'] is num
-          ? (m['bandwidthBytesPerSec'] as num).toInt()
-          : 0,
-      bandwidthPeakBytesPerSec: m['bandwidthPeakBytesPerSec'] is num
-          ? (m['bandwidthPeakBytesPerSec'] as num).toInt()
-          : 0,
-      bandwidthBytesDownloaded: m['bandwidthBytesDownloaded'] is num
-          ? (m['bandwidthBytesDownloaded'] as num).toInt()
-          : 0,
       sourceScheme: m['sourceScheme'] as String? ?? '',
     );
   }

@@ -119,10 +119,8 @@ class _PlayerScreenState extends State<PlayerScreen>
   HdrFormat _liveHdr = HdrFormat.sdr;
   String? _liveDecoderName;
   bool? _isHwDecoder;
-  /// Live network telemetry pushed by the native player (0 for local files).
-  int _liveBandwidthBytesPerSec = 0;
-  int _liveBandwidthPeakBytesPerSec = 0;
-  int _liveBandwidthBytesDownloaded = 0;
+  /// Source URI scheme, used to label the source in the ⓘ info sheet
+  /// (Local / SMB / WebDAV / FTP / HTTP / etc.).
   String _liveSourceScheme = '';
   List<ExoAudioTrack> _audioTracks = const [];
   int _selectedAudioTrackIndex = -1;
@@ -669,9 +667,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (e.isHwDecoder != null) _isHwDecoder = e.isHwDecoder;
     _liveSpatial = e.spatialAudio;
     _liveBass = e.bassBoost;
-    _liveBandwidthBytesPerSec = e.bandwidthBytesPerSec;
-    _liveBandwidthPeakBytesPerSec = e.bandwidthPeakBytesPerSec;
-    _liveBandwidthBytesDownloaded = e.bandwidthBytesDownloaded;
     _liveSourceScheme = e.sourceScheme;
     if (e.inPip != _inPip) {
       _inPip = e.inPip;
@@ -1467,8 +1462,9 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   /// Read-only "Video info" sheet behind the top-bar ⓘ button. Surfaces
   /// every detail the chip row can show, plus the full source URL, live
-  /// network speed (peak + current), bytes downloaded, audio channel /
-  /// sample-rate, chapter count, full decoder path, and file size.
+  /// Read-only "Video info" sheet behind the top-bar ⓘ button. Surfaces
+  /// the details the chip row can show, plus the full source URL, audio
+  /// channel / sample-rate, chapter count, full decoder path, and file size.
   Future<void> _openVideoInfoSheet() async {
     if (_touchLocked) return;
     _showControls();
@@ -1478,16 +1474,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     final sourceUrl = (video.uri?.isNotEmpty == true)
         ? video.uri!
         : (video.path?.isNotEmpty == true ? video.path! : '');
-    final isNetwork = _liveSourceScheme == 'http' || _liveSourceScheme == 'https';
-    final bwCurrent = isNetwork
-        ? _formatBytesPerSec(_liveBandwidthBytesPerSec)
-        : '— (local)';
-    final bwPeak = isNetwork && _liveBandwidthPeakBytesPerSec > 0
-        ? _formatBytesPerSec(_liveBandwidthPeakBytesPerSec)
-        : null;
-    final bwTotal = isNetwork && _liveBandwidthBytesDownloaded > 0
-        ? _formatBytes(_liveBandwidthBytesDownloaded)
-        : null;
     final fileSize = (video.sizeBytes ?? 0) > 0 ? _formatBytes(video.sizeBytes!) : null;
     final speedLabel = (_playbackSpeed - 1.0).abs() > 0.001
         ? '${_playbackSpeed.toStringAsFixed(2)}×'
@@ -1524,9 +1510,6 @@ class _PlayerScreenState extends State<PlayerScreen>
           video.isTranscoded ||
           JellyfinClient.isTranscodeUri(video.uri ?? ''))
         (label: 'Stream', value: 'Server transcoding'),
-      if (isNetwork) (label: 'Network', value: bwCurrent),
-      if (bwPeak != null) (label: 'Peak speed', value: bwPeak),
-      if (bwTotal != null) (label: 'Bytes read', value: bwTotal),
       if (Platform.isAndroid && _liveSpatial == 'on')
         (label: 'Spatial audio', value: 'On'),
       if (Platform.isAndroid && _audioBoost > 1.01)
@@ -3072,29 +3055,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     return '${two(m)}:${two(s)}';
   }
 
-  /// Pretty-print a bytes/sec value as a chip-friendly speed: "5.2 MB/s",
-  /// "780 KB/s", "—", etc. Used by the live network chip and the ⓘ sheet.
-  String _formatBytesPerSec(int bytesPerSec) {
-    if (bytesPerSec <= 0) return '—';
-    const kb = 1024;
-    const mb = kb * 1024;
-    const gb = mb * 1024;
-    if (bytesPerSec >= gb) {
-      return '${(bytesPerSec / gb).toStringAsFixed(2)} GB/s';
-    }
-    if (bytesPerSec >= mb) {
-      final v = bytesPerSec / mb;
-      return v >= 10
-          ? '${v.toStringAsFixed(0)} MB/s'
-          : '${v.toStringAsFixed(1)} MB/s';
-    }
-    if (bytesPerSec >= kb) {
-      return '${(bytesPerSec / kb).toStringAsFixed(0)} KB/s';
-    }
-    return '$bytesPerSec B/s';
-  }
-
-  /// Pretty-print a byte count for the ⓘ sheet "Bytes read" row.
+  /// Pretty-print a byte count for the ⓘ sheet "File size" row.
   String _formatBytes(int bytes) {
     if (bytes <= 0) return '0 B';
     const kb = 1024;
@@ -3209,22 +3170,6 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   /// True when the current source is a live http/https stream (Jellyfin
   /// direct-play, URL playback, CX-Explorer "Open with" handoff, etc.)
-  /// — the only sources for which the bandwidth telemetry actually fires.
-  /// Local / SMB / WebDAV / FTP sources never report a byte rate, so the
-  /// live indicator would show a permanent "—" and adds no value.
-  bool get _isLiveNetworkSource =>
-      _liveSourceScheme == 'http' || _liveSourceScheme == 'https';
-
-  /// Short label for the live source (used as the indicator's tooltip).
-  /// Mirrors the source-type row in the ⓘ info sheet so the user can
-  /// glance at "Jellyfin 5.2 MB/s" without opening the sheet.
-  String get _liveNetworkSourceLabel {
-    if (!_isLiveNetworkSource) return '';
-    final uri = _current.uri ?? '';
-    if (uri.toLowerCase().contains('jellyfin')) return 'Jellyfin';
-    return 'Network';
-  }
-
   /// Live video codec label for the chip / info sheet, or null when unknown.
   /// For Dolby Vision the HDR chip already says "Dolby Vision", so the
   /// duplicate codec label is suppressed.
@@ -3607,25 +3552,6 @@ class _PlayerScreenState extends State<PlayerScreen>
                                 ),
                               ),
                             ),
-                            // Live network speed indicator — shown for
-                            // http/https sources only (SMB / WebDAV / FTP
-                            // don't expose a byte counter; the ⓘ sheet
-                            // still shows the source label there). Always
-                            // hidden in pip (the pip window shows only the
-                            // video), and gated on the live bandwidth value
-                            // being > 0 so the indicator doesn't flash in
-                            // before Media3 / AVPlayer has reported the
-                            // first sample. Updated on every bandwidth
-                            // event from the player.
-                            if (!_inPip && _isLiveNetworkSource) ...[
-                              const SizedBox(width: 6),
-                              _LiveNetworkIndicator(
-                                bytesPerSec: _liveBandwidthBytesPerSec,
-                                peakBytesPerSec: _liveBandwidthPeakBytesPerSec,
-                                sourceLabel: _liveNetworkSourceLabel,
-                              ),
-                              const SizedBox(width: 6),
-                            ],
                             _TvControlButton(
                               onPressed: _openVideoInfoSheet,
                               icon: const Icon(Icons.info_outline),
@@ -4254,82 +4180,4 @@ class _TvControlButtonState extends State<_TvControlButton> {
 /// Lives next to the ⓘ button in the player top bar; hidden entirely in
 /// pip mode (the parent gates the widget out so the floating window shows
 /// only the video). When the speed is still loading (the player hasn't
-/// reported a sample yet), renders just the down-arrow icon so the
-/// indicator reserves its space and the layout doesn't jump when the
-/// first sample arrives.
-class _LiveNetworkIndicator extends StatelessWidget {
-  const _LiveNetworkIndicator({
-    required this.bytesPerSec,
-    required this.peakBytesPerSec,
-    required this.sourceLabel,
-  });
 
-  final int bytesPerSec;
-  final int peakBytesPerSec;
-  final String sourceLabel;
-
-  @override
-  Widget build(BuildContext context) {
-    final hasValue = bytesPerSec > 0;
-    final formatted = _formatBytesPerSecStatic(bytesPerSec);
-    final peakText = peakBytesPerSec > bytesPerSec
-        ? ' (peak ${_formatBytesPerSecStatic(peakBytesPerSec)})'
-        : '';
-    final tooltip = hasValue
-        ? '$sourceLabel — $formatted$peakText'
-        : '$sourceLabel — measuring…';
-    return Tooltip(
-      message: tooltip,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.5),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(
-              Icons.arrow_downward_rounded,
-              size: 14,
-              color: Color(0xFF42A5F5),
-            ),
-            const SizedBox(width: 4),
-            Text(
-              hasValue ? formatted : '—',
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-                fontFeatures: [FontFeature.tabularFigures()],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Top-level helper for the indicator widget so it doesn't depend on the
-/// player-screen state. Duplicates the player-screen formatter so the
-/// widget stays a pure leaf.
-String _formatBytesPerSecStatic(int bytesPerSec) {
-  if (bytesPerSec <= 0) return '—';
-  const kb = 1024;
-  const mb = kb * 1024;
-  const gb = mb * 1024;
-  if (bytesPerSec >= gb) {
-    return '${(bytesPerSec / gb).toStringAsFixed(2)} GB/s';
-  }
-  if (bytesPerSec >= mb) {
-    final v = bytesPerSec / mb;
-    return v >= 10
-        ? '${v.toStringAsFixed(0)} MB/s'
-        : '${v.toStringAsFixed(1)} MB/s';
-  }
-  if (bytesPerSec >= kb) {
-    return '${(bytesPerSec / kb).toStringAsFixed(0)} KB/s';
-  }
-  return '$bytesPerSec B/s';
-}

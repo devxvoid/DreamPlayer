@@ -257,16 +257,9 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     /// speed (only http/https feed AVPlayerItemAccessLog).
     private var currentSourceScheme: String = ""
     /// Final URL the engine was bound to (file URL for local paths, otherwise
-    /// the same URL we handed to the engine). Used by the bandwidth sampler.
+    /// the same URL we handed to the engine). Reserved for the
+    /// source-label / chapter-probe paths; the network telemetry is gone.
     private var currentSourceURL: URL?
-    // ---- Network bandwidth telemetry (AVPlayerItemAccessLog) ----
-    /// Total bytes observed in AVPlayerItemAccessLog.indicatedBitrate × time
-    /// (an estimate; the log doesn't expose raw byte counters). Reset on open.
-    private var bandwidthTotalBytes: Int64 = 0
-    /// Peak observed bitrate (bits/sec) for the current item.
-    private var bandwidthPeakBytesPerSec: Int64 = 0
-    /// Most recent observed bitrate (bits/sec) from the access log.
-    private var bandwidthBytesPerSec: Int64 = 0
 
     /// Subtitle cue shift from the user's appearance settings (seconds).
     /// Positive = cues appear LATER than authored.
@@ -747,9 +740,6 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
                     scheme = ""
                 }
                 self.currentSourceScheme = scheme
-                // Reset bandwidth rollup for the new item.
-                self.bandwidthTotalBytes = 0
-                self.bandwidthPeakBytesPerSec = 0
                 let probe = try await engine.load(source: finalSource, startPosition: startPosition, options: options)
                 if let probe {
                     self.videoCodecName = probe.videoCodecName
@@ -1077,42 +1067,6 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
     /// (the system's smoothed moving average — only populated for http/https
     /// sources; returns 0 for file://). Returns (currentBytesPerSec,
     /// peakBytesPerSec) computed from bits/sec divided by 8.
-    private func sampleBandwidth() -> (current: Int64, peak: Int64, total: Int64) {
-        guard let player = findPlayerLayer()?.player,
-              let item = player.currentItem,
-              let log = item.accessLog(),
-              let event = log.events.last else {
-            return (bandwidthBytesPerSec, bandwidthPeakBytesPerSec, bandwidthTotalBytes)
-        }
-        // AVPlayerItemAccessLog.indicatedBitrate is a Double in Swift's
-        // bridging (it surfaces as Double even though the underlying ObjC
-        // value is int64 bits-per-second). Coerce to Int64 to match the
-        // band-rollup state below.
-        let bitsPerSec = max(0.0, event.indicatedBitrate)
-        let bytesPerSec: Int64 = Int64(bitsPerSec / 8.0)
-        // Update the rolling peak (in-memory only; reset on open).
-        if bytesPerSec > bandwidthPeakBytesPerSec {
-            bandwidthPeakBytesPerSec = bytesPerSec
-        }
-        bandwidthBytesPerSec = bytesPerSec
-        // Total bytes estimate: integrate the bitrate since open. This is the
-        // same "rolling average × time" approximation VLC/iOS systems use
-        // when raw byte counters aren't available; it's monotonic and good
-        // enough for the "Bytes read" field in the info sheet.
-        if let last = lastBandwidthSampleMs {
-            let nowMs = Date().timeIntervalSince1970 * 1000.0
-            let deltaMs = Int64(nowMs - last)
-            if deltaMs > 0 && bytesPerSec > 0 {
-                bandwidthTotalBytes += bytesPerSec * deltaMs / 1000
-            }
-        }
-        lastBandwidthSampleMs = Date().timeIntervalSince1970 * 1000.0
-        return (bandwidthBytesPerSec, bandwidthPeakBytesPerSec, bandwidthTotalBytes)
-    }
-
-    /// ms-since-epoch of the last bandwidth sample (used to integrate total bytes).
-    private var lastBandwidthSampleMs: Double?
-
     private func stateMap() -> [String: Any] {
         guard let engine else { return [:] }
         let state = engine.state
@@ -1167,11 +1121,6 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         let subtitleOn = engine.isSubtitleActive || selectedSubtitle >= 0
         let subtitleFormat = activeSub.map { Self.subtitleFormatLabel($0.codec) } ?? ""
 
-        // Network bandwidth telemetry. Only http/https populate the access
-        // log; local files / SMB / FTP / WebDAV report 0 so the chip shows
-        // "Local" instead of a stale speed.
-        let isNetwork = currentSourceScheme == "http" || currentSourceScheme == "https"
-        let (bwNow, bwPeak, bwTotal) = isNetwork ? sampleBandwidth() : (0, 0, 0)
         let map: [String: Any] = [
             "state": st,
             "playing": playing,
@@ -1202,9 +1151,6 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
             "nightMode": nightModeEnabled,
             "inPip": inPip,
             "error": lastError ?? "",
-            "bandwidthBytesPerSec": bwNow,
-            "bandwidthPeakBytesPerSec": bwPeak,
-            "bandwidthBytesDownloaded": bwTotal,
             "sourceScheme": currentSourceScheme,
         ]
         return map
