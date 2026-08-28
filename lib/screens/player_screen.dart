@@ -3168,52 +3168,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
   }
 
-  /// Build the "Network" chip shown under the title. Three modes:
-  ///   1. Local files (file://, content://) → green "Local" badge.
-  ///   2. Network sources (http/https) with a live speed → live "5.2 MB/s".
-  ///   3. Other network sources (SMB / WebDAV / FTP / Jellyfin mDNS) →
-  ///      a short label like "SMB" / "WebDAV" / "Jellyfin" — the speed is
-  ///      not measurable (FFmpeg custom sources, mDNS-discovered streams).
-  Widget? _buildNetworkChip(VideoItem video) {
-    final scheme = _liveSourceScheme;
-    final hasLiveSpeed = (scheme == 'http' || scheme == 'https') &&
-        _liveBandwidthBytesPerSec > 0;
-    if (hasLiveSpeed) {
-      return Tooltip(
-        message:
-            'Live network speed — peak ${_formatBytesPerSec(_liveBandwidthPeakBytesPerSec)}',
-        child: FormatChip(
-          label: _formatBytesPerSec(_liveBandwidthBytesPerSec),
-          color: const Color(0xFF42A5F5),
-        ),
-      );
-    }
-    if (scheme == 'http' || scheme == 'https') {
-      // HTTP source without a measured speed yet (engine still loading, or
-      // iOS FFmpeg custom source). Show the source type for clarity.
-      final label = (video.uri ?? '').toLowerCase().contains('jellyfin')
-          ? 'Jellyfin'
-          : 'HTTP';
-      return FormatChip(label: label, color: const Color(0xFF42A5F5));
-    }
-    if (scheme == 'file' || scheme == 'content' || scheme == 'asset' || scheme.isEmpty) {
-      return const FormatChip(label: 'Local', color: Color(0xFF66BB6A));
-    }
-    if (scheme == 'ftp' || scheme == 'sftp') {
-      return const FormatChip(label: 'FTP/SFTP', color: Color(0xFFAB47BC));
-    }
-    if (scheme.startsWith('dreamplayersmb')) {
-      return const FormatChip(label: 'SMB', color: Color(0xFF42A5F5));
-    }
-    if (scheme.startsWith('dreamplayerwebdav')) {
-      return const FormatChip(label: 'WebDAV', color: Color(0xFFFF7043));
-    }
-    if (scheme == 'tree' || scheme == 'document') {
-      return const FormatChip(label: 'SAF', color: Color(0xFF66BB6A));
-    }
-    return FormatChip(label: scheme, color: const Color(0xFF90A4AE));
-  }
-
   HdrFormat get _effectiveHdr {
     if (_current.hdrFormat != HdrFormat.sdr) return _current.hdrFormat;
     if (_liveHdr != HdrFormat.sdr) return _liveHdr;
@@ -3249,19 +3203,27 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
-  Color get _videoColor => const Color(0xFF4FC3F7);
-
   Color get _audioColor => const Color(0xFF81C784);
 
   Color get _passthroughColor => const Color(0xFFFFB74D);
 
-  Color get _infoColor => const Color(0xFF90A4AE);
+  /// True when the current source is a live http/https stream (Jellyfin
+  /// direct-play, URL playback, CX-Explorer "Open with" handoff, etc.)
+  /// — the only sources for which the bandwidth telemetry actually fires.
+  /// Local / SMB / WebDAV / FTP sources never report a byte rate, so the
+  /// live indicator would show a permanent "—" and adds no value.
+  bool get _isLiveNetworkSource =>
+      _liveSourceScheme == 'http' || _liveSourceScheme == 'https';
 
-  Color get _hwColor => const Color(0xFF66BB6A);
-
-  Color get _swColor => const Color(0xFFFFA726);
-
-  Color get _transcodeColor => const Color(0xFFE57373);
+  /// Short label for the live source (used as the indicator's tooltip).
+  /// Mirrors the source-type row in the ⓘ info sheet so the user can
+  /// glance at "Jellyfin 5.2 MB/s" without opening the sheet.
+  String get _liveNetworkSourceLabel {
+    if (!_isLiveNetworkSource) return '';
+    final uri = _current.uri ?? '';
+    if (uri.toLowerCase().contains('jellyfin')) return 'Jellyfin';
+    return 'Network';
+  }
 
   /// Live video codec label for the chip / info sheet, or null when unknown.
   /// For Dolby Vision the HDR chip already says "Dolby Vision", so the
@@ -3305,10 +3267,6 @@ class _PlayerScreenState extends State<PlayerScreen>
         : _position.inMilliseconds.toDouble().clamp(0, maxMs).toDouble();
 
     final hdrChip = FormatChip(label: _hdrLabel, color: _hdrColor);
-    final videoCodecLabel = _videoCodecInfoLabel;
-    final videoChip = videoCodecLabel != null
-        ? FormatChip(label: videoCodecLabel, color: _videoColor)
-        : null;
     final audioChipLabel = _audioInfoLabel;
     final audioChip = audioChipLabel != null || _liveAudioPassthrough
         ? FormatChip(
@@ -3318,84 +3276,16 @@ class _PlayerScreenState extends State<PlayerScreen>
             color: _liveAudioPassthrough ? _passthroughColor : _audioColor,
           )
         : null;
-    final resolutionChip = (_liveResolution ?? video.resolution) != null
-        ? FormatChip(
-            label: _liveResolution ?? video.resolution!,
-            color: _infoColor,
-          )
-        : null;
-    // Decoder badge: always visible on Android once the first decoder
-    // has been reported — never cleared on switch so it doesn't vanish
-    // mid-reopen (the live `AnalyticsListener` updates it when the new
-    // MediaCodec inits). Label reflects the *mode* + actual HW/SW:
-    // Auto → "Auto, H/W" / "Auto, S/W", forced HW → "H/W", forced SW → "S/W".
-    final decoderChip = (Platform.isAndroid && _liveDecoderName != null)
-        ? Tooltip(
-            message: _liveDecoderName!,
-            child: FormatChip(
-              label: switch (_decoderMode) {
-                DecoderMode.auto => (_isHwDecoder ?? true) ? 'Auto, H/W' : 'Auto, S/W',
-                DecoderMode.hw => 'H/W',
-                DecoderMode.sw => 'S/W',
-              },
-              color: switch (_decoderMode) {
-                DecoderMode.hw => _hwColor,
-                DecoderMode.sw => _swColor,
-                DecoderMode.auto => (_isHwDecoder ?? true) ? _hwColor : _swColor,
-              },
-            ),
-          )
-        : null;
-    // Server-side transcode badge: Jellyfin HLS fallback engaged, a DLNA
-    // stream the server declared CI=1 (transcoded), or any master.m3u8 URI.
-    final transcodeChip = (_transcodeActive ||
-            _current.isTranscoded ||
-            JellyfinClient.isTranscodeUri(_current.uri ?? ''))
-        ? Tooltip(
-            message: 'Server is re-encoding this file — quality may be reduced',
-            child: FormatChip(label: 'Transcoding', color: _transcodeColor),
-          )
-        : null;
-    final boostChip = _audioBoost > 1.01
-        ? FormatChip(label: 'Boost ${_audioBoost.toStringAsFixed(1)}×', color: const Color(0xFFFFA726))
-        : null;
-    final nightChip = _nightMode
-        ? const FormatChip(label: 'Night', color: Color(0xFF7E57C2))
-        : null;
-    // Platform spatial audio engaged (Android 13+): the system Spatializer
-    // is enabled for the current routing and the track is multichannel, so
-    // the surround mix is being virtualized to headphones/speakers.
-    final spatialChip = (Platform.isAndroid && _liveSpatial == 'on')
-        ? Tooltip(
-            message:
-                'System spatial audio is virtualizing this surround mix for your output device',
-            child: FormatChip(label: 'Spatial', color: const Color(0xFF4DB6AC)),
-          )
-        : null;
-    // Network chip: live bandwidth for http/https sources ("5.2 MB/s"),
-    // "Local" for file/content, "SMB/WebDAV/FTP/Jellyfin" for the rest. Always
-    // shown — confirms the source type at a glance even when there's no
-    // measured speed (e.g. the FFmpeg custom-source path on iOS).
-    final networkChip = _buildNetworkChip(video);
-    // Speed chip: only when the user has changed playback speed from 1×.
-    final speedChip = (_playbackSpeed - 1.0).abs() > 0.001
-        ? FormatChip(
-            label: '${_playbackSpeed.toStringAsFixed(2).replaceAll(RegExp(r'0+$'), '').replaceAll(RegExp(r'\.$'), '')}×',
-            color: const Color(0xFF80CBC4),
-          )
-        : null;
+    // The on-screen chip row shows only the two pieces of info the user
+    // checks at a glance while playing: the HDR format (so they know
+    // they're getting real HDR / DV / SDR) and the audio codec + channels
+    // (so they know what they're hearing). Everything else — resolution,
+    // decoder, transcode, network speed, source type, speed, audio
+    // effects, spatial — lives in the ⓘ info sheet (no clutter, no
+    // chip-row overflow on phones in landscape).
     final chips = [
       hdrChip,
-      ?videoChip,
       ?audioChip,
-      ?resolutionChip,
-      ?decoderChip,
-      ?transcodeChip,
-      ?networkChip,
-      ?speedChip,
-      ?boostChip,
-      ?nightChip,
-      ?spatialChip,
     ];
 
     // IMPORTANT: keep the widget-tree shape stable across casting state.
@@ -3717,6 +3607,25 @@ class _PlayerScreenState extends State<PlayerScreen>
                                 ),
                               ),
                             ),
+                            // Live network speed indicator — shown for
+                            // http/https sources only (SMB / WebDAV / FTP
+                            // don't expose a byte counter; the ⓘ sheet
+                            // still shows the source label there). Always
+                            // hidden in pip (the pip window shows only the
+                            // video), and gated on the live bandwidth value
+                            // being > 0 so the indicator doesn't flash in
+                            // before Media3 / AVPlayer has reported the
+                            // first sample. Updated on every bandwidth
+                            // event from the player.
+                            if (!_inPip && _isLiveNetworkSource) ...[
+                              const SizedBox(width: 6),
+                              _LiveNetworkIndicator(
+                                bytesPerSec: _liveBandwidthBytesPerSec,
+                                peakBytesPerSec: _liveBandwidthPeakBytesPerSec,
+                                sourceLabel: _liveNetworkSourceLabel,
+                              ),
+                              const SizedBox(width: 6),
+                            ],
                             _TvControlButton(
                               onPressed: _openVideoInfoSheet,
                               icon: const Icon(Icons.info_outline),
@@ -3726,7 +3635,13 @@ class _PlayerScreenState extends State<PlayerScreen>
                             const SizedBox(width: 4),
                           ],
                         ),
-                        if (chips.isNotEmpty) ...[
+                        // Defense-in-depth pip gate: the top bar already slides
+                        // off when _controlsVisible is false (which happens
+                        // when pip activates), but we also explicitly skip
+                        // rendering the chip row if _inPip is true. The pip
+                        // window must show ONLY the video — no chips, no
+                        // network indicator, no title bar.
+                        if (!_inPip && chips.isNotEmpty) ...[
                           const SizedBox(height: 4),
                           Padding(
                             padding:
@@ -4332,4 +4247,89 @@ class _TvControlButtonState extends State<_TvControlButton> {
       ),
     );
   }
+}
+
+/// Top-right live network speed indicator — small down-arrow + the current
+/// "5.2 MB/s" label, updated on every bandwidth event from the player.
+/// Lives next to the ⓘ button in the player top bar; hidden entirely in
+/// pip mode (the parent gates the widget out so the floating window shows
+/// only the video). When the speed is still loading (the player hasn't
+/// reported a sample yet), renders just the down-arrow icon so the
+/// indicator reserves its space and the layout doesn't jump when the
+/// first sample arrives.
+class _LiveNetworkIndicator extends StatelessWidget {
+  const _LiveNetworkIndicator({
+    required this.bytesPerSec,
+    required this.peakBytesPerSec,
+    required this.sourceLabel,
+  });
+
+  final int bytesPerSec;
+  final int peakBytesPerSec;
+  final String sourceLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasValue = bytesPerSec > 0;
+    final formatted = _formatBytesPerSecStatic(bytesPerSec);
+    final peakText = peakBytesPerSec > bytesPerSec
+        ? ' (peak ${_formatBytesPerSecStatic(peakBytesPerSec)})'
+        : '';
+    final tooltip = hasValue
+        ? '$sourceLabel — $formatted$peakText'
+        : '$sourceLabel — measuring…';
+    return Tooltip(
+      message: tooltip,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.5),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.arrow_downward_rounded,
+              size: 14,
+              color: Color(0xFF42A5F5),
+            ),
+            const SizedBox(width: 4),
+            Text(
+              hasValue ? formatted : '—',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+                fontFeatures: [FontFeature.tabularFigures()],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Top-level helper for the indicator widget so it doesn't depend on the
+/// player-screen state. Duplicates the player-screen formatter so the
+/// widget stays a pure leaf.
+String _formatBytesPerSecStatic(int bytesPerSec) {
+  if (bytesPerSec <= 0) return '—';
+  const kb = 1024;
+  const mb = kb * 1024;
+  const gb = mb * 1024;
+  if (bytesPerSec >= gb) {
+    return '${(bytesPerSec / gb).toStringAsFixed(2)} GB/s';
+  }
+  if (bytesPerSec >= mb) {
+    final v = bytesPerSec / mb;
+    return v >= 10
+        ? '${v.toStringAsFixed(0)} MB/s'
+        : '${v.toStringAsFixed(1)} MB/s';
+  }
+  if (bytesPerSec >= kb) {
+    return '${(bytesPerSec / kb).toStringAsFixed(0)} KB/s';
+  }
+  return '$bytesPerSec B/s';
 }
