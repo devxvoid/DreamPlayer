@@ -120,6 +120,42 @@ final class FtpClient: NSObject {
                     await MainActor.run { result(err) }
                 }
             }
+        case "listDirectoryAll":
+            let id = args?["id"] as? String
+            let path = args?["path"] as? String ?? "/"
+            log("listDirectoryAll id=\(id ?? "nil") path=\(path)")
+            Task {
+                do {
+                    guard let id else { throw FtpError.badRequest("Missing server id") }
+                    let entries = try await Self.listDirectoryAll(serverId: id, requestedPath: path)
+                    log("listDirectoryAll OK: \(entries.count) entries")
+                    await MainActor.run { result(entries) }
+                } catch {
+                    let err = FlutterError(code: "ftp", message: Self.friendlyError(error), details: nil)
+                    log("listDirectoryAll FAILED: \(Self.friendlyError(error))")
+                    await MainActor.run { result(err) }
+                }
+            }
+        case "fetchBytes":
+            let id = args?["id"] as? String
+            let path = args?["path"] as? String ?? "/"
+            let maxBytes = (args?["maxBytes"] as? NSNumber)?.intValue ?? 50 * 1024 * 1024
+            log("fetchBytes id=\(id ?? "nil") path=\(path) max=\(maxBytes)")
+            Task {
+                do {
+                    guard let id else { throw FtpError.badRequest("Missing server id") }
+                    let data = try await Self.fetchBytes(serverId: id, remotePath: path, maxBytes: maxBytes)
+                    if let data {
+                        await MainActor.run { result(FlutterStandardTypedData(bytes: data)) }
+                    } else {
+                        await MainActor.run { result(nil) }
+                    }
+                } catch {
+                    let err = FlutterError(code: "ftp", message: Self.friendlyError(error), details: nil)
+                    log("fetchBytes FAILED: \(Self.friendlyError(error))")
+                    await MainActor.run { result(err) }
+                }
+            }
         default:
             result(FlutterMethodNotImplemented)
         }
@@ -289,6 +325,18 @@ final class FtpClient: NSObject {
     }
 
     static func listDirectory(serverId: String, requestedPath: String) async throws -> [[String: Any]] {
+        try await listDirectory(serverId: serverId, requestedPath: requestedPath, videoOnly: true)
+    }
+
+    /// Full directory listing (videos AND sidecar subtitle files) without the
+    /// video-only filter the browser uses — mirrors the Android
+    /// `listDirectoryAll` so the Dart sidecar service can pair `.srt`/`.ass`
+    /// files by name (Nova `RawListerFactory.getFileList()`).
+    static func listDirectoryAll(serverId: String, requestedPath: String) async throws -> [[String: Any]] {
+        try await listDirectory(serverId: serverId, requestedPath: requestedPath, videoOnly: false)
+    }
+
+    private static func listDirectory(serverId: String, requestedPath: String, videoOnly: Bool) async throws -> [[String: Any]] {
         let server = try FtpClient.shared.resolveServer(serverId)
         let effective = effectivePath(base: server.path, requested: requestedPath)
 
@@ -314,7 +362,7 @@ final class FtpClient: NSObject {
         }
 
         return raw
-            .filter { !$0.1.isDir && !Self.videoExtensions.contains(ext($0.1.name)) ? false : true }
+            .filter { videoOnly && !$0.1.isDir && !Self.videoExtensions.contains(ext($0.1.name)) ? false : true }
             .filter { $0.1.name != "." && $0.1.name != ".." }
             .sorted { a, b in
                 if a.1.isDir != b.1.isDir { return a.1.isDir }
@@ -367,6 +415,43 @@ final class FtpClient: NSObject {
     }
 
     // MARK: - Path helpers (mirror FtpClient.kt)
+
+    /// Reads up to [maxBytes] of the file at [remotePath] (a **decoded**
+    /// absolute server path) into a `Data`, or nil on 404/no-access so sidecar
+    /// discovery treats it as "no subtitle". Mirrors the Android
+    /// `altSubBytes`/`readCapped` semantics by reusing the playback FTP/SFTP
+    /// byte-range source (per-read REST/RETR or SFTP offset reads).
+    static func fetchBytes(serverId: String, remotePath: String, maxBytes: Int) async throws -> Data? {
+        guard !remotePath.isEmpty else { return nil }
+        let server = try FtpClient.shared.resolveServer(serverId)
+        var source: FtpByteRangeSource?
+        if server.isSftp {
+            let session = try await SftpSession.connect(
+                host: server.host, port: server.port,
+                username: server.username, password: server.password)
+            let s = try await FtpByteRangeSource(sftp: session, path: remotePath)
+            source = s
+        } else {
+            let conn = FtpControlConnection(host: server.host, port: server.port)
+            try await conn.connectAndLogin(username: server.username, password: server.password)
+            try await conn.setTypeI()
+            let totalSize = try await conn.fileSize(path: remotePath)
+            if totalSize <= 0 { return nil }
+            source = FtpByteRangeSource(ftp: conn, path: remotePath, size: totalSize)
+        }
+        guard let src = source else { return nil }
+        defer { src.close() }
+        var result = Data()
+        var offset: Int64 = 0
+        while result.count < maxBytes {
+            let want = min(maxBytes - result.count, 256 * 1024)
+            let chunk = try await src.read(at: offset, length: want)
+            if chunk.isEmpty { break }
+            result.append(chunk)
+            offset += Int64(chunk.count)
+        }
+        return result.isEmpty ? nil : result
+    }
 
     private static func normalized(_ p: String) -> String {
         var s = p.trimmingCharacters(in: .whitespacesAndNewlines)

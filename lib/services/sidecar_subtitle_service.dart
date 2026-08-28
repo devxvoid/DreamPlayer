@@ -1,9 +1,8 @@
 import 'dart:async';
-import 'dart:io' show Directory, File, HttpClient, Platform;
+import 'dart:io' show Directory, File, Platform;
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart'
-    show consolidateHttpClientResponseBytes, visibleForTesting;
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:path_provider/path_provider.dart';
 
 import '../models/video_item.dart';
@@ -52,31 +51,30 @@ class SidecarSubtitleService {
 
   /// Looks up the sidecar subtitle files for [video], based on its source
   /// URI scheme:
-  /// - `smb://<serverId>/<share>/<path>` → SMB list of the parent folder.
+  /// - `smb://<serverId>/<share>/<path>` → SMB list of the parent folder
+  ///   (**Android only** — iOS SMB was retired, 2026-08).
   /// - `http(s)://<serverId>@…/<path>` or `https://…` with WebDAV headers
-  ///   on the VideoItem → WebDAV PROPFIND of the parent folder.
+  ///   on the VideoItem → WebDAV PROPFIND/GET of the parent folder.
   /// - `ftp://` or `sftp://` → FTP LIST of the parent folder.
   ///
-  /// **Android only for v1**: iOS WebDAV playback uses a custom
-  /// `WebDAVByteRangeSource` that doesn't know how to authenticate a sidecar
-  /// URL built from the server base alone (it would 401), and iOS SMB was
-  /// retired in 2026-08. Local-file sibling discovery on iOS already works
-  /// via the `ExternalSubtitleTrack` path in `AvPlayerView.swift`.
+  /// Works on **Android and iOS**. Local-file sibling discovery (both
+  /// platforms) already runs natively via the media source
+  /// (`ExternalSubtitleTrack` in `AvPlayerView.swift` /
+  /// `SubtitleFormats.findSiblingSubtitles` on Android).
   ///
   /// Best-effort: returns `[]` on any failure (network blip, auth error,
   /// listing unsupported by the server, etc.). Never throws.
   Future<List<VideoExternalSub>> find(VideoItem video) async {
-    if (!Platform.isAndroid) {
-      // ignore: avoid_print
-      print('[SidecarDBG] find: not Android, skip');
-      return const [];
-    }
     final uri = video.uri;
     // ignore: avoid_print
     print('[SidecarDBG] find: uri=$uri, webdavServerId=${video.webdavServerId}');
     if (uri == null || uri.isEmpty) return const [];
     try {
+      // SMB sidecar discovery is Android-only: iOS SMB was retired (2026-08)
+      // and its native channel is absent, so skip it to avoid a
+      // MissingPluginException. WebDAV/FTP/SFTP discovery works on both.
       if (uri.startsWith('smb://')) {
+        if (!Platform.isAndroid) return const [];
         return await _findSmb(uri);
       }
       if (uri.startsWith('http://') || uri.startsWith('https://')) {
@@ -357,33 +355,16 @@ class SidecarSubtitleService {
     required Map<String, String> headers,
     required bool allowSelfSigned,
   }) async {
-    if (Platform.isAndroid) {
-      return WebDavClient.instance.fetchUrl(
-        serverId: serverId,
-        url: url,
-        headers: headers,
-        allowSelfSigned: allowSelfSigned,
-      );
-    }
-    // iOS: not wired (see class doc — iOS network subtitles use the native
-    // ExternalSubtitleTrack path). Probe with plain dart:io GET.
-    final dartUri = Uri.tryParse(url);
-    if (dartUri == null) return null;
-    try {
-      final client = HttpClient();
-      final request = await client.getUrl(dartUri);
-      headers.forEach((k, v) => request.headers.set(k, v));
-      final response = await request.close();
-      if (response.statusCode != 200) {
-        client.close();
-        return null;
-      }
-      final bytes = await consolidateHttpClientResponseBytes(response);
-      client.close();
-      return bytes.isEmpty ? null : bytes;
-    } catch (_) {
-      return null;
-    }
+    // Authenticated GET via the native WebDAV client (both Android and iOS):
+    // when [serverId] is the saved WebDAV server, credentials stay native and
+    // never cross to Dart; otherwise the caller's headers / TLS policy are used
+    // verbatim for generic http(s) sources (Jellyfin DeliveryUrls, UPnP res).
+    return WebDavClient.instance.fetchUrl(
+      serverId: serverId,
+      url: url,
+      headers: headers,
+      allowSelfSigned: allowSelfSigned,
+    );
   }
 
   Future<List<VideoExternalSub>> _findFtp(String uri) async {

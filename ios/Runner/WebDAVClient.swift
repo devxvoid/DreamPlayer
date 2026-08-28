@@ -120,8 +120,61 @@ final class WebDAVClient: NSObject {
             } else {
                 result(FlutterError(code: "bad_args", message: "WebDAV server not found", details: nil))
             }
+        case "fetchUrl":
+            // Authenticated GET returning body bytes on HTTP 200 (nil otherwise).
+            // Used to probe + download sidecar subtitle URLs, mirroring the
+            // Android `fetchUrl`. Resolves the saved server by `id` when given
+            // (password stays native); otherwise uses the caller's headers /
+            // self-signed flag for generic http(s) sources.
+            let url = args?["url"] as? String ?? ""
+            guard !url.isEmpty else {
+                respond(result, FlutterError(code: "bad_args", message: "Missing url", details: nil))
+                return
+            }
+            let server = (args?["id"] as? String).flatMap { serverById($0) }
+            let headers = (args?["headers"] as? [String: String]) ?? [:]
+            let allowSelfSigned = (args?["allowSelfSigned"] as? Bool) ?? false
+            Task.detached { [weak self] in
+                guard let self else { return }
+                do {
+                    let bytes = try await self.fetch(url: url,
+                                                     server: server,
+                                                     extraHeaders: headers,
+                                                     allowSelfSigned: allowSelfSigned)
+                    if let bytes {
+                        self.respond(result, FlutterStandardTypedData(bytes: bytes))
+                    } else {
+                        self.respond(result, nil)
+                    }
+                } catch {
+                    self.respond(result, FlutterError(code: "webdav", message: self.friendlyError(error), details: nil))
+                }
+            }
         default:
             result(FlutterMethodNotImplemented)
+        }
+    }
+
+    /// Authenticated GET: returns body bytes on HTTP 200, nil on any other
+    /// status (404/403/5xx) so the caller treats a miss as "no sidecar".
+    private func fetch(url: String, server: Server?, extraHeaders: [String: String], allowSelfSigned: Bool) async throws -> Data? {
+        guard let u = URL(string: url) else { throw URLError(.badURL) }
+        var request = URLRequest(url: u)
+        request.httpMethod = "GET"
+        if let server {
+            // Saved-server credentials never cross to Dart — build auth natively.
+            request.setValue(server.authorizationHeader, forHTTPHeaderField: "Authorization")
+            for (k, v) in extraHeaders { request.setValue(v, forHTTPHeaderField: k) }
+            let session = server.allowSelfSigned ? permissiveSession : standardSession
+            let (data, response) = try await session.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+            return data
+        } else {
+            for (k, v) in extraHeaders { request.setValue(v, forHTTPHeaderField: k) }
+            let session = allowSelfSigned ? permissiveSession : standardSession
+            let (data, response) = try await session.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+            return data
         }
     }
 
