@@ -93,8 +93,8 @@ String formatAudioCodec(String? codec) {
   if (codec == null || codec.isEmpty) return 'Unknown';
   final c = codec.toLowerCase();
   const map = {
-    'eac3': 'E-AC-3',
-    'ec3': 'E-AC-3',
+    'eac3': 'E-AC3',
+    'ec3': 'E-AC3',
     'ac3': 'AC-3',
     'ac-3': 'AC-3',
     'dts': 'DTS',
@@ -189,8 +189,8 @@ String formatMedia3Audio(String? mime, String? codecs) {
     'truehd': 'TrueHD',
     'ac-3': 'AC-3',
     'ac3': 'AC-3',
-    'ec-3': 'E-AC-3',
-    'eac3': 'E-AC-3',
+    'ec-3': 'E-AC3',
+    'eac3': 'E-AC3',
     'aac': 'AAC',
     'mp4a': 'AAC',
     'flac': 'FLAC',

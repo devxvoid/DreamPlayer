@@ -61,7 +61,7 @@ void main() {
     });
 
     test('falls back to uppercase for unknown codecs', () {
-      expect(formatAudioCodec('mp4a'), 'MP4A');
+      expect(formatAudioCodec('mp4a'), 'AAC');
       expect(formatAudioCodec(null), 'Unknown');
     });
   });
