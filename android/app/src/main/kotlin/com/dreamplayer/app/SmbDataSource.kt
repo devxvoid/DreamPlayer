@@ -121,6 +121,7 @@ class SmbDataSource(private val context: Context) : BaseDataSource(true) {
     private var bufStart: Long = 0
     private var valid: Long = 0
     private var bufEof = false
+    private var eofAt: Long = -1
     private var fileSize: Long = 0
     private var position: Long = 0
 
@@ -130,6 +131,10 @@ class SmbDataSource(private val context: Context) : BaseDataSource(true) {
     private var prefetchGen = 0L
     private var ringEpoch = 0L
     private var nextWritePos: Long = 0
+    /// Set when reads keep failing after reconnect — [read] throws it so the
+    /// player surfaces an error (and the Dart side retries with a fresh open)
+    /// instead of hanging on a dead SMB session forever.
+    @Volatile private var fatalError: IOException? = null
     /// Out-of-order completion tracking.
     private val pendingChunks = java.util.TreeMap<Long, Int>()
 
@@ -192,6 +197,8 @@ class SmbDataSource(private val context: Context) : BaseDataSource(true) {
                     bufEof = false
                     nextWritePos = position
                     pendingChunks.clear()
+                    fatalError = null
+                    eofAt = -1
                     Log.i(TAG, "open: ring reset, pos=$position, file=$fileSize")
                 } else {
                     position = dataSpec.position
@@ -201,14 +208,15 @@ class SmbDataSource(private val context: Context) : BaseDataSource(true) {
 
                 val remaining = size - dataSpec.position
                 if (remaining in 1 until BufferTuning.chunkBytes) {
-                    // Near-EOF: fill synchronously so the extractor can
-                    // probe the tail without waiting for prefetch threads.
+                    // Near-EOF: pre-fill synchronously so the extractor can probe
+                    // the tail without waiting for prefetch threads...
                     ensureRingCapacity()
                     ringLock.notifyAll()
-                } else {
-                    startPrefetchers()
-                    ringLock.notifyAll()
                 }
+                // ...but always start prefetchers too, so any tail gap left by a
+                // partial sync fill gets topped up (and bufEof stays correct).
+                startPrefetchers()
+                ringLock.notifyAll()
             }
 
             // Near-EOF synchronous fill (outside ringLock for SMB I/O)
@@ -248,9 +256,15 @@ class SmbDataSource(private val context: Context) : BaseDataSource(true) {
                             wLeft -= chunk
                         }
                         valid = off.toLong()
-                        bufEof = true
+                        nextWritePos = bufStart + valid
+                        // Only flag EOF if the whole tail was read; a partial read
+                        // means bytes are still missing and the prefetchers must
+                        // top them up (otherwise the consumer gets a premature
+                        // END_OF_INPUT -> extractor EOFException).
+                        bufEof = off >= remaining
+                        if (bufEof) eofAt = bufStart + valid
                         ringLock.notifyAll()
-                        Log.i(TAG, "open: near-EOF filled $off bytes at $bufStart")
+                        Log.i(TAG, "open: near-EOF filled $off/$remaining bytes at $bufStart")
                     }
                 }
             }
@@ -279,11 +293,13 @@ class SmbDataSource(private val context: Context) : BaseDataSource(true) {
         val t0 = System.nanoTime()
         val n: Int
         synchronized(ringLock) {
+            if (fatalError != null) throw fatalError!!
             if (position >= bufStart + valid && !bufEof) {
                 val waitStart = System.currentTimeMillis()
                 Log.w(TAG, "read: RING EMPTY at pos=$position, waiting for prefetch...")
                 while (position >= bufStart + valid && !bufEof) {
                     ringLock.wait()
+                    if (fatalError != null) throw fatalError!!
                 }
                 Log.w(TAG, "read: resumed after ${System.currentTimeMillis() - waitStart}ms")
             }
@@ -342,6 +358,8 @@ class SmbDataSource(private val context: Context) : BaseDataSource(true) {
             bufEof = false
             fileSize = 0
             pendingChunks.clear()
+            fatalError = null
+            eofAt = -1
         }
         openedUri = null
     }
@@ -422,10 +440,14 @@ class SmbDataSource(private val context: Context) : BaseDataSource(true) {
         // Per-thread temp buffer — SMB reads go here first, then get copied
         // into the ring inside ringLock (after epoch check). This prevents
         // stale writes from a killed/restarted thread from corrupting the ring.
+        // `handle` is a mutable copy so a dropped connection can be re-opened
+        // per-thread without touching the primary shared handle.
+        var handle = secondaryHandle
         val tmpBuf = ByteArray(BufferTuning.chunkBytes)
 
         var lastHeartbeat = System.currentTimeMillis()
         var bytesSinceHeartbeat = 0L
+        var consecutiveFails = 0
 
         while (true) {
             var readAt = 0L
@@ -461,11 +483,13 @@ class SmbDataSource(private val context: Context) : BaseDataSource(true) {
 
             // SMB read into tmpBuf (outside ringLock — parallel with other threads)
             var got = -2
+            var attempted = false
             val readStart = System.nanoTime()
             if (threadIdx == 0) {
                 synchronized(smbLock) {
                     val r = raf
                     if (r != null) {
+                        attempted = true
                         try {
                             r.seek(readAt)
                             got = r.read(tmpBuf, 0, readLen)
@@ -476,8 +500,9 @@ class SmbDataSource(private val context: Context) : BaseDataSource(true) {
                     }
                 }
             } else {
-                val r = secondaryHandle
+                val r = handle
                 if (r != null) {
+                    attempted = true
                     try {
                         r.seek(readAt)
                         got = r.read(tmpBuf, 0, readLen)
@@ -490,6 +515,7 @@ class SmbDataSource(private val context: Context) : BaseDataSource(true) {
 
             // Copy into ring under ringLock (with epoch check)
             if (got > 0) {
+                consecutiveFails = 0
                 val readMs = (System.nanoTime() - readStart) / 1_000_000
                 if (readMs > 500) {
                     Log.w(TAG, "t$threadIdx slow: $got bytes in ${readMs}ms at $readAt -> " +
@@ -517,6 +543,7 @@ class SmbDataSource(private val context: Context) : BaseDataSource(true) {
                                 valid += entry.value
                             }
                             if (bufStart + valid >= fileSize) bufEof = true
+                            if (eofAt >= 0 && bufStart + valid >= eofAt) bufEof = true
                         } else if (readAt > bufStart + valid) {
                             pendingChunks[readAt] = got
                         }
@@ -534,14 +561,78 @@ class SmbDataSource(private val context: Context) : BaseDataSource(true) {
                     bytesSinceHeartbeat = 0
                 }
             } else if (got == -1) {
+                // A read at `readAt` returned EOF. Record the EOF position, but
+                // only flip `bufEof` once the *contiguous* frontier reaches it —
+                // if a chunk earlier in the file failed and is still a hole, the
+                // consumer must keep waiting/retrying for that hole, not get a
+                // premature END_OF_INPUT (which makes the extractor throw EOFException
+                // and the player reports "io unspecified").
                 synchronized(ringLock) {
                     if (epoch == ringEpoch) {
-                        bufEof = true
+                        eofAt = maxOf(eofAt, readAt)
+                        if (bufStart + valid >= eofAt) bufEof = true
                     }
                     ringLock.notifyAll()
                 }
+            } else if (attempted) {
+                // Read failed (transient network blip or dropped SMB session).
+                // CRITICAL: `nextWritePos` was already advanced when this region
+                // was carved, so if we just loop and move on the carved region is
+                // NEVER filled — the consumer blocks at the hole forever and
+                // Media3 surfaces an "io unspecified" error. Reconnect the handle
+                // and rewind `nextWritePos` to the region start so it gets retried.
+                if (threadIdx == 0) {
+                    synchronized(smbLock) {
+                        try { raf?.close() } catch (_: Exception) {}
+                        raf = null
+                        val c = savedCreds
+                        val sh = savedShare
+                        val p = savedPath
+                        if (c != null && sh != null && p != null) {
+                            try {
+                                raf = SmbRandomAccessFile(SmbFile(smbUrl(c, sh, p), c.context()), "r")
+                                Log.i(TAG, "t0 reconnected after read error")
+                            } catch (ex: Exception) {
+                                Log.w(TAG, "t0 reconnect failed: ${ex.message}")
+                            }
+                        }
+                    }
+                } else {
+                    try { handle?.close() } catch (_: Exception) {}
+                    val c = savedCreds
+                    val sh = savedShare
+                    val p = savedPath
+                    handle = if (c != null && sh != null && p != null) {
+                        try {
+                            SmbRandomAccessFile(SmbFile(smbUrl(c, sh, p), c.context()), "r").also {
+                                Log.i(TAG, "t$threadIdx reconnected after read error")
+                            }
+                        } catch (ex: Exception) {
+                            Log.w(TAG, "t$threadIdx reconnect failed: ${ex.message}")
+                            null
+                        }
+                    } else null
+                }
+                synchronized(ringLock) {
+                    // Re-expose the failed region: never move the write head
+                    // forward past it, only back to its start.
+                    if (readAt >= bufStart) {
+                        nextWritePos = minOf(nextWritePos, readAt)
+                    }
+                }
+                // If the connection keeps failing after reconnect, give up and
+                // let the player surface the error (Dart retries with a fresh open).
+                consecutiveFails++
+                if (consecutiveFails >= 12) {
+                    fatalError = IOException("SMB read failed repeatedly at $readAt after reconnect")
+                    Log.e(TAG, "fatalError set after $consecutiveFails failures at $readAt")
+                    return
+                }
+                try { Thread.sleep(300) } catch (_: InterruptedException) { return }
             } else {
-                try { Thread.sleep(200) } catch (_: InterruptedException) { return }
+                // No handle available for this secondary thread (open failed at
+                // start) — just idle; the primary thread still does the work.
+                try { Thread.sleep(500) } catch (_: InterruptedException) { return }
             }
         }
     }

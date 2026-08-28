@@ -293,6 +293,23 @@ String formatLiveAudioCodec(String? codec, String? decoder) {
 String languageName(String? code) {
   if (code == null || code.isEmpty) return code ?? '';
   final c = code.trim().toLowerCase();
+  // "und" (undefined), "zxx" (no linguistic content), "mis" (uncoded),
+  // "qaa" (reserved) and similar mean "no real language" — render as empty
+  // so callers (e.g. the audio chip) fall back to just the codec/label.
+  const noLanguage = {
+    'und',
+    'undetermined',
+    'zxx',
+    'mis',
+    'qaa',
+    'mul',
+    'multiple',
+    'orig',
+    'original',
+    'unk',
+    'unknown',
+  };
+  if (noLanguage.contains(c)) return '';
   const map = {
     'en': 'English',
     'eng': 'English',
@@ -393,6 +410,7 @@ String formatLiveAudioLabel({
   required int? liveChannels,
   String? metaCodec,
   String? metaProfile,
+  String? liveLanguage,
 }) {
   final base = formatLiveAudioCodec(liveCodec, liveDecoder);
   if (base == 'Unknown') return 'Unknown';
@@ -410,6 +428,10 @@ String formatLiveAudioLabel({
   }
   if (liveChannels != null && liveChannels > 0) {
     label = '$label ${channelsLabel(liveChannels)}';
+  }
+  final lang = languageName(liveLanguage);
+  if (lang.isNotEmpty) {
+    label = '$label · $lang';
   }
   return label;
 }

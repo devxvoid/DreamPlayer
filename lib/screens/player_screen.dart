@@ -98,7 +98,7 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   /// Auto-retry on transient IO errors (network blip).
   int _ioRetries = 0;
-  static const int _maxIoRetries = 3;
+  static const int _maxIoRetries = 5;
   bool _retrying = false;
 
   /// Jellyfin transcode fallback: tried at most once per video, and only
@@ -112,6 +112,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   String? _liveVideoMimeRaw;
   String? _liveAudioCodec;
   int? _liveAudioChannelCount;
+  String? _liveAudioLanguage;
   bool _liveAudioPassthrough = false;
   String _liveSpatial = '';
   int _liveBass = 0;
@@ -563,6 +564,11 @@ class _PlayerScreenState extends State<PlayerScreen>
         return 'The video file could not be accessed. It may have been '
             'moved, deleted, or its access permission has expired — reopen '
             'it from its source.';
+      case 'error_code_io_unspecified':
+        return 'Connection interrupted while playing. '
+            'The file may have been moved, the network may be unstable, or '
+            'the server may have timed out. Try playing the file again, or '
+            'check the connection to the source.';
       case 'error_code_io_network_connection_failed':
       case 'error_code_io_network_connection_timeout':
       case 'error_code_timeout':
@@ -577,6 +583,29 @@ class _PlayerScreenState extends State<PlayerScreen>
             : 'This device cannot decode Dolby Vision Profile 5. Play the '
                   'HDR10 or SDR version of the file, or watch it on a Dolby '
                   'Vision-capable device.';
+      case 'error_code_unsupported_audio':
+        return 'The audio format is not supported on this device. '
+            'Try a different audio track if the file has multiple, '
+            'or play a version with a supported audio codec (AAC, AC3, E-AC3, DTS, FLAC).';
+      case 'error_code_unsupported_video':
+        return 'The video format is not supported on this device. '
+            'Common unsupported formats: MPEG-2, VC-1, H.265 on older devices. '
+            'Try a re-encoded version (H.264/AVC or hardware-supported HEVC).';
+      case 'error_code_unsupported_format':
+      case 'error_code_unsupported_type':
+        return 'This file format is not supported. The container (e.g. .m2ts, .ts, .vob) '
+            'may use codecs this device cannot decode. Try a remuxed or re-encoded version.';
+      case 'error_code_undecodable':
+        return 'The file could not be decoded. It may be corrupt, use an '
+            'unsupported codec, or have DRM protection.';
+      case 'error_code_decoder_init_failed':
+      case 'error_code_decoder_query_failed':
+        return 'Hardware decoder initialization failed. '
+            'Try a file with a codec supported by this device\'s hardware '
+            '(H.264, HEVC, VP9).';
+      case 'error_code_audio_track_init_failed':
+        return 'Audio output could not be initialized. '
+            'Check if another app is using the audio system, or try a different audio track.';
       default:
         final detail = e.errorMessage?.isNotEmpty == true
             ? '\n${e.errorMessage}'
@@ -598,7 +627,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (_playing && !_retrying) _ioRetries = 0;
     if (e.error != null && e.error!.isNotEmpty) {
       final code = e.error!;
-      // Auto-retry on transient IO errors (network blip).
+      // Auto-retry on transient IO errors (network blip). Uses exponential
+      // backoff: 2s, 4s, 8s, 16s, 32s — gives a flaky NAS / Wi-Fi enough
+      // time to recover before we give up.
       if (_isRetryableIoError(code) &&
           _ioRetries < _maxIoRetries &&
           !_retrying) {
@@ -606,16 +637,16 @@ class _PlayerScreenState extends State<PlayerScreen>
         _retrying = true;
         final pos = _position;
         final dur = _duration;
-        // Brief delay then reopen at the saved position.
-        Future.delayed(const Duration(seconds: 2), () {
+        final delay = Duration(seconds: 1 << _ioRetries); // 2, 4, 8, 16, 32
+        _error = 'Reconnecting\u2026 ($_ioRetries/$_maxIoRetries)';
+        setState(() {});
+        Future.delayed(delay, () {
           if (!mounted || _retrying != true) return;
           _retrying = false;
           _error = null;
           setState(() {});
           _reopenAt(pos, dur);
         });
-        _error = 'Reconnecting\u2026 ($_ioRetries/$_maxIoRetries)';
-        setState(() {});
         return;
       }
       final friendly = _friendlyError(e);
@@ -659,6 +690,14 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (e.audioMime != null || e.audioCodecs != null) {
       _liveAudioCodec = formatMedia3Audio(e.audioMime, e.audioCodecs);
       if (e.audioChannels > 0) _liveAudioChannelCount = e.audioChannels;
+      // Derive the selected track's language for the on-screen chip.
+      final sel = e.selectedAudioTrack;
+      if (sel >= 0 && sel < e.audioTracks.length) {
+        final lang = e.audioTracks[sel].language;
+        _liveAudioLanguage = (lang != null && lang.isNotEmpty) ? lang : null;
+      } else {
+        _liveAudioLanguage = null;
+      }
     }
     _liveAudioPassthrough = e.audioPassthrough;
     if (e.videoDecoderName != null && e.videoDecoderName!.isNotEmpty) {
@@ -3190,6 +3229,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         liveChannels: _liveAudioChannelCount,
         metaCodec: _current.audioCodec,
         metaProfile: _current.audioProfile,
+        liveLanguage: _liveAudioLanguage,
       );
     }
     return _current.audioCodecLabel;

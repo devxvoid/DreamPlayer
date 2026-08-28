@@ -366,8 +366,8 @@ class SMBClient(private val context: Context) {
                     quickExecutor.execute {
                         try {
                             result.success(discoverServers())
-                        } catch (e: Exception) {
-                            result.error("discovery_failed", e.message, null)
+} catch (e: Exception) {
+                result.error("discovery_failed", e.message, null)
                         }
                     }
                 }
