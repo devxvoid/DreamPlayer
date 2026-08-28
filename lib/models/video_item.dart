@@ -59,6 +59,46 @@ class VideoExternalSub {
         mimeType: json['mimeType'] as String? ?? 'application/x-subrip',
         isDefault: (json['isDefault'] as bool?) ?? false,
       );
+
+  /// Returns a copy with the same fields but [isDefault] forced to true.
+  /// Used to mark a track as the default selection without rebuilding the
+  /// whole object.
+  VideoExternalSub withDefault({required bool isDefault}) => VideoExternalSub(
+        uri: uri,
+        label: label,
+        language: language,
+        mimeType: mimeType,
+        isDefault: isDefault,
+      );
+}
+
+/// Marks the first entry as the default selection when no entry in the
+/// list already carries `isDefault = true`. Enforces the
+/// **"external > embedded always"** priority rule across every source
+/// that builds external-sub lists (Jellyfin DeliveryUrls, DLNA
+/// `externalSubs`, future media servers).
+///
+/// Why this is needed: media servers don't always flag a sidecar as
+/// the default track — Jellyfin only sets `IsDefault` for explicitly
+/// marked tracks, and most DLNA servers don't fill the field at all.
+/// Without a `SELECTION_FLAG_DEFAULT` marker on any external track, the
+/// engine picks the container's embedded PGS/ASS track instead — almost
+/// always the wrong choice when a better external file is sitting next
+/// to the video. Promoting the first external to default fixes this for
+/// every source in one place.
+///
+/// When [subs] is empty, returns it unchanged so the engine falls back
+/// to embedded (which the engine then auto-selects as default).
+List<VideoExternalSub> promoteFirstExternalAsDefault(
+  List<VideoExternalSub> subs,
+) {
+  if (subs.isEmpty) return subs;
+  final anyDefault = subs.any((s) => s.isDefault);
+  if (anyDefault) return subs;
+  return [
+    subs.first.withDefault(isDefault: true),
+    ...subs.skip(1),
+  ];
 }
 
 /// Where a video came from, derived from the source-specific [VideoItem]

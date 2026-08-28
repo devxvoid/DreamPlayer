@@ -848,7 +848,7 @@ class JellyfinClient {
     // Build full delivery URLs for external subtitles. Jellyfin's
     // DeliveryUrl is a relative path without the token — append api_key
     // so Media3 / AetherEngine can fetch it without extra headers.
-    final externalSubs = item.externalSubtitles.map((sub) {
+    final externalSubsRaw = item.externalSubtitles.map((sub) {
       String url;
       if (sub.deliveryUrl.isNotEmpty) {
         url = sub.deliveryUrl.startsWith('http')
@@ -871,6 +871,12 @@ class JellyfinClient {
         isDefault: sub.isDefault,
       );
     }).toList();
+    // **External > embedded always.** [promoteFirstExternalAsDefault] is
+    // also called at the `open()` site in the player screen, but doing
+    // it here too means the CC sheet's track-list reflects the correct
+    // default before the engine ever sees the payload (helpful for
+    // pre-resolution UI work and for tests).
+    final externalSubs = promoteFirstExternalAsDefault(externalSubsRaw);
     return VideoItem(
       id: 'jellyfin_${server.urlHost}_${item.id}',
       title: item.name,

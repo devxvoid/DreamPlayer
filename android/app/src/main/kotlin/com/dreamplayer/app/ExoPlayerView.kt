@@ -450,12 +450,16 @@ class ExoPlayerView(
                 /// Media3 reports a smoothed bandwidth estimate (bytes/sec) every
                 /// few seconds while it loads data. We capture it for the live
                 /// "Network" chip and accumulate total bytes for the ⓘ sheet.
+                /// Signature is `(EventTime, Int, Long, Long)`: the first Long
+                /// is the elapsed-since-load-start in ms, the second is the
+                /// smoothed bytes-per-second estimate.
                 override fun onBandwidthEstimate(
                     eventTime: AnalyticsListener.EventTime,
-                    totalBytesLoaded: Long,
+                    elapsedMs: Int,
+                    bytesTransferred: Long,
                     bandwidthEstimate: Long,
                 ) {
-                    bandwidthBytesDownloaded = totalBytesLoaded
+                    bandwidthBytesDownloaded = bytesTransferred
                     bandwidthBytesPerSec = bandwidthEstimate
                     if (bandwidthEstimate > bandwidthPeakBytesPerSec) {
                         bandwidthPeakBytesPerSec = bandwidthEstimate

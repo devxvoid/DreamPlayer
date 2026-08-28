@@ -416,10 +416,20 @@ class _PlayerScreenState extends State<PlayerScreen>
   Future<List<VideoExternalSub>> _resolveExternalSubtitles(VideoItem video) async {
     final existing = video.externalSubtitles;
     // Source already attached its own external subs (Jellyfin, folder
-    // bookmark, etc.) — use them as-is.
-    if (existing.isNotEmpty) return existing;
+    // bookmark, etc.) — use them as-is, but enforce the
+    // "external > embedded always" priority by promoting the first
+    // external to default when none is flagged. Without this, the
+    // engine falls back to the container's embedded PGS/ASS track on
+    // any media server that didn't mark an external as default
+    // (Jellyfin only does so for explicitly-flagged sidecars; most DLNA
+    // servers never fill the field).
+    if (existing.isNotEmpty) {
+      return promoteFirstExternalAsDefault(existing);
+    }
     if (_inTests) return const [];
     final sidecars = await SidecarSubtitleService.instance.find(video);
+    // `SidecarSubtitleService.find` already marks the first match
+    // `isDefault: true`, so no promotion needed here.
     return sidecars;
   }
 
