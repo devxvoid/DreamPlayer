@@ -283,4 +283,22 @@ class SmbClient {
     });
     return result ?? false;
   }
+
+  /// Starts a loopback HTTP bridge (`http://127.0.0.1:<port>/<token>`) that
+  /// serves [path] on [share] of [serverId] with byte-range support — the
+  /// libmpv fallback engine cannot read `smb://`, so Android serves the same
+  /// jcifs-ng handle over HTTP. Returns the playable URL.
+  Future<String> startLoopback(String serverId, String share, String path) async {
+    return (await _channel.invokeMethod<String>('startLoopback', {
+          'id': serverId,
+          'share': share,
+          'path': path,
+        })) ??
+        '';
+  }
+
+  /// Tears down the loopback bridge previously returned by [startLoopback].
+  Future<void> stopLoopback(String token) async {
+    await _channel.invokeMethod<void>('stopLoopback', {'token': token});
+  }
 }

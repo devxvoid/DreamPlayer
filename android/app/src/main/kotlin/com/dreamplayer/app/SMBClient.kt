@@ -1,6 +1,8 @@
 package com.dreamplayer.app
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -29,6 +31,7 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import kotlin.concurrent.thread
 
 /// Global jcifs-ng setup. Must run before ANY SmbFile/context is created so the
 /// tuned properties (SMB2/3 only, big read sizes, no idle teardown) are baked
@@ -440,6 +443,34 @@ class SMBClient(private val context: Context) {
                 // closes its handles on close(); SmbClient owns the
                 // credential store lifetime.
                 "closeShare" -> {
+                    result.success(null)
+                }
+                // Loopback HTTP bridge for the libmpv fallback engine: serve
+                // the SMB file over a local 127.0.0.1 HTTP endpoint that
+                // supports byte ranges, and hand the returned URL to mpv.
+                "startLoopback" -> {
+                    val id = call.argument<String>("id")
+                    val share = call.argument<String>("share")
+                    val path = call.argument<String>("path") ?: ""
+                    if (id == null || share == null) {
+                        result.error("bad_args", "Missing id or share", null)
+                    } else {
+                        val main = Handler(Looper.getMainLooper())
+                        thread(isDaemon = true, name = "smb-loopback-open") {
+                            val url = SmbHttpProxy.start(context, id, share, path)
+                            main.post {
+                                if (url == null) {
+                                    result.error("smb_error", "Could not open this file for streaming", null)
+                                } else {
+                                    result.success(url)
+                                }
+                            }
+                        }
+                    }
+                }
+                "stopLoopback" -> {
+                    val token = call.argument<String>("token")
+                    if (token != null) SmbHttpProxy.stop(token)
                     result.success(null)
                 }
                 // Nova-parity sidecar prefetch: read a subtitle file's bytes

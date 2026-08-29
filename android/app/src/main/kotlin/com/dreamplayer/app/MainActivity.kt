@@ -84,6 +84,9 @@ class MainActivity : FlutterActivity() {
         FtpClient(this).configure(
             MethodChannel(flutterEngine.dartExecutor.binaryMessenger, FtpClient.CHANNEL),
         )
+        PipManager(this).configure(
+            MethodChannel(flutterEngine.dartExecutor.binaryMessenger, PipManager.CHANNEL),
+        )
         intentChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "dreamplayer/intent",
@@ -123,8 +126,14 @@ class MainActivity : FlutterActivity() {
 
     /// Leaving the app (HOME / recents / app-switch) while a video plays
     /// drops into picture-in-picture instead of plain background audio.
+    ///
+    /// Two engines can own playback: the native Media3 platform view
+    /// ([ExoPlayerView]) or the libmpv fallback (a Flutter texture, so pip is
+    /// driven by [PipManager]). The fallback gets first refusal — when it is
+    /// active the ExoPlayer instance is idle and its own pip path would bail.
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
+        if (PipManager.instance?.enterPipIfPlaying() == true) return
         ExoPlayerView.activeView?.enterPipIfPlaying()
     }
 
@@ -133,11 +142,17 @@ class MainActivity : FlutterActivity() {
         newConfig: Configuration,
     ) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        val pip = PipManager.instance
+        if (pip?.isMpvActive() == true) {
+            pip.onPipModeChanged(isInPictureInPictureMode)
+            return
+        }
         ExoPlayerView.activeView?.onPipModeChanged(isInPictureInPictureMode)
     }
 
     override fun onResume() {
         super.onResume()
+        PipManager.instance?.onResumed()
         ExoPlayerView.activeView?.onResumed()
     }
 
@@ -146,6 +161,11 @@ class MainActivity : FlutterActivity() {
         // PiP dismissed from its window chrome: pause so audio doesn't keep
         // playing invisibly (plain background keeps playing — handled by the
         // foreground service; this only covers the pip-dismiss path).
+        val pip = PipManager.instance
+        if (pip?.isMpvActive() == true) {
+            pip.onActivityStopped()
+            return
+        }
         ExoPlayerView.activeView?.onActivityStopped()
     }
 

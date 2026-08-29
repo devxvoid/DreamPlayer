@@ -211,9 +211,105 @@ A video player app supporting:
     Files app keep their access scope for the playback session. Opening a file
     auto-plays it: the intent pushes `PlayerScreen`, whose `open()` runs with
     `autoplay: true`.
+- **libmpv (media_kit) fallback engine (2026-08-29, on-device verified)** —
+  when the native ExoPlayer engine surfaces a terminal error that the existing
+  IO-retry path can't recover (e.g. a hardware-decoder failure that has already
+  been downgraded to software once, a corrupt container, or a codec no ExoPlayer
+  renderer can find), the same `PlayerScreen` flips to a bundled **libmpv**
+  instance — `media_kit: ^1.2.6` + `media_kit_video: ^2.0.1` +
+  `media_kit_libs_video: ^1.0.7` in `pubspec.yaml`; the engine renders into a
+  Flutter `Texture` (media_kit's `VideoController`) and drives the SAME UI
+  (transport, seekbar, gestures, auto-hide, ended-routing, resume). It cannot
+  do DV/HDR (Flutter textures have no HDR path), so the native engine keeps
+  the project goal — the fallback exists so a user gets a working player
+  instead of an error overlay when the native engine can't. **iOS does NOT
+  fall back** (AetherEngine handles everything AetherEngine supports;
+  iOS-only-codec AVPlayer failures bubble up normally).
+  - **When it engages**: any `PlaybackException` whose code is in
+    `isVideoDecodeError` (`player_error.dart`) — `ERROR_CODE_DECODING_FAILED`,
+    `…_DECODER_INIT_FAILED`, `…_DECODER_QUERY_FAILED`,
+    `…_DECODING_FORMAT_UNSUPPORTED`,
+    `…_DECODING_FORMAT_EXCEEDS_CAPABILITIES`,
+    `…_DECODING_RESOURCES_RECLAIMED` — AFTER the existing
+    software-decoder auto-fallback has already run, OR for terminal IO errors
+    on a corrupt container. The Dart side tears down the ExoPlayer platform
+    view and mounts a `Texture` widget in its slot; a one-time toast banner
+    tells the user "This video isn't supported by the built-in player, so the
+    fallback player is being used." A small `Engine · libmpv (software)` chip
+    in the ⓘ info sheet shows the active engine.
+  - **SMB → loopback HTTP bridge (`SmbHttpProxy.kt`)**: jcifs-ng only talks to
+    Media3-native `DataSource`s; libmpv can't read `smb://`. Solution: a tiny
+    HTTP/1.1 server (`ServerSocket` accept loop, one daemon thread per
+    connection, GET/HEAD + single `Range` bytes=) bound to `127.0.0.1` on a
+    free port that hands out a `SmbRandomAccessFile` per token. Idle handles
+    are parked in an `ArrayDeque` per file (re-opening an SMB handle costs a
+    tree-connect + create round-trip — mpv's probe fires ~15 ranges back to
+    back, so closing every time is what made startup slow). Reads are
+    serialized per file via a `ReentrantLock` because `SmbRandomAccessFile`
+    is not thread-safe. Channel methods (`dreamplayer/smb`)
+    `startLoopback(serverId, share, path)` → returns the playable URL or
+    throws `smb_error`; `stopLoopback(token)` tears the bridge down. Dart
+    side: `SmbClient.startLoopback`/`stopLoopback`. `_mpvOpen` calls
+    `startLoopback` for any `smb://` source and stores the token in
+    `_mpvProxyToken` so the next `stopLoopback` is exact.
+  - **External subtitles (`_attachMpvExternalSubtitles`)**: mpv's own
+    `sub-auto=exact` only scans sidecars next to a local video file — for
+    SMB loopback URLs / http(s) sources there is no directory to scan, so the
+    Media3 path's resolved external subs have to be added explicitly. Order:
+    non-default subs first via raw `sub-add <uri> <title> <lang>` (so they
+    populate mpv's `track-list` for the CC sheet to pick from), then the
+    default track last via `SubtitleTrack.uri(…)` (`setSubtitleTrack`) so
+    mpv's final selected track is the one the Media3 path would have
+    selected. `_mpvSubtitleOn` reflects the current selection. Mirrors
+    Media3's **external > embedded always** priority rule.
+  - **Picture-in-picture for the fallback engine (`PipManager.kt`,
+    `MpvPipService`)**: A Flutter texture receives no touches in pip, so the
+    Media3 path's normal player chrome is useless there. New
+    Activity-level `PipManager` (`dreamplayer/pip` channel) handles pip for
+    the fallback engine: Dart PUSHES playback state via `setMpvState` on
+    every playing/pause/buffering transition (cannot round-trip in
+    `onUserLeaveHint`), and the native side answers synchronously.
+    `MainActivity.onUserLeaveHint` / `onPictureInPictureModeChanged` /
+    `onStop` / `onResume` route through `PipManager` first, falling back to
+    `ExoPlayerView` when the fallback isn't active. Pip window shows ONLY
+    the video (player screen already hides chrome on `_inPip`).
+  - **Pip transport controls (system `RemoteAction`s)**: three buttons
+    (`ic_stat_rewind` / `ic_stat_pause`/`ic_stat_play` / `ic_stat_forward`),
+    rebuilt on every play-state change while in pip so the play/pause icon
+    flips. Each fires a package-scoped broadcast
+    (`com.dreamplayer.app.PIP_CONTROL` + `EXTRA_CONTROL`); PipManager
+    registers an inline `BroadcastReceiver` while pip is active (API 33+
+    uses `RECEIVER_NOT_EXPORTED`) and forwards each tap to a method call
+    (`pipPlayPause` / `pipRewind` / `pipForward`) that hits dedicated Dart
+    handlers `_onPipPlayPause` / `_onPipRewind` / `_onPipForward` (which
+    bypass `_touchLocked` since these are deliberate user actions, not
+    on-screen touches). `setMpvState` re-publishes the actions on every
+    play-state transition while in pip, so the icon matches reality.
+  - **Pip dismissal-latch**: same `pipSeen` + `onActivityStopped` pattern
+    as ExoPlayerView — swiping the pip window away delivers `onStop` while
+    the system STILL reports `isInPictureInPictureMode=true`; without the
+    latch the pause is skipped and audio plays invisibly. `onResumed()`
+    clears it (real expand-back vs real backgrounding).
+  - **MpvPipService** (`lib/services/mpv_pip.dart`) — the Dart side of the
+    bridge: handler for `pipChanged` / `pipDismissed` / `pipPlayPause` /
+    `pipRewind` / `pipForward`, plus `setState({active, playing, aspect})`
+    pushing into native and `enterPip()` for the explicit ⋮-sheet row
+    (matches the Settings toggle pattern: explicit user action ignores the
+    auto-entry pref). `clear()` drops all five callbacks on player dispose.
+  - **Audio sources**: 24-bit multichannel FLAC, DTS-HD MA, TrueHD, and any
+    other codec the hardware MediaCodec FLAC/E-AC3 fix-up doesn't cover all
+    play through libmpv's bundled FFmpeg software decoder — same trick VLC
+    uses. Verified on-device (OnePlus CPH2573): an SDR file that refused to
+    play on the native engine (post-software-fallback) opens in the
+    fallback engine and plays smoothly.
+
 - **media_kit / libmpv fully REMOVED** from `pubspec.yaml`, `main.dart`,
   `player_screen.dart`, and the APK (no more `libmpv.so`/mediakit libs; only
   `libflutter.so` + `libmedia3ext.so` remain).
+  *(This block is outdated and superseded by the 2026-08-29 libmpv fallback
+  section above — kept here for the historical record. The current build
+  DOES ship `libmpv.so` via `media_kit_libs_video`, but only as a fallback
+  engine, never as the primary decoder.)*
 - **Subtitles done (embedded + sideloaded)**: every sibling subtitle file in
   the video's folder auto-attaches (SRT, SSA/ASS, WebVTT, TTML, SAMI, MicroDVD,
   MPL2, SubViewer via custom parsers), the best match auto-selects, and the CC
@@ -234,7 +330,7 @@ A video player app supporting:
 | SMB client (iPad) | **removed (2026-08)** | In-app SMB (AMSMB2 browse + AetherEngineSMB playback) was retired; NAS playback is WebDAV / Jellyfin / Files-app "Open with". `AetherEngineSMB` still ships for WebDAV's `ByteRangeSource`. |
 | Android audio decode | Media3 `FFmpegAudioRenderer` (ffmpeg extension) | DTS, DTS-HD, E-AC3, AC3, TrueHD — same bundled-FFmpeg approach Nova uses. |
 | Reference architecture | **Nova Video Player** (`nova-video-player/aos-AVP`) | See "Playback research notes". |
-| ~~media_kit / libmpv~~ | **retired** | Cannot do Dolby Vision (no passthrough, no RPU). |
+| **Fallback engine (Android)** | **media_kit + libmpv** (FFmpeg software decode, Flutter `Texture` render) | Engaged automatically when the native engine surfaces a terminal decode error after the existing software-decoder auto-fallback has run. Renders into a Flutter texture so no DV/HDR — by design, the native engine keeps the project goal. Ships `libmpv.so` via `media_kit_libs_video`. iOS does not fall back. |
 | Permissions | `permission_handler` | Runtime `READ_MEDIA_VIDEO` request on video open |
 | Refresh rate | `flutter_displaymode` | Selects highest refresh mode at startup |
 
@@ -805,11 +901,12 @@ lib/
   services/library_folders.dart    # user-added library folders (LibraryFolder model + LibraryFoldersStore, prefs dreamplayer.libraryFolders; LibraryFolderSource.files|jellyfin|smb|webdav|ftp|upnp)
   services/webdav_client.dart     # WebDAV channel wrapper + WebDavServer model (channel dreamplayer/webdav)
   services/thumbnail_store.dart   # embedded cover-art cache for video cards (memory+disk, local sources only)
+  services/mpv_pip.dart           # libmpv fallback engine's picture-in-picture bridge (pipChanged/pipDismissed/pipPlayPause/pipRewind/pipForward; setState pushes state into PipManager)
   config/tmdb_api_key.dart        # default TMDB key from --dart-define=TMDB_API_KEY (never committed)
   screens/
     home_screen.dart            # Continue watching grid (adaptive columns) + Your-library folder grid + **+** FAB menu (Jellyfin / WebDAV / Add folder / Internal storage)
     folder_screen.dart          # folder contents / episode list (subfolder navigation, SxxExx labels + sizes)
-    player_screen.dart          # ExoPlayer/Media3 playback + live codec/HDR chips + controls + subtitle/audio pickers + gesture controls
+    player_screen.dart          # ExoPlayer/Media3 playback + live codec/HDR chips + controls + subtitle/audio pickers + gesture controls + libmpv fallback engine (_startMpvFallback / _mpvOpen / _attachMpvExternalSubtitles / _onPipPlayPause / _onPipRewind / _onPipForward)
     player_error.dart           # friendlyPlayerError (Media3 ERROR_CODE_* → user message) + isRetryableIoError / isVideoDecodeError predicates (unit-tested)
     tmd_details_screen.dart     # TMDB details: backdrop/poster/synopsis/rating/genres/cast + Play + Fix match search
     jellyfin_screen.dart        # Jellyfin/Emby server list + 7359-probe/mDNS discovery + login + libraries → folders → play
@@ -829,7 +926,9 @@ android/app/src/main/kotlin/com/dreamplayer/app/
   FileBrowser.kt                # device storage browsing channel (roots/listing/folder bookmarks; no thumbnails)
   WebDAVClient.kt               # WebDAV browse/test channel; encrypted password storage; friendly errors
   MulticastLockManager.kt       # Wi-Fi MulticastLock + Jellyfin UDP-7359 broadcast probe (channel dreamplayer/multicast)
-  MainActivity.kt               # registers platform views + "Open with" intent handling
+  PipManager.kt                 # libmpv fallback-engine picture-in-picture (RemoteAction transport buttons: rewind/play-pause/forward); channel dreamplayer/pip
+  SmbHttpProxy.kt               # loopback HTTP/1.1 server that exposes an SMB file to libmpv via 127.0.0.1:<port>/<token> with Range support
+  MainActivity.kt               # registers platform views + "Open with" intent handling + routes pip/snapshot/stop calls between ExoPlayerView and PipManager based on which engine is active
 ios/Runner/
   AvPlayerView.swift            # AetherEngine platform view + channels (same contract as ExoPlayerView.kt); host SubtitleOverlayView; WebDAV http(s) streams with headers/self-signed via WebDAVByteRangeSource
   BufferedSMBReader.swift       # read-ahead sliding-window IOReader (32 MiB) for WebDAV playback

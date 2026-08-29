@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:media_kit/media_kit.dart';
+import 'package:media_kit_video/media_kit_video.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'package:flutter/foundation.dart';
@@ -25,6 +27,7 @@ import '../services/tmdb_client.dart';
 import '../services/simkl_client.dart';
 import '../services/watched_store.dart';
 import '../services/sidecar_subtitle_service.dart';
+import '../services/mpv_pip.dart';
 import '../services/subtitle_style.dart';
 import '../services/downloaded_subtitles_store.dart';
 import '../services/opensubtitles_client.dart';
@@ -63,6 +66,36 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// hybrid-composition SurfaceView on phones and Android TV / Fire TV).
   PlaybackController? _exo;
   StreamSubscription<ExoPlayerEvent>? _exoSub;
+
+  /// libmpv (media_kit) fallback engine, engaged automatically when the native
+  /// engine reaches a terminal error. It replaces the [ExoPlayerView] in the
+  /// video slot and drives the SAME player UI (transport, seekbar, gestures,
+  /// auto-hide, ended-routing, resume) — the user keeps their normal player.
+  /// Renders into a Flutter texture, so no DV/HDR — appropriate, since the
+  /// fallback exists for content/decoders the native engine can't show.
+  Player? _mpvPlayer;
+  VideoController? _mpvController;
+  bool _mpvActive = false;
+  bool _mpvFailed = false;
+  String? _mpvError;
+  bool _mpvFallbackTried = false;
+  final List<StreamSubscription<Object?>> _mpvSubs = [];
+  BoxFit _mpvFit = BoxFit.contain;
+  /// Forced aspect ratio applied in mpv mode for the 16:9 / 4:3 aspect modes
+  /// (a `Center`-box wraps the video; `cover` fills the inside of that box).
+  double? _mpvAspect;
+  // mpv-track state for the chips / info sheet / audio+subtitle pickers —
+  // mirrors the Media3 `_audioTracks`/`_subtitleTracks` fields so the mpv mode
+  // shows identical UI.
+  Tracks _mpvTracks = const Tracks();
+  String? _mpvResolution;
+  int? _mpvAudioChannels;
+  bool _mpvSubtitleOn = false;
+  double _mpvBrightness = 1.0;
+  double _mpvZoomScale = 1.0;
+  /// Active SMB loopback-bridge token (see [SmbHttpProxy] / `startLoopback`);
+  /// null when the fallback's current source isn't served through the bridge.
+  String? _mpvProxyToken;
 
   /// The video currently on screen; follows [PlayerScreen.video] on first
   /// load, and is replaced by the server-transcoded variant when the Jellyfin
@@ -252,6 +285,10 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   bool get _backendReady => _exo != null;
 
+  /// True while the mpv fallback owns the video slot and its output is alive.
+  bool get _mpvReady =>
+      _mpvActive && _mpvPlayer != null && _mpvController != null && !_mpvFailed;
+
   @override
   void initState() {
     super.initState();
@@ -329,7 +366,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       }
     } catch (e) {
       if (mounted) {
-        setState(() => _error = 'Playback unavailable: $e');
+        _setTerminalError('Playback unavailable: $e');
       }
     }
   }
@@ -391,9 +428,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       _exo?.setAudioBoost(_audioBoost);
       _exo?.setNightMode(_nightMode);
     } catch (e) {
-      if (mounted) {
-        setState(() => _error = 'Playback unavailable: $e');
-      }
+      _setTerminalError('Playback unavailable: $e');
     }
   }
 
@@ -484,6 +519,559 @@ class _PlayerScreenState extends State<PlayerScreen>
     _reopenAt(_position, _duration);
   }
 
+  /// Terminal-error hook: on a media error the native stack can't resolve
+  /// (after the transcode + software-decode retries are exhausted), switch the
+  /// same screen over to the bundled libmpv fallback engine and keep playing.
+  /// Fires at most once per video and only when there is a source mpv can read.
+  void _maybeMpvFallback() {
+    if (_mpvFallbackTried || _mpvActive || _inTests) return;
+    if (_mpvSourceFor(_current).isEmpty) return;
+    _mpvFallbackTried = true;
+    debugPrint('mpvFallback: engaging automatic fallback');
+    unawaited(_startMpvFallback());
+  }
+
+  /// Sets a terminal backend error and, when the native stack cannot play the
+  /// file at all, continues in the mpv fallback instead of leaving the user at
+  /// a dead error screen.
+  void _setTerminalError(String message) {
+    if (mounted) setState(() => _error = message);
+    _maybeMpvFallback();
+  }
+
+  Future<void> _startMpvFallback() async {
+    if (_mpvActive || _inTests) return;
+    try {
+      // Idempotent: loads the bundled libmpv native library.
+      MediaKit.ensureInitialized();
+      final player = Player();
+      final controller = VideoController(player);
+      if (!mounted) {
+        player.dispose();
+        return;
+      }
+      _mpvPlayer = player;
+      _mpvController = controller;
+      _mpvActive = true;
+      _mpvFailed = false;
+      _mpvError = null;
+      _buffering = true;
+      // Picture-in-picture: the native Media3 pip path can't serve the
+      // fallback (no platform view, idle ExoPlayer), so the Activity-level
+      // bridge takes over while mpv owns playback.
+      MpvPipService.instance
+        ..onPipChanged = _onMpvPipChanged
+        ..onPipDismissed = _onMpvPipDismissed
+        ..onPlayPause = _onPipPlayPause
+        ..onRewind = _onPipRewind
+        ..onForward = _onPipForward;
+      _syncMpvPipState();
+      setState(() => _error = null);
+      _listenMpv(player);
+      unawaited(player.setRate(_playbackSpeed));
+      // media_kit attaches its Android texture output inside an async closure
+      // in the VideoController constructor; a failure there would otherwise
+      // throw into the void and leave a black screen with no error.
+      unawaited(controller.platform.future.then<void>(
+        (_) => debugPrint('mpvFallback: video output attached'),
+        onError: (Object e, StackTrace st) {
+          debugPrint('mpvFallback: video output attach failed: $e\n$st');
+          _markMpvFailed('The fallback video output couldn\'t start: $e');
+        },
+      ));
+      // Brief, honest signal that playback continued in a different engine.
+      final messenger = ScaffoldMessenger.of(context);
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(
+          content: Text('This video isn\'t supported by the built-in player, so the fallback player is being used.'),
+          duration: Duration(seconds: 3),
+        ));
+      await _mpvOpen(player, _current, _position.inMilliseconds);
+    } catch (e) {
+      _markMpvFailed('Fallback player couldn\'t start: $e');
+    }
+  }
+
+  /// Reloads [video] into the already-running mpv engine (play-next /
+  /// repeat-all continuation after an ended mpv session).
+  Future<void> _reloadMpv(VideoItem video, int startMs) async {
+    final p = _mpvPlayer;
+    if (p == null || _inTests) return;
+    _mpvFallbackTried = true;
+    _mpvFailed = false;
+    _mpvError = null;
+    _current = video;
+    _markedWatched = false;
+    _autoPlayFired = false;
+    _abA = null;
+    _abB = null;
+    _completed = false;
+    _position = Duration.zero;
+    _duration = Duration.zero;
+    _buffered = Duration.zero;
+    _buffering = true;
+    if (mounted) setState(() {});
+    await _mpvOpen(p, video, startMs);
+  }
+
+  /// The file/stream URL handed to libmpv: a non-path URI wins (http(s),
+  /// file/content), otherwise the raw path.
+  String _mpvSourceFor(VideoItem video) {
+    final uri = video.uri;
+    if (uri != null && uri.isNotEmpty && !uri.startsWith('/')) return uri;
+    final path = video.path;
+    if (path != null && path.isNotEmpty) return path;
+    return uri ?? '';
+  }
+
+  Future<void> _mpvOpen(Player player, VideoItem video, int startMs) async {
+    // A previous SMB-backed mpv session left a loopback bridge running — tear
+    // it down before pointing mpv at the next source.
+    await _stopMpvProxy();
+    final src = _mpvSourceFor(video);
+    debugPrint('mpvFallback: opening source: $src');
+    if (src.isEmpty) {
+      _markMpvFailed('No playable source for this video.');
+      return;
+    }
+    var playable = src;
+    // In-app SMB streams are served natively over jcifs-ng and mpv can't read
+    // `smb://` directly — Android serves the same file over a loopback HTTP
+    // bridge (byte-range aware) that mpv's HTTP layer reads normally.
+    if (src.toLowerCase().startsWith('smb://')) {
+      try {
+        playable = await _smbLoopbackUrl(src);
+      } catch (e) {
+        _markMpvFailed('Could not stream this SMB file through the fallback '
+            'player: ${e.toString().replaceFirst('PlatformException', '')}');
+        return;
+      }
+      if (!mounted) return;
+    }
+    try {
+      final start = Duration(milliseconds: startMs);
+      await player.open(
+        Media(playable, start: startMs > 0 ? start : null),
+        play: true,
+      );
+    } catch (e) {
+      _markMpvFailed('Fallback player couldn\'t open this file: $e');
+      return;
+    }
+    // mpv's own `sub-auto=exact` would discover sidecar files next to a local
+    // video, but our sources are loopback HTTP URLs (SMB) and remote schemes,
+    // so there is no directory to scan — the Media3 path's resolved external
+    // subs have to be added explicitly. Mirrors Media3's
+    // **external > embedded always** priority: the first `isDefault` track
+    // gets selected, the rest are still reachable from the CC sheet.
+    await _attachMpvExternalSubtitles(player);
+  }
+
+  /// Adds the video's resolved external subtitles to mpv via `sub-add`. Each
+  /// `SubtitleTrack.uri` becomes a separate track on mpv's track-list, so
+  /// the CC sheet shows the real filename + language instead of the generic
+  /// `external` label. Done post-open so mpv's track stream reflects the new
+  /// tracks before Dart tries to render the sheet.
+  Future<void> _attachMpvExternalSubtitles(Player player) async {
+    final subs = _current.externalSubtitles;
+    if (subs.isEmpty) return;
+    // Add non-defaults first so the default lands as the LAST `select` call —
+    // `setSubtitleTrack` is what mpv actually exposes, and each call calls
+    // `sub-add ... select`, so the last one wins. The non-defaults stay in
+    // the track-list for the CC sheet to pick from.
+    for (final s in subs) {
+      if (s.isDefault) continue;
+      unawaited(_addMpvSubtitle(player, s, select: false));
+    }
+    final def = subs.firstWhere(
+      (s) => s.isDefault,
+      orElse: () => subs.first,
+    );
+    await _addMpvSubtitle(player, def, select: true);
+  }
+
+  Future<void> _addMpvSubtitle(
+    Player player,
+    VideoExternalSub s, {
+    required bool select,
+  }) async {
+    try {
+      if (select) {
+        await player.setSubtitleTrack(
+          SubtitleTrack.uri(
+            s.uri,
+            title: s.label.isNotEmpty ? s.label : null,
+            language: s.language.isNotEmpty ? s.language : null,
+          ),
+        );
+        _mpvSubtitleOn = true;
+      } else {
+        // media_kit's `setSubtitleTrack` always calls `sub-add ... select`,
+        // which would clobber the default we add below. The underlying
+        // libmpv command adds the file without touching selection, so the
+        // track still shows up in the CC sheet (mpv populates `track-list`
+        // on every sub-add) and the default wins the active position.
+        final platform = player.platform;
+        if (platform is NativePlayer) {
+          await platform.command(<String>[
+            'sub-add',
+            s.uri,
+            s.label.isNotEmpty ? s.label : 'external',
+            s.language.isNotEmpty ? s.language : 'auto',
+          ]);
+        }
+      }
+    } catch (e) {
+      debugPrint('mpvFallback: failed to add subtitle ${s.label}: $e');
+    }
+  }
+
+  /// Resolves an `smb://<serverId>/<share>/<path>` source to a native loopback
+  /// HTTP URL and records the token so [stopLoopback] can be called later.
+  Future<String> _smbLoopbackUrl(String src) async {
+    final u = Uri.parse(src);
+    final serverId = u.host;
+    final seg = u.pathSegments;
+    if (serverId.isEmpty || seg.isEmpty) {
+      throw Exception('Malformed SMB URI');
+    }
+    final share = seg.first;
+    final path = seg.length > 1 ? seg.skip(1).join('/') : '';
+    final url = await SmbClient.instance.startLoopback(serverId, share, path);
+    if (url.isEmpty) throw Exception('No loopback URL returned');
+    _mpvProxyToken = Uri.parse(url).pathSegments.firstOrNull;
+    return url;
+  }
+
+  Future<void> _stopMpvProxy() async {
+    final t = _mpvProxyToken;
+    _mpvProxyToken = null;
+    if (t == null || t.isEmpty || _inTests) return;
+    try {
+      await SmbClient.instance.stopLoopback(t);
+    } catch (_) {}
+  }
+
+  void _markMpvFailed(String message) {
+    _mpvFailed = true;
+    _mpvError = message;
+    _buffering = false;
+    debugPrint('mpvFallback: failed: $message');
+    if (mounted) setState(() {});
+  }
+
+  void _listenMpv(Player player) {
+    _mpvSubs.add(player.stream.playing.listen((v) {
+      if (!mounted) return;
+      _buffering = false;
+      _playing = v;
+      _syncControlsForPlaybackState();
+      _syncMpvPipState();
+      setState(() {});
+    }));
+    _mpvSubs.add(player.stream.position.listen((v) {
+      if (!mounted) return;
+      _position = v;
+      // A-B repeat: loop back to A whenever playback passes B.
+      if (_abA != null &&
+          _abB != null &&
+          _playing &&
+          !_dragging &&
+          v >= Duration(milliseconds: _abB!)) {
+        final t = Duration(milliseconds: _abA!);
+        _position = t;
+        unawaited(player.seek(t));
+      }
+      _maybeSaveMpvResume(v);
+      setState(() {});
+    }));
+    _mpvSubs.add(player.stream.duration.listen((v) {
+      if (!mounted) return;
+      if (v > Duration.zero) _hadMedia = true;
+      _duration = v;
+      setState(() {});
+    }));
+    _mpvSubs.add(player.stream.tracks.listen((t) {
+      if (!mounted) return;
+      _mpvTracks = t;
+      _syncMpvTrackMeta();
+      setState(() {});
+    }));
+    _mpvSubs.add(player.stream.track.listen((t) {
+      if (!mounted) return;
+      _mpvSubtitleOn = t.subtitle.id != 'no' && t.subtitle.id != 'auto';
+      setState(() {});
+    }));
+    _mpvSubs.add(player.stream.width.listen((v) {
+      if (!mounted) return;
+      _syncMpvTracksResolution();
+      setState(() {});
+    }));
+    _mpvSubs.add(player.stream.height.listen((v) {
+      if (!mounted) return;
+      _syncMpvTracksResolution();
+      setState(() {});
+    }));
+    _mpvSubs.add(player.stream.buffer.listen((v) {
+      if (!mounted) return;
+      _buffered = v;
+    }));
+    _mpvSubs.add(player.stream.buffering.listen((v) {
+      if (!mounted) return;
+      _buffering = v;
+      _syncControlsForPlaybackState();
+      setState(() {});
+    }));
+    _mpvSubs.add(player.stream.completed.listen((v) {
+      if (!mounted) return;
+      if (v) {
+        _playing = false;
+        _buffering = false;
+        _buffered = Duration.zero;
+        _completed = true;
+        _onMpvEnded();
+      }
+      setState(() {});
+    }));
+    _mpvSubs.add(player.stream.error.listen((msg) {
+      debugPrint('mpvFallback: playback error: $msg');
+      if (!mounted) return;
+      _markMpvFailed('Fallback player error: $msg');
+    }));
+    _mpvSubs.add(player.stream.log.listen((l) {
+      // mpv's own log lines — invaluable when a file won't open.
+      debugPrint('mpv [${l.level}] ${l.text.trim()}');
+    }));
+  }
+
+  /// Best-available video codec name reported by the mpv engine (or null).
+  String? get _mpvVideoCodecLabel {
+    final t = _mpvTracks.video;
+    for (final tr in t) {
+      if (tr.id == 'auto' || tr.id == 'no') continue;
+      final codec = tr.codec ?? tr.title;
+      if (codec != null && codec.isNotEmpty) return codec.toUpperCase();
+    }
+    return null;
+  }
+
+  /// Audio label (codec · channels) as reported by mpv state.
+  String? get _mpvAudioLabel {
+    final audio = _mpvTracks.audio;
+    final selId = _mpvPlayer?.state.track.audio.id;
+    // mpv reports the selected track as `auto` until it resolves a concrete
+    // id, so an `id != selId` filter would skip every real track and the chip
+    // would stay empty for the whole session. Only filter on a concrete id.
+    final concreteSel = (selId != null && selId != 'auto' && selId != 'no')
+        ? selId
+        : null;
+    for (final tr in audio) {
+      if (tr.id == 'auto' || tr.id == 'no') continue;
+      if (concreteSel != null && tr.id != concreteSel) continue;
+      final codec = tr.codec ?? tr.title;
+      final channels = tr.channelscount;
+      if (channels != null && channels > 0) _mpvAudioChannels = channels;
+      final parts = [
+        if (codec != null && codec.isNotEmpty) codec.toUpperCase(),
+        if (channels != null && channels > 0) '$channels ch',
+      ];
+      if (parts.isNotEmpty) return parts.join(' · ');
+    }
+    return null;
+  }
+
+  /// True when the mpv engine actually has a selectable subtitle track. mpv
+  /// reports the current subtitle id as `auto` when nothing is loaded, so the
+  /// `id != 'no'` test alone lights the CC button on videos with no subtitles.
+  bool get _mpvHasSubtitleTracks => _mpvTracks.subtitle
+      .any((t) => t.id != 'auto' && t.id != 'no');
+
+  void _syncMpvTrackMeta() {
+    final audio = _mpvTracks.audio;
+    for (final tr in audio) {
+      final c = tr.channelscount;
+      if (c != null && c > 0) _mpvAudioChannels = c;
+    }
+  }
+
+  void _syncMpvTracksResolution() {
+    final p = _mpvPlayer;
+    final w = p?.state.width;
+    final h = p?.state.height;
+    if (w != null && w > 0 && h != null && h > 0) {
+      _mpvResolution = '$w×$h';
+    }
+    // The pip window's aspect ratio comes from the real video size.
+    _syncMpvPipState();
+  }
+
+  /// Pushes the fallback engine's playback state to the native pip bridge.
+  /// Automatic pip entry is decided in `onUserLeaveHint`, which cannot await a
+  /// call into Dart — so the state has to be there before the user leaves.
+  void _syncMpvPipState() {
+    if (_inTests) return;
+    final p = _mpvPlayer;
+    final w = p?.state.width ?? 0;
+    final h = p?.state.height ?? 0;
+    unawaited(MpvPipService.instance.setState(
+      active: _mpvActive,
+      playing: _playing,
+      aspect: (w > 0 && h > 0) ? w / h : 0,
+    ));
+  }
+
+  /// System moved the app in/out of pip while the fallback engine is playing.
+  /// Mirrors the Media3 path: every control-reveal check is gated on `_inPip`,
+  /// so flipping this flag is what makes the pip window show only the video.
+  void _onMpvPipChanged(bool inPip) {
+    if (!mounted) return;
+    setState(() {
+      _inPip = inPip;
+      if (inPip) _controlsVisible = false;
+    });
+  }
+
+  /// The user swiped the pip window away — pause so audio doesn't keep playing
+  /// invisibly (same rule as the Media3 engine's dismissal path).
+  void _onMpvPipDismissed() {
+    if (!mounted) return;
+    unawaited(_mpvPlayer?.pause());
+  }
+
+  /// The pip window's transport buttons. A Flutter texture receives no
+  /// touches in pip, so these system-drawn [RemoteAction]s are the only
+  /// way to control playback there. Each path mirrors the on-screen
+  /// play/pause and ±10s gestures.
+  void _onPipPlayPause() {
+    if (_mpvPlayer == null) return;
+    if (_completed) {
+      _completed = false;
+      unawaited(_mpvSeek(Duration.zero));
+      unawaited(_mpvPlayer!.play());
+    } else if (_playing) {
+      unawaited(_mpvPlayer!.pause());
+    } else {
+      unawaited(_mpvPlayer!.play());
+    }
+  }
+
+  void _onPipRewind() {
+    if (_mpvPlayer == null) return;
+    final target = _position - const Duration(seconds: 10);
+    unawaited(_mpvSeek(target < Duration.zero ? Duration.zero : target));
+  }
+
+  void _onPipForward() {
+    if (_mpvPlayer == null) return;
+    final cap = _duration > Duration.zero ? _duration - const Duration(seconds: 1) : null;
+    var target = _position + const Duration(seconds: 10);
+    if (cap != null && target > cap) target = cap;
+    unawaited(_mpvSeek(target));
+  }
+
+  /// Applies the persisted volume-boost / night-mode combination to the mpv
+  /// engine's own volume mixer (the native Media3 LoudnessEnhancer path only
+  /// exists in the main engine; mpv's volume property is the nearest proxy).
+  Future<void> _applyMpvVolume() async {
+    final p = _mpvPlayer;
+    if (p == null) return;
+    var vol = 100.0;
+    if (_audioBoost > 1.01) vol *= _audioBoost;
+    if (_nightMode) vol *= 1.6; // +400mB lift approximated as gain
+    vol = vol.clamp(0.0, 130.0).toDouble();
+    await p.setVolume(vol);
+  }
+
+  /// Applies a picker-chosen [VideoFitMode] to whichever engine is live; mpv
+  /// mode maps the box modes onto the Flutter-side `Video` fit + a forced
+  /// aspect box.
+  void _applyFitMode(VideoFitMode mode) {
+    if (!mounted) return;
+    setState(() {
+      _fitMode = mode;
+      if (_mpvReady) {
+        switch (mode) {
+          case VideoFitMode.fit:
+            _mpvFit = BoxFit.contain;
+            _mpvAspect = null;
+          case VideoFitMode.crop:
+            _mpvFit = BoxFit.cover;
+            _mpvAspect = null;
+          case VideoFitMode.stretch:
+            _mpvFit = BoxFit.fill;
+            _mpvAspect = null;
+          case VideoFitMode.ratio16x9:
+            _mpvFit = BoxFit.cover;
+            _mpvAspect = 16 / 9;
+          case VideoFitMode.ratio4x3:
+            _mpvFit = BoxFit.cover;
+            _mpvAspect = 4 / 3;
+        }
+        _mpvZoomScale = 1.0;
+      }
+    });
+    if (!_mpvReady) _exo?.setFitMode(mode);
+    if (!_inTests) FitModeStore.save(mode);
+  }
+
+  /// End-of-media routing for the mpv engine — the same priority as the
+  /// native ended path: sleep "end of video" → repeat one → repeat all /
+  /// shuffle → auto-play-next (all continuing inside mpv).
+  void _onMpvEnded() {
+    if (!_markedWatched) {
+      _markedWatched = true;
+      final key = _resumeKey;
+      if (!_inTests && key.isNotEmpty) WatchedStore.set(key, true);
+      if (!_inTests) _pushSimklHistory(key);
+    }
+    if (_sleepAtEnd) {
+      _sleepAtEnd = false;
+    } else if (_repeat == LoopMode.one) {
+      _restartForRepeatOne();
+    } else if (!_autoPlayFired) {
+      _autoPlayFired = true;
+      if (_repeat == LoopMode.all || _shuffle) {
+        unawaited(_advancePlayback(wrap: _repeat == LoopMode.all));
+      } else {
+        unawaited(_maybeAutoPlayNext());
+      }
+    }
+    _clearResume();
+  }
+
+  void _maybeSaveMpvResume(Duration pos) {
+    final now = DateTime.now();
+    if (_playing &&
+        !_buffering &&
+        !_dragging &&
+        now.difference(_lastResumeSave) >= const Duration(seconds: 5) &&
+        pos > Duration.zero) {
+      _lastResumeSave = now;
+      _saveResume(pos);
+    }
+  }
+
+  /// Routes a user-initiated seek to whichever engine owns the video slot.
+  void _seekBackend(Duration target) {
+    if (_mpvReady) {
+      unawaited(_mpvPlayer!.seek(_clampDuration(target)));
+    } else {
+      _exo?.seekTo(target);
+    }
+  }
+
+  Duration _clampDuration(Duration d) {
+    if (d < Duration.zero) return Duration.zero;
+    if (_duration > Duration.zero && d > _duration) return _duration;
+    return d;
+  }
+
+  /// Clips a target position to `[0, duration]` and seeks in mpv.
+  Future<void> _mpvSeek(Duration target) async {
+    await _mpvPlayer?.seek(_clampDuration(target));
+  }
+
   /// Restores the user's original decoder mode after a software fallback
   /// (called at the start of the next open and on dispose). No-op when no
   /// override is active.
@@ -567,7 +1155,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (!mounted) return;
     if (fallback?.uri == null ||
         !JellyfinClient.isTranscodeUri(fallback!.uri)) {
-      setState(() => _error = directError);
+      _setTerminalError(directError);
       return;
     }
     final u = Uri.parse(fallback.uri!);
@@ -594,7 +1182,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       _exo?.setAudioBoost(_audioBoost);
       _exo?.setNightMode(_nightMode);
     } catch (_) {
-      if (mounted) setState(() => _error = directError);
+      _setTerminalError(directError);
     }
   }
 
@@ -669,7 +1257,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         _trySoftwareDecodeFallback();
         return;
       }
-      _error = friendly;
+      _setTerminalError(friendly);
     }
     _subtitleOn = e.subtitleOn;
     _subtitleTracks = e.subtitleTracks;
@@ -822,6 +1410,10 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (!mounted) return;
     // Verify we're still in the ended state (user didn't seek/replay).
     if (!_completed) return;
+    if (_mpvReady) {
+      await _reloadMpv(next, 0);
+      return;
+    }
     _current = next;
     if (mounted) setState(() => _error = null);
     await _openCurrent();
@@ -832,8 +1424,13 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// path covers iOS (AetherEngine parks in `.ended`, and play-after-ended
   /// reloads the session) and acts as the fallback everywhere.
   void _restartForRepeatOne() {
-    _exo?.seekTo(Duration.zero);
-    _exo?.play();
+    if (_mpvReady) {
+      unawaited(_mpvSeek(Duration.zero));
+      unawaited(_mpvPlayer?.play());
+    } else {
+      _exo?.seekTo(Duration.zero);
+      _exo?.play();
+    }
   }
 
   /// Arms (or cancels) the sleep timer. A null [duration] with [endOfVideo]
@@ -897,6 +1494,10 @@ class _PlayerScreenState extends State<PlayerScreen>
     // Grace period, same rationale as auto-play-next.
     await Future.delayed(const Duration(seconds: 2));
     if (!mounted || !_completed) return;
+    if (_mpvReady) {
+      await _reloadMpv(next ?? _current, 0);
+      return;
+    }
     _current = next ?? _current; // null → single-video folder: loop it
     setState(() => _error = null);
     await _openCurrent();
@@ -1120,6 +1721,20 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
     _exoSub?.cancel();
     _exo?.dispose();
+    for (final s in _mpvSubs) {
+      s.cancel();
+    }
+    unawaited(_mpvPlayer?.dispose());
+    unawaited(_stopMpvProxy());
+    // Tell the native pip bridge the fallback engine is gone (clears its
+    // auto-entry state) and drop the callbacks so a disposed screen is never
+    // called back into.
+    if (!_inTests) {
+      unawaited(MpvPipService.instance.setState(active: false, playing: false));
+    }
+    MpvPipService.instance.clear();
+    _mpvPlayer = null;
+    _mpvController = null;
     SystemChrome.setPreferredOrientations(DeviceOrientation.values);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     _playerFocusScopeNode.dispose();
@@ -1238,7 +1853,11 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (!_backendReady) return;
       final next = (_pinchBaseScale * details.scale).clamp(1.0, 3.0);
       if ((next - _zoomScale).abs() < 0.01) return;
-      setState(() => _zoomScale = next);
+      setState(() {
+        _zoomScale = next;
+        if (_mpvReady) _mpvZoomScale = next;
+      });
+      if (_mpvReady) return;
       _exo?.setZoom(next);
       return;
     }
@@ -1299,8 +1918,20 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// Fetches the current brightness/volume from the platform and makes it the
   /// gesture's base value. Buffered deltas are applied as soon as it arrives.
   Future<void> _syncSwipeBase() async {
+    if (_swipeType == null || !_swipeGestureActive) return;
+    if (_mpvReady) {
+      final current = _swipeType == _SwipeType.brightness
+          ? _mpvBrightness
+          : (_mpvPlayer?.state.volume ?? 100) / 100;
+      if (!mounted || !_swipeGestureActive) return;
+      setState(() {
+        _swipeBase = current.clamp(0.0, 1.0);
+        _applySwipeValue();
+      });
+      return;
+    }
     final exo = _exo;
-    if (exo == null || _swipeType == null || !_swipeGestureActive) return;
+    if (exo == null) return;
     try {
       final current = _swipeType == _SwipeType.brightness
           ? await exo.getBrightness()
@@ -1317,14 +1948,22 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   /// Computes base + accumulated delta, updates the overlay, and pushes the
-  /// result to the platform.
+  /// result to the platform (or the mpv engine when the fallback is live).
   void _applySwipeValue() {
     final next = (_swipeBase + _swipeDragDelta).clamp(0.0, 1.0);
     _swipeCurrentValue = next;
     if (_swipeType == _SwipeType.brightness) {
-      _exo?.setBrightness(next);
+      if (_mpvReady) {
+        setState(() => _mpvBrightness = next);
+      } else {
+        _exo?.setBrightness(next);
+      }
     } else if (_swipeType == _SwipeType.volume) {
-      _exo?.setSystemVolume(next);
+      if (_mpvReady) {
+        unawaited(_mpvPlayer?.setVolume(next * 100));
+      } else {
+        _exo?.setSystemVolume(next);
+      }
     }
   }
 
@@ -1378,7 +2017,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     final targetMs = _seekTargetMs;
     setState(() => _seekPreviewActive = false);
     if ((targetMs - _position.inMilliseconds).abs() >= 500) {
-      _exo?.seekTo(Duration(milliseconds: targetMs));
+      _seekBackend(Duration(milliseconds: targetMs));
     }
   }
 
@@ -1446,6 +2085,10 @@ class _PlayerScreenState extends State<PlayerScreen>
   Future<void> _openAudioTrackSheet() async {
     if (_touchLocked) return;
     _showControls();
+    if (_mpvReady) {
+      await _openMpvAudioTrackSheet();
+      return;
+    }
     final tracks = _audioTracks;
     if (tracks.isEmpty) return;
     final selected = _selectedAudioTrackIndex;
@@ -1511,6 +2154,249 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
+  /// Audio-track picker for the mpv fallback — identical UI to the Media3
+  /// variant, backed by media_kit's `tracks` state + `setAudioTrack`.
+  Future<void> _openMpvAudioTrackSheet() async {
+    final player = _mpvPlayer;
+    if (player == null) return;
+    final all = _mpvTracks.audio;
+    final tracks = all.where((t) => t.id != 'auto' && t.id != 'no').toList();
+    if (tracks.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('No audio tracks found')));
+      return;
+    }
+    final selected = _mpvSelectedAudioId(tracks);
+    final choice = await showModalBottomSheet<AudioTrack>(
+      context: context,
+      backgroundColor: const Color(0xFF1C1C1E),
+      builder: (sheetContext) => SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.6,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 16, 20, 4),
+                child: Text(
+                  'Audio tracks',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: tracks.length,
+                  itemBuilder: (context, i) {
+                    final t = tracks[i];
+                    final isSelected = t.id == selected;
+                    return _tvListTile(
+                      leading: Icon(
+                        isSelected ? Icons.check_circle : Icons.graphic_eq,
+                        color: isSelected ? Colors.white : Colors.white54,
+                      ),
+                      title: Text(
+                        _mpvAudioTrackLabel(t),
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      subtitle: (t.bitrate ?? 0) > 0
+                          ? Text(
+                              '${(t.bitrate! / 1000).round()} kbps',
+                              style: const TextStyle(color: Colors.white54),
+                            )
+                          : null,
+                      onTap: () => Navigator.of(context).pop(t),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (choice != null && choice.id != selected) {
+      await player.setAudioTrack(choice);
+    }
+  }
+
+  /// The audio-track id the mpv sheet should tick. mpv reports the current
+  /// audio id as `auto` until the user picks a track explicitly, so a plain
+  /// `state.track.audio.id` comparison ticks nothing even though a track IS
+  /// playing. In that case the played track is the first real one, which is
+  /// what mpv's own auto-selection resolves to.
+  String? _mpvSelectedAudioId(List<AudioTrack> tracks) {
+    final id = _mpvPlayer?.state.track.audio.id;
+    if (id != null && id != 'auto' && id != 'no') return id;
+    return tracks.isNotEmpty ? tracks.first.id : null;
+  }
+
+  String _mpvAudioTrackLabel(AudioTrack t) {
+    final title = t.title?.trim();
+    if (title != null && title.isNotEmpty) return title;
+    final lang = languageName(t.language ?? '');
+    final codec = (t.codec ?? '').toUpperCase();
+    final ch = t.channelscount;
+    return [
+      if (lang.isNotEmpty) lang,
+      if (codec.isNotEmpty) codec,
+      if (ch != null && ch > 0) '$ch ch',
+    ].join(' · ');
+  }
+
+  /// Subtitle picker for the mpv fallback — same sections as the Media3
+  /// variant (downloaded / off / tracks / search online / load file), backed by
+  /// media_kit tracks + `setSubtitleTrack` (incl. `SubtitleTrack.uri` for
+  /// files picked/downloaded while the fallback is playing).
+  Future<void> _openMpvSubtitleSheet() async {
+    final player = _mpvPlayer;
+    if (player == null) return;
+    final tracks = _mpvTracks.subtitle
+        .where((t) => t.id != 'no')
+        .toList();
+    const onlineSentinel = -3;
+    const loadSentinel = -2;
+    const downloadedBase = -10;
+    final resumeKey = _current.resumeKey ?? _current.id;
+    final downloaded = await DownloadedSubtitlesStore.loadForVideo(resumeKey);
+    if (!mounted) return;
+    final choice = await showModalBottomSheet<int>(
+      context: context,
+      backgroundColor: const Color(0xFF1C1C1E),
+      isScrollControlled: true,
+      builder: (sheetContext) => SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.7,
+          ),
+          child: ListView(
+            shrinkWrap: true,
+            padding: const EdgeInsets.only(bottom: 8),
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 16, 20, 4),
+                child: Text(
+                  'Subtitles',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              if (downloaded.isNotEmpty) ...[
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(20, 8, 20, 4),
+                  child: Text('Downloaded',
+                      style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600)),
+                ),
+                for (var i = 0; i < downloaded.length; i++)
+                  () {
+                    final d = downloaded[i];
+                    final isSelected = player.state.track.subtitle.uri &&
+                        player.state.track.subtitle.id == d.path;
+                    final displayName = meaningfulSubtitleFileName(
+                      apiFileName: d.fileName,
+                      language: d.language,
+                      videoTitle: _current.title,
+                    );
+                    return _tvListTile(
+                      leading: Icon(isSelected ? Icons.radio_button_checked : Icons.file_download_done, color: isSelected ? Colors.white : Colors.white70),
+                      title: Text('${subtitleFileNameLabel(displayName)} · ${d.language.toUpperCase()}', style: const TextStyle(color: Colors.white)),
+                      onTap: () => Navigator.of(sheetContext).pop(downloadedBase - i),
+                    );
+                  }(),
+                const Divider(color: Colors.white12, height: 1),
+              ],
+              _tvListTile(
+                leading: Icon(
+                  player.state.track.subtitle.id == 'no'
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_off,
+                  color: player.state.track.subtitle.id == 'no'
+                      ? Colors.white
+                      : Colors.white54,
+                ),
+                title: const Text('Off',
+                    style: TextStyle(color: Colors.white)),
+                onTap: () => Navigator.of(sheetContext).pop(-1),
+              ),
+              for (final t in tracks.where((t) => t.id != 'auto'))
+                () {
+                  final isSelected = !t.uri && player.state.track.subtitle.id == t.id;
+                  final title = t.title?.trim();
+                  final lang = languageName(t.language ?? '');
+                  return _tvListTile(
+                    leading: Icon(
+                      isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
+                      color: isSelected ? Colors.white : Colors.white54,
+                    ),
+                    title: Text(
+                      [lang, if (title != null && title.isNotEmpty) title]
+                          .where((s) => s.isNotEmpty)
+                          .join(' · '),
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                    onTap: () => Navigator.of(sheetContext).pop(100 + tracks.indexOf(t)),
+                  );
+                }(),
+              const Divider(color: Colors.white12, height: 1),
+              _tvListTile(
+                leading: const Icon(Icons.language, color: Colors.white70),
+                title: const Text('Search online subtitles…',
+                    style: TextStyle(color: Colors.white)),
+                onTap: () => Navigator.of(sheetContext).pop(onlineSentinel),
+              ),
+              _tvListTile(
+                leading: const Icon(Icons.file_open, color: Colors.white70),
+                title: const Text('Load subtitle file…',
+                    style: TextStyle(color: Colors.white)),
+                onTap: () => Navigator.of(sheetContext).pop(loadSentinel),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (choice == null) return;
+    if (choice == onlineSentinel) {
+      await _searchOnlineSubtitle(attachToMpv: true);
+      return;
+    }
+    if (choice == loadSentinel) {
+      await _pickAndLoadSubtitle(attachToMpv: true);
+      return;
+    }
+    if (choice <= downloadedBase) {
+      final idx = downloadedBase - choice;
+      if (idx >= 0 && idx < downloaded.length) {
+        final picked = downloaded[idx];
+        _mpvSubtitleOn = true;
+        await player.setSubtitleTrack(
+          SubtitleTrack.uri(
+            picked.path,
+            title: picked.fileName,
+            language: picked.language,
+          ),
+        );
+      }
+      return;
+    }
+    final target = choice - 100;
+    if (target >= 0 && target < tracks.length) {
+      await player.setSubtitleTrack(tracks[target]);
+    } else if (choice == -1) {
+      await player.setSubtitleTrack(SubtitleTrack.no());
+    }
+  }
+
   /// Read-only "Video info" sheet behind the top-bar ⓘ button. Surfaces
   /// every detail the chip row can show, plus the full source URL, live
   /// Read-only "Video info" sheet behind the top-bar ⓘ button. Surfaces
@@ -1535,12 +2421,14 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (sourceUrl.isNotEmpty && sourceUrl != video.title)
         (label: 'URL', value: sourceUrl),
       if (fileSize != null) (label: 'File size', value: fileSize),
-      (label: 'HDR', value: _hdrLabel),
+      (label: 'HDR', value: _mpvReady ? 'SDR (fallback)' : _hdrLabel),
       if (_videoCodecInfoLabel != null)
         (label: 'Video', value: _videoCodecInfoLabel!),
       if (_resolutionInfoLabel != null)
         (label: 'Resolution', value: _resolutionInfoLabel!),
-      if (Platform.isAndroid && _liveDecoderName != null)
+      if (_mpvReady)
+        (label: 'Engine', value: 'libmpv (software)')
+      else if (Platform.isAndroid && _liveDecoderName != null)
         (
           label: 'Decoder',
           value: '$_liveDecoderName${(_isHwDecoder ?? true) ? " · hardware" : " · software"}',
@@ -1552,10 +2440,11 @@ class _PlayerScreenState extends State<PlayerScreen>
               ? '${_audioInfoLabel ?? "Audio"} · Passthrough'
               : _audioInfoLabel!,
         ),
-      if (_liveAudioChannelCount != null && _liveAudioChannelCount! > 0)
+      if ((_liveAudioChannelCount != null && _liveAudioChannelCount! > 0) ||
+          (_mpvReady && _mpvAudioChannels != null))
         (
           label: 'Audio ch.',
-          value: '$_liveAudioChannelCount ch',
+          value: '${_mpvReady ? _mpvAudioChannels! : _liveAudioChannelCount!} ch',
         ),
       if (_transcodeActive ||
           video.isTranscoded ||
@@ -1681,6 +2570,10 @@ class _PlayerScreenState extends State<PlayerScreen>
   Future<void> _openSubtitleSheet() async {
     if (_touchLocked) return;
     _showControls();
+    if (_mpvReady) {
+      await _openMpvSubtitleSheet();
+      return;
+    }
     final tracks = _subtitleTracks;
     final selected = _selectedSubtitleTrack;
     // Sentinel for "Load subtitle file..." and "Search online…".
@@ -1849,40 +2742,20 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
-  Future<void> _pickAndLoadSubtitle() async {
+  Future<void> _pickAndLoadSubtitle({bool attachToMpv = false}) async {
     // For CX / SMB videos, first try to auto-discover subtitle files sitting
     // next to the video on the same NAS share (via saved SMB credentials).
     // This is more reliable than the system picker, since CX doesn't expose
     // its NAS files through SAF and won't appear in the Files chooser.
-    final smbUri = await _tryPickSmbSiblingSubtitle();
-    if (smbUri == '__CANCEL__') return;
-    if (smbUri != null) {
-      // User picked a NAS sibling — load it.
-      if (!mounted) return;
-      final pos = _position;
-      _current = VideoItem(
-        id: _current.id,
-        title: _current.title,
-        path: _current.path,
-        uri: _current.uri,
-        resumeKey: _current.resumeKey,
-        duration: _current.duration,
-        sizeBytes: _current.sizeBytes,
-        resolution: _current.resolution,
-        videoCodec: _current.videoCodec,
-        hdrHint: _current.hdrHint,
-        audioCodec: _current.audioCodec,
-        audioProfile: _current.audioProfile,
-        audioChannels: _current.audioChannels,
-        subtitleUri: smbUri,
-        httpHeaders: _current.httpHeaders,
-        allowSelfSigned: _current.allowSelfSigned,
-        jellyfinServerId: _current.jellyfinServerId,
-        jellyfinItemId: _current.jellyfinItemId,
-        externalSubtitles: _current.externalSubtitles,
-      );
-      await _reopenAt(pos, _duration);
-      return;
+    if (!attachToMpv) {
+      final smbUri = await _tryPickSmbSiblingSubtitle();
+      if (smbUri == '__CANCEL__') return;
+      if (smbUri != null) {
+        // User picked a NAS sibling — load it.
+        if (!mounted) return;
+        await _attachSubtitlePath(smbUri);
+        return;
+      }
     }
     // Fallback: system file picker — shows any file manager on the device
     // (Files, CX Explorer, Solid Explorer, etc.) via GET_CONTENT chooser.
@@ -1893,6 +2766,17 @@ class _PlayerScreenState extends State<PlayerScreen>
       uri = null;
     }
     if (uri == null || uri.isEmpty || !mounted) return;
+    await _attachSubtitlePath(uri);
+  }
+
+  Future<void> _attachSubtitlePath(String path) async {
+    if (_mpvReady) {
+      _mpvSubtitleOn = true;
+      await _mpvPlayer?.setSubtitleTrack(
+        SubtitleTrack.uri(path, language: ''),
+      );
+      return;
+    }
     final pos = _position;
     _current = VideoItem(
       id: _current.id,
@@ -1908,7 +2792,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       audioCodec: _current.audioCodec,
       audioProfile: _current.audioProfile,
       audioChannels: _current.audioChannels,
-      subtitleUri: uri,
+      subtitleUri: path,
       httpHeaders: _current.httpHeaders,
       allowSelfSigned: _current.allowSelfSigned,
       jellyfinServerId: _current.jellyfinServerId,
@@ -1918,7 +2802,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     await _reopenAt(pos, _duration);
   }
 
-  Future<void> _searchOnlineSubtitle() async {
+  Future<void> _searchOnlineSubtitle({bool attachToMpv = false}) async {
     // Prefill with the video title without extension / noise.
     final raw = _current.title.trim();
     final q = raw.isEmpty ? _current.id : raw;
@@ -1931,29 +2815,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       builder: (ctx) => OpensubtitlesSheet(initialQuery: q, filePath: filePath, resumeKey: resumeKey),
     );
     if (result == null || result.isEmpty || !mounted) return;
-    final pos = _position;
-    _current = VideoItem(
-      id: _current.id,
-      title: _current.title,
-      path: _current.path,
-      uri: _current.uri,
-      resumeKey: _current.resumeKey,
-      duration: _current.duration,
-      sizeBytes: _current.sizeBytes,
-      resolution: _current.resolution,
-      videoCodec: _current.videoCodec,
-      hdrHint: _current.hdrHint,
-      audioCodec: _current.audioCodec,
-      audioProfile: _current.audioProfile,
-      audioChannels: _current.audioChannels,
-      subtitleUri: result,
-      httpHeaders: _current.httpHeaders,
-      allowSelfSigned: _current.allowSelfSigned,
-      jellyfinServerId: _current.jellyfinServerId,
-      jellyfinItemId: _current.jellyfinItemId,
-      externalSubtitles: _current.externalSubtitles,
-    );
-    await _reopenAt(pos, _duration);
+    await _attachSubtitlePath(result);
   }
 
   Future<String> _writeTempForAuto(String fileName, List<int> bytes) async {
@@ -2464,7 +3326,20 @@ class _PlayerScreenState extends State<PlayerScreen>
                   ),
                   // Picture-in-picture lives in app Settings (Player section):
                   // the toggle gates the automatic HOME/recents entry on both
-                  // platforms; there is no manual ⋮ entry.
+                  // platforms; there is no manual ⋮ entry for the main engine.
+                  // EXCEPTION — fallback engine: its video is a Flutter
+                  // texture, so pip is easy to miss; give it an explicit row.
+                  if (_mpvReady && Platform.isAndroid && !_isTv)
+                    _tvListTile(
+                      leading: const Icon(Icons.picture_in_picture_alt,
+                          color: Colors.white70),
+                      title: const Text('Picture-in-picture',
+                          style: TextStyle(color: Colors.white)),
+                      onTap: () {
+                        Navigator.of(sheetContext).pop();
+                        unawaited(MpvPipService.instance.enterPip());
+                      },
+                    ),
                   // Aspect ratio dropdown
                   _tvListTile(
                     leading: const Icon(Icons.aspect_ratio, color: Colors.white70),
@@ -2487,9 +3362,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                               title: Text(mode.label, style: const TextStyle(color: Colors.white)),
                               onTap: () {
                                 if (_fitMode != mode) {
-                                  setState(() => _fitMode = mode);
-                                  _exo?.setFitMode(mode);
-                                  if (!_inTests) FitModeStore.save(mode);
+                                  _applyFitMode(mode);
                                 }
                                 setSheet(() {});
                               },
@@ -2521,7 +3394,11 @@ class _PlayerScreenState extends State<PlayerScreen>
                               onTap: () {
                                 if (_playbackSpeed != s) {
                                   setState(() => _playbackSpeed = s);
-                                  _exo?.setSpeed(s);
+                                  if (_mpvReady) {
+                                    unawaited(_mpvPlayer?.setRate(s));
+                                  } else {
+                                    _exo?.setSpeed(s);
+                                  }
                                   if (!_inTests) PlaybackSpeedStore.save(s);
                                 }
                                 setSheet(() {});
@@ -2566,7 +3443,9 @@ class _PlayerScreenState extends State<PlayerScreen>
                               onTap: () {
                                 if (_repeat != mode) {
                                   setState(() => _repeat = mode);
-                                  _exo?.setRepeatMode(mode.index);
+                                  if (!_mpvReady) {
+                                    _exo?.setRepeatMode(mode.index);
+                                  }
                                   if (!_inTests) PlaybackModesStore.saveRepeat(mode);
                                 }
                                 setSheet(() {});
@@ -2647,8 +3526,10 @@ class _PlayerScreenState extends State<PlayerScreen>
                     ),
                   const Divider(color: Colors.white12, height: 1),
                   // Audio delay (manual A/V sync) — Android only; AetherEngine
-                  // exposes no audio-offset hook on iOS.
-                  if (defaultTargetPlatform == TargetPlatform.android) ...[
+                  // exposes no audio-offset hook on iOS, and the mpv fallback
+                  // has no PCM pipeline to delay, so the section is Media3-only.
+                  if (defaultTargetPlatform == TargetPlatform.android &&
+                      !_mpvReady) ...[
                     _tvListTile(
                       leading: const Icon(Icons.graphic_eq, color: Colors.white70),
                       title: const Text('Audio delay', style: TextStyle(color: Colors.white)),
@@ -2777,6 +3658,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                       _subtitleDelayMs = style.delayMs;
                       if (delayChanged &&
                           Platform.isAndroid &&
+                          !_mpvReady &&
                           (_subtitleTracks.isNotEmpty || _subtitleOn)) {
                         await _reopenAt(_position, _duration);
                       }
@@ -2784,7 +3666,11 @@ class _PlayerScreenState extends State<PlayerScreen>
                   },
                   ),
                   const Divider(color: Colors.white12, height: 1),
-                  if (defaultTargetPlatform == TargetPlatform.android) ...[
+                  // Video decoder mode is a Media3/hardware-decoder concern; the mpv
+                  // fallback always software-decodes, so the section is hidden
+                  // there to avoid a no-op control.
+                  if (defaultTargetPlatform == TargetPlatform.android &&
+                      !_mpvReady) ...[
                     _tvListTile(
                       leading: const Icon(Icons.memory, color: Colors.white70),
                       title: const Text('Video decoder', style: TextStyle(color: Colors.white)),
@@ -2868,7 +3754,11 @@ class _PlayerScreenState extends State<PlayerScreen>
                               onChangeEnd: (v) async {
                                 final b = double.parse(v.toStringAsFixed(1));
                                 setState(() => _audioBoost = b);
-                                _exo?.setAudioBoost(b);
+                                if (_mpvReady) {
+                                  await _applyMpvVolume();
+                                } else {
+                                  _exo?.setAudioBoost(b);
+                                }
                                 await PlaybackBoostStore.save(b);
                               },
                             ),
@@ -2878,7 +3768,11 @@ class _PlayerScreenState extends State<PlayerScreen>
                                 TextButton(onPressed: () async {
                                   setState(() => _audioBoost = 1.0);
                                   setSheet(() {});
-                                  _exo?.setAudioBoost(1.0);
+                                  if (_mpvReady) {
+                                    await _applyMpvVolume();
+                                  } else {
+                                    _exo?.setAudioBoost(1.0);
+                                  }
                                   await PlaybackBoostStore.save(1.0);
                                 }, child: const Text('Reset')),
                                 Text('${_audioBoost.toStringAsFixed(1)}×', style: const TextStyle(color: Colors.white70, fontSize: 12)),
@@ -2939,7 +3833,11 @@ class _PlayerScreenState extends State<PlayerScreen>
                         onChanged: (v) async {
                           setState(() => _nightMode = v);
                           setSheet(() {});
-                          _exo?.setNightMode(v);
+                          if (_mpvReady) {
+                            await _applyMpvVolume();
+                          } else {
+                            _exo?.setNightMode(v);
+                          }
                           await NightModeStore.save(v);
                         },
                       ),
@@ -2947,7 +3845,11 @@ class _PlayerScreenState extends State<PlayerScreen>
                         final v = !_nightMode;
                         setState(() => _nightMode = v);
                         setSheet(() {});
-                        _exo?.setNightMode(v);
+                        if (_mpvReady) {
+                          await _applyMpvVolume();
+                        } else {
+                          _exo?.setNightMode(v);
+                        }
                         await NightModeStore.save(v);
                       },
                     ),
@@ -3055,8 +3957,10 @@ class _PlayerScreenState extends State<PlayerScreen>
                                   subtitle: Text(_formatDuration(Duration(milliseconds: ch.startMs)), style: const TextStyle(color: Colors.white38, fontSize: 12)),
                                   onTap: () {
                                     Navigator.of(sheetContext).pop();
-                                    _exo?.seekTo(Duration(milliseconds: ch.startMs));
-                                    if (!_playing && !_completed) _exo?.play();
+                                    _seekBackend(Duration(milliseconds: ch.startMs));
+                                    if (!_playing && !_completed && !_mpvReady) {
+                                      _exo?.play();
+                                    }
                                   },
                                 );
                               }),
@@ -3082,7 +3986,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       final updated = style.copyWith(delayMs: ms);
       await updated.save();
       await _exo?.setSubtitleStyle(updated);
-      if (Platform.isAndroid && (_subtitleTracks.isNotEmpty || _subtitleOn)) {
+      if (Platform.isAndroid && !_mpvReady && (_subtitleTracks.isNotEmpty || _subtitleOn)) {
         await _reopenAt(_position, _duration);
       }
     } catch (_) {}
@@ -3090,7 +3994,11 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   void _seekBy(Duration delta) {
     if (_touchLocked) return;
-    _exo?.seekTo(_position + delta);
+    if (_mpvReady) {
+      unawaited(_mpvSeek(_position + delta));
+    } else {
+      _exo?.seekTo(_position + delta);
+    }
     _showControls();
   }
 
@@ -3111,7 +4019,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   void _onSeekEnd(double value) {
     if (_touchLocked) return;
     final target = Duration(milliseconds: value.round());
-    _exo?.seekTo(target);
+    _seekBackend(target);
     _dragging = false;
     _dragValue = value;
     _showControls();
@@ -3124,6 +4032,22 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   void _togglePlayPause() {
     if (_touchLocked) return;
+    final mpv = _mpvPlayer;
+    if (_mpvReady && mpv != null) {
+      unawaited(() async {
+        if (_completed) {
+          _completed = false;
+          await mpv.seek(Duration.zero);
+          await mpv.play();
+        } else if (_playing) {
+          await mpv.pause();
+        } else {
+          await mpv.play();
+        }
+      }());
+      _showControls();
+      return;
+    }
     final exo = _exo;
     if (exo == null) return;
     if (_completed) {
@@ -3265,6 +4189,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// For Dolby Vision the HDR chip already says "Dolby Vision", so the
   /// duplicate codec label is suppressed.
   String? get _videoCodecInfoLabel {
+    if (_mpvReady) return _mpvVideoCodecLabel;
     final label = _liveVideoCodec ?? _current.videoCodecLabel;
     if (label == null) return null;
     if (_effectiveHdr == HdrFormat.dolbyVision && label.startsWith('Dolby Vision')) {
@@ -3275,6 +4200,7 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   /// Live audio label (codec · channels) for the chip / info sheet.
   String? get _audioInfoLabel {
+    if (_mpvReady) return _mpvAudioLabel;
     if (_liveAudioCodec != null) {
       return formatLiveAudioLabel(
         liveCodec: _liveAudioCodec,
@@ -3287,7 +4213,10 @@ class _PlayerScreenState extends State<PlayerScreen>
     return _current.audioCodecLabel;
   }
 
-  String? get _resolutionInfoLabel => _liveResolution ?? _current.resolution;
+  String? get _resolutionInfoLabel {
+    if (_mpvReady) return _mpvResolution;
+    return _liveResolution ?? _current.resolution;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -3320,10 +4249,25 @@ class _PlayerScreenState extends State<PlayerScreen>
     // decoder, transcode, network speed, source type, speed, audio
     // effects, spatial — lives in the ⓘ info sheet (no clutter, no
     // chip-row overflow on phones in landscape).
-    final chips = [
-      hdrChip,
-      ?audioChip,
-    ];
+    final chips = _mpvReady
+      ? [
+          if (_mpvResolution != null)
+            FormatChip(
+              label: _mpvResolution!,
+              color: const Color(0xFF90A4AE),
+            ),
+          if (_mpvVideoCodecLabel != null)
+            FormatChip(
+              label: _mpvVideoCodecLabel!,
+              color: const Color(0xFF4FC3F7),
+            ),
+          if (audioChipLabel != null)
+            FormatChip(label: audioChipLabel, color: _audioColor),
+        ]
+      : [
+          hdrChip,
+          ?audioChip,
+        ];
 
     // IMPORTANT: keep the widget-tree shape stable across casting state.
     // The platform view must ALWAYS be mounted at the same slot — swapping
@@ -3331,36 +4275,62 @@ class _PlayerScreenState extends State<PlayerScreen>
     // recreates the native view, releases ExoPlayer mid-open and breaks
     // "resume on this device". The casting overlay is an extra sibling
     // stacked ON TOP; adding/removing it doesn't touch the player's slot.
+    // IMPORTANT: the error / placeholder content is NOT inside this layer —
+    // it is rendered as a sibling ABOVE the full-screen tap+swipe catcher
+    // (line "Positioned.fill(child: videoLayer)" below), so the fallback
+    // button actually receives taps instead of the catcher swallowing them.
     final videoLayer = Stack(
       fit: StackFit.expand,
       children: [
-        _exo != null && _error == null
-            ? ExoPlayerView(controller: _exo! as ExoPlayerController)
-            : Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [colorScheme.primaryContainer, Colors.black],
-                  ),
-                ),
-                child: Center(
-                  child: _error != null
-                      ? Padding(
-                          padding: const EdgeInsets.all(24),
-                          child: Text(
-                            _error!,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(color: Colors.white70),
-                          ),
-                        )
-                      : const Icon(
-                          Icons.movie_filter,
-                          size: 96,
-                          color: Colors.white24,
+        _mpvReady
+            ? (_mpvAspect != null
+                ? Center(
+                    child: AspectRatio(
+                      aspectRatio: _mpvAspect!,
+                      child: Transform.scale(
+                        scale: _mpvZoomScale,
+                        child: Video(
+                          controller: _mpvController!,
+                          fit: _mpvFit,
+                          controls: NoVideoControls,
                         ),
-                ),
+                      ),
+                    ),
+                  )
+                : Transform.scale(
+                    scale: _mpvZoomScale,
+                    child: Video(
+                      controller: _mpvController!,
+                      fit: _mpvFit,
+                      // `NoVideoControls` (= null) overrides the widget's default
+                      // AdaptiveVideoControls — without this the stock media_kit
+                      // controls render a SECOND bottom bar under our own.
+                      controls: NoVideoControls,
+                    ),
+                  ))
+            : _exo != null && _error == null
+                ? ExoPlayerView(controller: _exo! as ExoPlayerController)
+                : Container(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [colorScheme.primaryContainer, Colors.black],
+                      ),
+                    ),
+                  ),
+        // Fallback-engine brightness dims the Flutter video texture (the app
+        // window-brightness path lives on the native platform view). Only
+        // engaged by the left-half swipe gesture in mpv mode.
+        if (_mpvReady && _mpvBrightness < 0.999)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: ColoredBox(
+                color: Colors.black
+                    .withValues(alpha: (1.0 - _mpvBrightness).clamp(0.0, 1.0)),
               ),
+            ),
+          ),
       ],
     );
 
@@ -3505,6 +4475,40 @@ class _PlayerScreenState extends State<PlayerScreen>
                 child: const SizedBox.expand(),
               ),
             ),
+            // Error / placeholder content lives ABOVE the tap+swipe catcher
+            // (which would otherwise swallow any buttons). In mpv mode the
+            // fallback engine's own error is shown here instead.
+            if (_mpvActive
+                ? (_mpvFailed && _mpvError != null)
+                : (_exo == null || _error != null))
+              Positioned.fill(
+                child: Center(
+                  child: _mpvActive
+                      ? Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Text(
+                            _mpvError!,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(color: Colors.white70),
+                          ),
+                        )
+                      : _error != null
+                          ? Padding(
+                              padding: const EdgeInsets.all(24),
+                              child: Text(
+                                _error!,
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                    color: Colors.white70),
+                              ),
+                            )
+                          : const Icon(
+                              Icons.movie_filter,
+                              size: 96,
+                              color: Colors.white24,
+                            ),
+                ),
+              ),
             // Double-tap seek ripple (±10 s on the tapped half).
             if (_dtSeekSide != null)
               Positioned(
@@ -3645,11 +4649,11 @@ class _PlayerScreenState extends State<PlayerScreen>
                               ),
                             ),
                             _TvControlButton(
-                              onPressed: _openVideoInfoSheet,
-                              icon: const Icon(Icons.info_outline),
-                              color: Colors.white,
-                              onFocusChange: (_) => _showControls(),
-                            ),
+                                onPressed: _openVideoInfoSheet,
+                                icon: const Icon(Icons.info_outline),
+                                color: Colors.white,
+                                onFocusChange: (_) => _showControls(),
+                              ),
                             const SizedBox(width: 4),
                           ],
                         ),
@@ -3808,11 +4812,17 @@ class _PlayerScreenState extends State<PlayerScreen>
                                   _TvControlButton(
                                     onPressed: _openSubtitleSheet,
                                     icon: Icon(
-                                      _subtitleOn
+                                      (_mpvReady
+                                              ? (_mpvSubtitleOn &&
+                                                  _mpvHasSubtitleTracks)
+                                              : _subtitleOn)
                                           ? Icons.closed_caption
                                           : Icons.closed_caption_off,
                                     ),
-                                    color: _subtitleOn
+                                    color: (_mpvReady
+                                            ? (_mpvSubtitleOn &&
+                                                _mpvHasSubtitleTracks)
+                                            : _subtitleOn)
                                         ? Colors.white
                                         : Colors.white54,
                                     onFocusChange: (_) => _showControls(),
