@@ -56,20 +56,10 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
   TmdMeta? _meta;
   TmdDetails? _details;
   bool _loading = true;
-  bool _loadingError = false;
 
-  /// Underlying failure detail from the metadata lookup, shown verbatim when
-  /// the lookup throws (never blame the user's network when it's TMDB-side).
-  String? _errorMessage;
-
-  /// [_errorMessage] filtered for display: build-internal details (a missing
-  /// or invalid bundled API key) are not user-facing — the "no match" card and
-  /// the search dialog just show a friendly generic instead.
-  String? get _detailsErrorText {
-    final m = _errorMessage;
-    if (m == null) return null;
-    return m.contains('API key') ? null : m;
-  }
+  /// Latches so a failed metadata lookup pops the "can't connect" SnackBar
+  /// at most once per screen (not on every rebuild/retry).
+  bool _connectionErrorShown = false;
 
   /// Saved playhead for this video (mirrors the player's resume lookup), used
   /// to label the action button "Resume from m:ss" instead of "Play".
@@ -188,7 +178,6 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
       _meta = _service.metaFor(_identityKey);
       _details = _meta?.details;
       _loading = _meta == null;
-      _loadingError = false;
     });
     _loadResume();
     if (widget.folder != null) {
@@ -219,11 +208,21 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
         });
       } catch (e) {
         if (mounted) {
-          setState(() {
-            _loading = false;
-            _loadingError = true;
-            _errorMessage = e is TmdException ? e.message : null;
-          });
+          setState(() => _loading = false);
+          // A failed lookup surfaces as a transient popup, not inline text on
+          // the "no match" card — the card stays blank apart from the "Could
+          // not find …" headline and the Search TMDB button.
+          if (!_connectionErrorShown) {
+            _connectionErrorShown = true;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Can\'t connect to TMDB right now. Check your connection '
+                      'and try again.',
+                ),
+              ),
+            );
+          }
         }
       }
     }
@@ -437,7 +436,6 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
       _meta = null;
       _details = null;
       _loading = false;
-      _loadingError = false;
     });
   }
 
@@ -1448,18 +1446,6 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
               'Could not find "${widget.folder?.name ?? widget.video!.title}" on TMDB',
               textAlign: TextAlign.center,
               style: theme.textTheme.titleMedium,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              _loadingError
-                  ? (_detailsErrorText ??
-                      'Couldn\'t fetch metadata from TMDB. Play the video anyway '
-                          'or try again in a moment.')
-                  : 'Couldn\'t find metadata for this title. Play the video anyway.',
-              textAlign: TextAlign.center,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-              ),
             ),
             const SizedBox(height: 20),
             OutlinedButton.icon(
