@@ -63,8 +63,12 @@ class DreamRenderersFactory(context: Context) : DefaultRenderersFactory(context)
         // fail (e.g. 10-bit HEVC on devices without 10-bit MediaCodec support).
         // Added at the END so HDR/DV hardware path stays primary.
         // Constructor: (allowedJoiningTimeMs, handler, eventListener, maxDroppedFramesToNotify)
-        out.add(FfmpegVideoRenderer(allowedJoiningTimeMs, eventHandler, eventListener, 0))
-        Log.i("DreamRenderersFactory", "Loaded FfmpegVideoRenderer as fallback.")
+        try {
+            out.add(FfmpegVideoRenderer(allowedJoiningTimeMs, eventHandler, eventListener, 0))
+            Log.i("DreamRenderersFactory", "Loaded FfmpegVideoRenderer as fallback.")
+        } catch (e: Exception) {
+            Log.w("DreamRenderersFactory", "FfmpegVideoRenderer unavailable, falling back to MediaCodec only.", e)
+        }
     }
 
     override fun buildAudioRenderers(
@@ -87,7 +91,11 @@ class DreamRenderersFactory(context: Context) : DefaultRenderersFactory(context)
             eventListener,
             out,
         )
-        out.add(FfmpegAudioRenderer(eventHandler, eventListener, audioSink))
-        Log.i("DreamRenderersFactory", "Loaded FfmpegAudioRenderer.")
+        try {
+            out.add(FfmpegAudioRenderer(eventHandler, eventListener, audioSink))
+            Log.i("DreamRenderersFactory", "Loaded FfmpegAudioRenderer.")
+        } catch (e: Exception) {
+            Log.w("DreamRenderersFactory", "FfmpegAudioRenderer unavailable, falling back to MediaCodec only.", e)
+        }
     }
 }
