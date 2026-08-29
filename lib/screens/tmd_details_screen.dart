@@ -62,6 +62,15 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
   /// the lookup throws (never blame the user's network when it's TMDB-side).
   String? _errorMessage;
 
+  /// [_errorMessage] filtered for display: build-internal details (a missing
+  /// or invalid bundled API key) are not user-facing — the "no match" card and
+  /// the search dialog just show a friendly generic instead.
+  String? get _detailsErrorText {
+    final m = _errorMessage;
+    if (m == null) return null;
+    return m.contains('API key') ? null : m;
+  }
+
   /// Saved playhead for this video (mirrors the player's resume lookup), used
   /// to label the action button "Resume from m:ss" instead of "Play".
   Duration? _resumePosition;
@@ -1443,11 +1452,10 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
             const SizedBox(height: 8),
             Text(
               _loadingError
-                  ? (_errorMessage ??
+                  ? (_detailsErrorText ??
                       'Couldn\'t fetch metadata from TMDB. Play the video anyway '
                           'or try again in a moment.')
-                  : 'No TMDB API key is bundled in this build, so metadata is '
-                      'unavailable. Play the video anyway.',
+                  : 'Couldn\'t find metadata for this title. Play the video anyway.',
               textAlign: TextAlign.center,
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: colorScheme.onSurfaceVariant,
@@ -2078,16 +2086,16 @@ class _SearchDialogState extends State<_SearchDialog> {
               Padding(
                 padding: const EdgeInsets.all(16),
                 child: Text(
-                  'TMDB search is unavailable in this build (no API key bundled).',
+                  'Search is unavailable right now. Try again in a moment.',
                   textAlign: TextAlign.center,
-                  style: TextStyle(color: colorScheme.error),
+                  style: TextStyle(color: colorScheme.onSurfaceVariant),
                 ),
               )
             else if (_error != null)
               Padding(
                 padding: const EdgeInsets.all(16),
                 child: Text(
-                  _error!,
+                  'Search failed. Try again in a moment.',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: colorScheme.error),
                 ),
