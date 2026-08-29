@@ -622,10 +622,17 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
                           const SizedBox(width: 12),
                           Expanded(
                             flex: 2,
-                            child: OutlinedButton.icon(
+                            // A tonal sibling of the filled Resume button:
+                            // same height + stadium shape, but rendered in the
+                            // theme's secondaryContainer (a muted seed-tinted
+                            // fill) so it reads as the secondary action while
+                            // staying inside the app's color system — a plain
+                            // OutlinedButton looked foreign next to the
+                            // filled primary.
+                            child: FilledButton.tonalIcon(
                               onPressed: () =>
                                   _play(fromBeginning: true),
-                              style: OutlinedButton.styleFrom(
+                              style: FilledButton.styleFrom(
                                 minimumSize: const Size.fromHeight(52),
                               ),
                               icon: const Icon(Icons.replay),
