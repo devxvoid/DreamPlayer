@@ -400,56 +400,64 @@ class ExoPlayerView(
             .build()
     }
 
-    private val player: ExoPlayer = ExoPlayer.Builder(activity)
-        .setMediaSourceFactory(mediaSourceFactory)
-        .setRenderersFactory(
-            DreamRenderersFactory(activity)
-                .apply {
-                    setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
-                    setEnableDecoderFallback(true)
-                    setAllowedVideoJoiningTimeMs(0L)
-                    setMediaCodecSelector(mediaCodecSelector)
-                }
-        )
-        .setLoadControl(loadControl)
-        .build()
-        .also { p ->
-            p.repeatMode = Player.REPEAT_MODE_OFF
-            p.volume = 1f
-            // Background-playback hygiene: proper audio-focus handling (pause
-            // for phone calls / other apps' audio), pause when headphones are
-            // unplugged, and CPU/Wi-Fi wake locks while playing in background
-            // (network streams keep buffering with the screen off).
-            p.setAudioAttributes(
-                androidx.media3.common.AudioAttributes.Builder()
-                    .setUsage(C.USAGE_MEDIA)
-                    .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
-                    .build(),
-                /* handleAudioFocus = */ true,
+    /// Tracks the decoder mode the current player was created with so
+    /// [open] can recreate it when the user switches modes.
+    private var lastDecoderMode: String = PlayerCodecs.decoderMode(activity)
+
+    private var player: ExoPlayer = createPlayer()
+    private fun createPlayer(): ExoPlayer {
+        lastDecoderMode = PlayerCodecs.decoderMode(activity)
+        return ExoPlayer.Builder(activity)
+            .setMediaSourceFactory(mediaSourceFactory)
+            .setRenderersFactory(
+                DreamRenderersFactory(activity)
+                    .apply {
+                        setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+                        setEnableDecoderFallback(true)
+                        setAllowedVideoJoiningTimeMs(0L)
+                        setMediaCodecSelector(mediaCodecSelector)
+                    }
             )
-            p.setHandleAudioBecomingNoisy(true)
-            p.setWakeMode(C.WAKE_MODE_NETWORK)
-            // No language preference: Media3's empty preferredAudioLanguages
-            // already selects the container's DEFAULT-flagged audio track
-            // (first track as last resort) — exactly the file's own default.
-            p.addAnalyticsListener(object : AnalyticsListener {
-                override fun onVideoDecoderInitialized(
-                    eventTime: AnalyticsListener.EventTime,
-                    decoderName: String,
-                    initializedTimestampMs: Long,
-                    initializationDurationMs: Long,
-                ) {
-                    currentVideoDecoderName = decoderName
-                    handler.post { emit() }
-                }
-                override fun onVideoDecoderReleased(
-                    eventTime: AnalyticsListener.EventTime,
-                    decoderName: String,
-                ) {
-                    // Keep last name until next init so the badge doesn't flicker.
-                }
-            })
-        }
+            .setLoadControl(loadControl)
+            .build()
+            .also { p ->
+                p.repeatMode = Player.REPEAT_MODE_OFF
+                p.volume = 1f
+                // Background-playback hygiene: proper audio-focus handling (pause
+                // for phone calls / other apps' audio), pause when headphones are
+                // unplugged, and CPU/Wi-Fi wake locks while playing in background
+                // (network streams keep buffering with the screen off).
+                p.setAudioAttributes(
+                    androidx.media3.common.AudioAttributes.Builder()
+                        .setUsage(C.USAGE_MEDIA)
+                        .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                        .build(),
+                    /* handleAudioFocus = */ true,
+                )
+                p.setHandleAudioBecomingNoisy(true)
+                p.setWakeMode(C.WAKE_MODE_NETWORK)
+                // No language preference: Media3's empty preferredAudioLanguages
+                // already selects the container's DEFAULT-flagged audio track
+                // (first track as last resort) — exactly the file's own default.
+                p.addAnalyticsListener(object : AnalyticsListener {
+                    override fun onVideoDecoderInitialized(
+                        eventTime: AnalyticsListener.EventTime,
+                        decoderName: String,
+                        initializedTimestampMs: Long,
+                        initializationDurationMs: Long,
+                    ) {
+                        currentVideoDecoderName = decoderName
+                        handler.post { emit() }
+                    }
+                    override fun onVideoDecoderReleased(
+                        eventTime: AnalyticsListener.EventTime,
+                        decoderName: String,
+                    ) {
+                        // Keep last name until next init so the badge doesn't flicker.
+                    }
+                })
+            }
+    }
 
     private val handler = Handler(Looper.getMainLooper())
     private var positionTicker: Runnable? = null
@@ -1017,6 +1025,17 @@ class ExoPlayerView(
             when (call.method) {
                 "open" -> {
                     registerSpatialListenerOnce()
+                    // Recreate the player when the decoder mode changed so
+                    // renderers are rebuilt with the new MediaCodecSelector
+                    // (the lambda reads prefs live on every query).
+                    val currentMode = PlayerCodecs.decoderMode(activity)
+                    if (currentMode != lastDecoderMode) {
+                        player.removeListener(listener)
+                        player.release()
+                        player = createPlayer()
+                        player.addListener(listener)
+                        playerView.player = player
+                    }
                     val path = call.argument<String>("path")
                     val uri = call.argument<String>("uri")
                     val subtitleUri = call.argument<String>("subtitleUri")

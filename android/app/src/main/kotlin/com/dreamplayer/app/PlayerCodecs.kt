@@ -96,10 +96,7 @@ object PlayerCodecs {
             val isVideo = mimeType?.startsWith("video/") == true
             fun filterByMode(list: List<androidx.media3.exoplayer.mediacodec.MediaCodecInfo>): List<androidx.media3.exoplayer.mediacodec.MediaCodecInfo> = when (modeLive) {
                 "hw" -> list.filterNot { isSoftwareVideoDecoder(it.name) }
-                "sw" -> {
-                    val sw = list.filter { isSoftwareVideoDecoder(it.name) }
-                    if (sw.isNotEmpty()) sw + list.filterNot { isSoftwareVideoDecoder(it.name) } else list
-                }
+                "sw" -> list.filter { isSoftwareVideoDecoder(it.name) }
                 else -> list
             }
             when {
