@@ -1688,9 +1688,17 @@ class _PlayerScreenState extends State<PlayerScreen>
                   () {
                     final d = downloaded[i];
                     final isSelected = _current.subtitleUri == d.path;
+                    // Show the *real* subtitle name. Old downloads may hold a
+                    // meaningless OpenSubtitles upload id (`1324.srt`) — derive
+                    // a human name for those, keep real names as-is.
+                    final displayName = meaningfulSubtitleFileName(
+                      apiFileName: d.fileName,
+                      language: d.language,
+                      videoTitle: _current.title,
+                    );
                     return _tvListTile(
                       leading: Icon(isSelected ? Icons.radio_button_checked : Icons.file_download_done, color: isSelected ? Colors.white : Colors.white70),
-                      title: Text('${d.fileName} · ${d.language.toUpperCase()}', style: const TextStyle(color: Colors.white)),
+                      title: Text('${subtitleFileNameLabel(displayName)} · ${d.language.toUpperCase()}', style: const TextStyle(color: Colors.white)),
                       onTap: () => Navigator.of(sheetContext).pop(downloadedBase - i),
                     );
                   }(),
@@ -1946,8 +1954,13 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (!mounted || _subtitleTracks.isNotEmpty) return;
       final info = await OpensubtitlesClient.instance.requestDownload(best.fileId);
       final bytes = await OpensubtitlesClient.instance.fetchBytes(info.link);
-      final tmp = await _writeTempForAuto(info.fileName, bytes);
-      final entry = await DownloadedSubtitlesStore.saveForVideo(resumeKey: resumeKey, tempPath: tmp, fileName: info.fileName, language: best.language);
+      final fileName = meaningfulSubtitleFileName(
+        apiFileName: info.fileName,
+        language: best.language,
+        videoTitle: _current.title,
+      );
+      final tmp = await _writeTempForAuto(fileName, bytes);
+      final entry = await DownloadedSubtitlesStore.saveForVideo(resumeKey: resumeKey, tempPath: tmp, fileName: fileName, language: best.language);
       if (!mounted) return;
       final pos = _position;
       _current = VideoItem(

@@ -1205,11 +1205,21 @@ class ExoPlayerView(
                                 } else {
                                     rawUri
                                 }
+                                val explicitName = subtitleUri.substringAfterLast('/')
+                                // Real file name when the source exposes one
+                                // (downloaded subs, "Load subtitle file…");
+                                // fall back to a neutral label for provider
+                                // URIs (content://) with no readable name.
+                                val explicitLabel = if (explicitName.contains('.')) {
+                                    SubtitleFormats.labelFromFileName(subtitleUri)
+                                } else {
+                                    "Subtitle"
+                                }
                                 listOf(
                                     MediaItem.SubtitleConfiguration.Builder(finalUri)
                                         .setMimeType(mimeType)
                                         .setRoleFlags(C.ROLE_FLAG_SUBTITLE)
-                                        .setLabel("Subtitle")
+                                        .setLabel(explicitLabel)
                                         .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
                                         .build(),
                                 )

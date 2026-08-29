@@ -710,27 +710,7 @@ class JellyfinClient {
     final m = _dlnaStreamUrl.firstMatch(url);
     if (m == null) return null;
     final itemId = m.group(2)!;
-    // Match against saved servers by scheme+host+port (never by raw string —
-    // trailing slashes / default ports must not break the match).
-    String originOf(String raw) {
-      final u = Uri.parse(raw);
-      final hasPort = u.hasPort;
-      final port = hasPort
-          ? u.port
-          : (u.scheme == 'https' ? 443 : 80);
-      return '${u.scheme}://${u.host}:$port';
-    }
-
-    final origin = originOf(m.group(1)!);
-    JellyfinServer? server;
-    for (final s in await loadServers()) {
-      try {
-        if (originOf(s.url) == origin) {
-          server = s;
-          break;
-        }
-      } catch (_) {}
-    }
+    final server = await _serverByOrigin(url);
     if (server == null) {
       return null;
     }
@@ -751,6 +731,91 @@ class JellyfinClient {
         resolution: video.resolution,
         sizeBytes: sizeBytes ?? video.sizeBytes,
         allowSelfSigned: video.allowSelfSigned,
+        jellyfinServerId: video.jellyfinServerId,
+        jellyfinItemId: video.jellyfinItemId,
+        externalSubtitles: video.externalSubtitles,
+        chapters: video.chapters,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Matches a URL against saved Jellyfin servers by scheme+host+port (never
+  /// by raw string — trailing slashes / default ports must not break the
+  /// match). Returns null when nothing matches.
+  Future<JellyfinServer?> _serverByOrigin(String url) async {
+    String originOf(String raw) {
+      final u = Uri.tryParse(raw);
+      if (u == null) return '';
+      final port = u.hasPort ? u.port : (u.scheme == 'https' ? 443 : 80);
+      return '${u.scheme}://${u.host}:$port';
+    }
+
+    final origin = originOf(url);
+    if (origin.isEmpty) return null;
+    for (final s in await loadServers()) {
+      try {
+        if (originOf(s.url) == origin) return s;
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  /// A Jellyfin direct-play stream URL handed to "Open in external player":
+  /// `/Videos/{itemId}/stream?...` or
+  /// `/Videos/{itemId}/{sourceId}/stream?...`. Returns the item id or null
+  /// when [url] doesn't match this shape.
+  static String? itemIdFromStreamUrl(String url) {
+    if (url.isEmpty) return null;
+    try {
+      final m = _videosStreamUrl.firstMatch(url);
+      return m?.group(1);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static final RegExp _videosStreamUrl = RegExp(
+    r'^https?://[^/]+/Videos/([^/]+)(?:/[^/]+)?/stream',
+  );
+
+  /// Enriches a Jellyfin direct-play URL — the kind Jellyfin hands to
+  /// "Open in external player" — with the item's metadata **and external
+  /// subtitles** when the host matches a saved Jellyfin server.
+  ///
+  /// Without this, a video opened from the Jellyfin app via "Open with" /
+  /// external player comes in as a bare stream URL with no sidecar subtitle
+  /// tracks. Matching the URL back to a saved server + item id lets the app
+  /// attach [VideoItem.externalSubtitles] (DeliveryUrls with api_key) the
+  /// same way in-app Jellyfin playback does.
+  ///
+  /// Best-effort: any failure (no saved server, unknown item, network error)
+  /// returns null so the caller plays the raw URL — never blocks playback.
+  Future<VideoItem?> enrichJellyfinStreamVideoItem({
+    required String url,
+    required String title,
+  }) async {
+    if (url.isEmpty) return null;
+    final itemId = itemIdFromStreamUrl(url);
+    if (itemId == null) return null;
+    final server = await _serverByOrigin(url);
+    if (server == null) return null;
+    try {
+      final item = await getItem(server, itemId);
+      if (item == null || !item.isPlayable) return null;
+      final video = videoItem(server, item);
+      return VideoItem(
+        id: video.id,
+        title: title.isNotEmpty ? title : video.title,
+        // Play exactly what Jellyfin handed us — the URL carries a valid
+        // token and is what the user actually opened.
+        uri: url,
+        resumeKey: video.resumeKey,
+        duration: video.duration,
+        resolution: video.resolution,
+        sizeBytes: video.sizeBytes,
+        allowSelfSigned: server.allowSelfSigned,
         jellyfinServerId: video.jellyfinServerId,
         jellyfinItemId: video.jellyfinItemId,
         externalSubtitles: video.externalSubtitles,

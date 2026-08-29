@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 import 'screens/home_screen.dart';
 import 'screens/player_screen.dart';
 import 'screens/settings_screen.dart';
+import 'models/video_item.dart';
+import 'services/jellyfin_client.dart';
 import 'services/open_intent.dart';
 import 'theme/app_theme.dart';
 
@@ -31,17 +33,40 @@ class _DreamPlayerAppState extends State<DreamPlayerApp> {
 
   Future<void> _listenForIntents() async {
     final service = OpenIntentService.instance;
-    service.intents.listen((intent) {
+    service.intents.listen((intent) async {
       final navigator = appNavigatorKey.currentState;
       if (navigator == null) return;
+      final base = intent.toVideoItem();
+      // Jellyfin "Open in external player": the raw stream URL carries no
+      // external subtitle tracks, so re-match it to a saved server + item and
+      // attach the sidecars the same way in-app playback does. Best-effort —
+      // falls back to the raw URL on any failure.
+      final video = await _enrichIntentVideo(base);
+      if (!mounted) return;
       navigator.push(
         MaterialPageRoute<void>(
-          builder: (_) => PlayerScreen(video: intent.toVideoItem()),
+          builder: (_) => PlayerScreen(video: video ?? base),
         ),
       );
     });
     // Fetches the intent that launched the app (if any).
     await service.init();
+  }
+
+  /// Enriches an "Open with" intent's bare [VideoItem] with Jellyfin external
+  /// subtitles when its URI is a saved server's direct-play stream URL.
+  /// Returns null (raw [video] plays untouched) when it isn't or on any error.
+  Future<VideoItem?> _enrichIntentVideo(VideoItem video) async {
+    final uri = video.uri;
+    if (uri == null || !uri.startsWith('http')) return null;
+    try {
+      return await JellyfinClient().enrichJellyfinStreamVideoItem(
+        url: uri,
+        title: video.title,
+      );
+    } catch (_) {
+      return null;
+    }
   }
 
   @override

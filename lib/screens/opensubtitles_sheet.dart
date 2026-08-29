@@ -119,17 +119,24 @@ class _OpensubtitlesSheetState extends State<OpensubtitlesSheet> {
   }
 
   Future<String?> _downloadToPersistent(OpensubtitlesResult r, {required String fileName, required List<int> bytes}) async {
+    // OpenSubtitles often returns a meaningless upload id (`1324.srt`) as the
+    // file name — surface the real name derived from the video title + lang.
+    final derived = meaningfulSubtitleFileName(
+      apiFileName: fileName,
+      language: r.language,
+      videoTitle: widget.initialQuery,
+    );
     final rk = widget.resumeKey;
     if (rk != null && rk.isNotEmpty) {
       final entry = await DownloadedSubtitlesStore.saveForVideo(
         resumeKey: rk,
-        tempPath: await _writeTemp(fileName, bytes),
-        fileName: fileName,
+        tempPath: await _writeTemp(derived, bytes),
+        fileName: derived,
         language: r.language,
       );
       return entry.path;
     }
-    return _writeTemp(fileName, bytes);
+    return _writeTemp(derived, bytes);
   }
 
   Future<String> _writeTemp(String fileName, List<int> bytes) async {

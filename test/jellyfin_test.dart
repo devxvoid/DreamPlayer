@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:dream_player/models/video_item.dart';
 import 'package:dream_player/services/jellyfin_client.dart';
+import 'package:dream_player/services/opensubtitles_client.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -487,6 +488,145 @@ void main() {
       expect(first, isNotEmpty);
       final second = await JellyfinClient().deviceId;
       expect(second, first);
+    });
+  });
+
+  group('JellyfinClient.itemIdFromStreamUrl (Open in external player)', () {
+    test('modern /Videos/{id}/stream shape', () {
+      expect(
+        JellyfinClient.itemIdFromStreamUrl(
+          'http://192.168.1.16:8096/Videos/0123456789abcdef0123456789abcdef/'
+          'stream?static=true&mediaSourceId=ab&api_key=xyz',
+        ),
+        '0123456789abcdef0123456789abcdef',
+      );
+    });
+
+    test('/Videos/{id}/{sourceId}/stream shape', () {
+      expect(
+        JellyfinClient.itemIdFromStreamUrl(
+          'https://nas:8920/Videos/uuid1/uuid2/stream?static=true&api_key=t',
+        ),
+        'uuid1',
+      );
+    });
+
+    test('short ids (some Jellyfin installs) also match', () {
+      expect(
+        JellyfinClient.itemIdFromStreamUrl(
+          'http://10.0.0.5:8096/Videos/xyz123/stream?static=true',
+        ),
+        'xyz123',
+      );
+    });
+
+    test('non-video paths / audio return null', () {
+      expect(
+        JellyfinClient.itemIdFromStreamUrl('http://h:8096/Audio/abc/stream'),
+        isNull,
+      );
+      expect(
+        JellyfinClient.itemIdFromStreamUrl('http://h:8096/Items/abc'),
+        isNull,
+      );
+      expect(JellyfinClient.itemIdFromStreamUrl(''), isNull);
+    });
+
+    test('cx / webdav URLs return null', () {
+      expect(
+        JellyfinClient.itemIdFromStreamUrl('http://127.0.0.1:8888/SMB/x/y.mkv'),
+        isNull,
+      );
+      expect(
+        JellyfinClient.itemIdFromStreamUrl('http://u:p@h:80/dav/the.video.mkv'),
+        isNull,
+      );
+    });
+  });
+
+  group('meaningfulSubtitleFileName (real subtitle names)', () {
+    test('real names pass through untouched', () {
+      expect(
+        meaningfulSubtitleFileName(
+          apiFileName: 'Avatar.2009.eng.srt',
+          language: 'en',
+          videoTitle: 'Avatar',
+        ),
+        'Avatar.2009.eng.srt',
+      );
+    });
+
+    test('numeric upload id is replaced by the video title + language', () {
+      final n = meaningfulSubtitleFileName(
+        apiFileName: '1324.srt',
+        language: 'en',
+        videoTitle: 'Avatar',
+      );
+      expect(n, 'Avatar.en.srt');
+      expect(n.contains('1324'), isFalse);
+    });
+
+    test('generic boilerplate names are replaced too', () {
+      expect(
+        meaningfulSubtitleFileName(
+          apiFileName: 'subtitle.srt',
+          language: 'pob',
+          videoTitle: 'House S02 E04',
+        ),
+        'House_S02_E04.pob.srt',
+      );
+    });
+
+    test('empty api name falls back to title + srt', () {
+      expect(
+        meaningfulSubtitleFileName(
+          apiFileName: '',
+          language: 'en',
+          videoTitle: 'Dune Part Two',
+        ),
+        'Dune_Part_Two.en.srt',
+      );
+    });
+
+    test('non-srt subtitle extensions are preserved', () {
+      expect(
+        meaningfulSubtitleFileName(
+          apiFileName: '42.ass',
+          language: 'eng',
+          videoTitle: 'Oldboy',
+        ),
+        'Oldboy.eng.ass',
+      );
+    });
+
+    test('unknown extensions degrade to srt', () {
+      expect(
+        meaningfulSubtitleFileName(
+          apiFileName: '7.bin',
+          language: 'en',
+          videoTitle: 'Her (2013)',
+        ),
+        'Her_2013.en.srt',
+      );
+    });
+
+    test('video title language tag is not duplicated', () {
+      expect(
+        meaningfulSubtitleFileName(
+          apiFileName: '99.srt',
+          language: 'en',
+          videoTitle: 'Avatar.en',
+        ),
+        'Avatar.en.srt',
+      );
+    });
+  });
+
+  group('subtitleFileNameLabel', () {
+    test('strips the last extension only', () {
+      expect(subtitleFileNameLabel('Star_Wars.eng.srt'), 'Star_Wars.eng');
+      expect(subtitleFileNameLabel('Movie.ass'), 'Movie');
+      expect(subtitleFileNameLabel('noext'), 'noext');
     });
   });
 }

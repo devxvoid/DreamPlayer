@@ -347,6 +347,71 @@ class DownloadInfo {
   final String? resetTime;
 }
 
+/// File name stems that OpenSubtitles returns for files the uploader didn't
+/// name meaningfully — numeric upload ids (`1324.srt`) or boilerplate. These
+/// would otherwise surface in the CC sheet as "1324" or "Subtitle".
+const Set<String> _meaninglessSubtitleStems = {
+  'subtitle',
+  'subtitles',
+  'sub',
+  'download',
+  'downloads',
+  'unknown',
+  'undefined',
+  'mysubtitles',
+};
+
+/// True when an OpenSubtitles `file_name` stem is a meaningless upload id
+/// (numeric/symbolic only) or generic boilerplate rather than a real name.
+bool _isMeaninglessSubtitleName(String stem) {
+  final s = stem.trim().toLowerCase();
+  if (s.isEmpty) return true;
+  if (_meaninglessSubtitleStems.contains(s)) return true;
+  return !RegExp(r'[a-zA-Z]').hasMatch(s);
+}
+
+/// Derives a human-friendly file name for a downloaded subtitle when the
+/// OpenSubtitles API's `file_name` is a meaningless upload id (e.g. `1324.srt`)
+/// or generic boilerplate — the "Random 4-digit number.srt" users see in the
+/// subtitle picker. Real, informative names pass through untouched.
+///
+/// The derived name is built from the [videoTitle] (cleaned to file-safe
+/// characters) plus the [language] tag and the original extension. Pass the
+/// result to [DownloadedSubtitlesStore.saveForVideo] so both the persisted
+/// file name and every downstream label (CC sheet, native track label) read
+/// as the *exact* subtitle name instead of a random id.
+String meaningfulSubtitleFileName({
+  required String apiFileName,
+  required String language,
+  required String videoTitle,
+}) {
+  final dot = apiFileName.lastIndexOf('.');
+  final ext = (dot >= 0 ? apiFileName.substring(dot + 1) : 'srt').toLowerCase();
+  final stem = dot >= 0 ? apiFileName.substring(0, dot) : apiFileName;
+  if (!_isMeaninglessSubtitleName(stem)) return apiFileName;
+
+  var base = videoTitle.trim();
+  if (base.isEmpty) base = 'Subtitle';
+  base = base.replaceAll(RegExp(r'[^\w. -]'), ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+  final underscored = base.replaceAll(' ', '_');
+  const validExt = {'srt', 'ass', 'ssa', 'vtt', 'ttml', 'dfxp', 'sami', 'smi', 'sub', 'sbv'};
+  final fixedExt = validExt.contains(ext) ? ext : 'srt';
+  final lang = language.trim().toLowerCase();
+  if (lang.isNotEmpty && !underscored.toLowerCase().endsWith('.$lang')) {
+    return '$underscored.$lang.$fixedExt';
+  }
+  return '$underscored.$fixedExt';
+}
+
+/// Strips a file name down to its display label (base without the last
+/// extension): `Star_Wars.eng.srt` → `Star_Wars.eng`. Used by the CC sheet's
+/// Downloaded section so the label matches the native track name.
+String subtitleFileNameLabel(String fileName) {
+  final dot = fileName.lastIndexOf('.');
+  if (dot <= 0) return fileName;
+  return fileName.substring(0, dot);
+}
+
 /// OpenSubtitles file hash (64-bit, first+last 64KiB). Matches the API's
 /// `moviehash` param for exact-file matches.
 Future<String?> opensubtitlesHashForFile(String path) async {
