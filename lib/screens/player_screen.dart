@@ -452,8 +452,16 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (_inTests) return resolved;
     // Nova-parity: copy any remotely-streamed sidecar (SMB/FTP/HTTP external
     // subs) to a local cache file so the engine reads it locally rather than
-    // re-streaming the remote URL (AVP issue #1605).
-    return SidecarSubtitleService.instance.ensureLocal(video, resolved);
+    // re-streaming the remote URL (AVP issue #1605). Best-effort: a failing
+    // download (e.g. a Jellyfin server that's slow to answer a subtitle GET)
+    // must NEVER abort playback — keep the remote URIs and play on.
+    try {
+      return await SidecarSubtitleService.instance.ensureLocal(video, resolved);
+    } catch (e) {
+      // ignore: avoid_print
+      print('[player] subtitle localize failed, keeping remote tracks: $e');
+      return resolved;
+    }
   }
 
   /// If the user picked a non-software decoder and the hardware path just

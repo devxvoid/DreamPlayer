@@ -2,6 +2,7 @@ import 'dart:io' show Platform;
 
 import 'package:dream_player/models/video_item.dart';
 import 'package:dream_player/services/sidecar_subtitle_service.dart';
+import 'package:flutter/services.dart' show MethodChannel, PlatformException;
 import 'package:flutter_test/flutter_test.dart';
 
 VideoExternalSub _sub(String uri, {bool isDefault = false, String label = 't'}) =>
@@ -12,6 +13,8 @@ VideoExternalSub _sub(String uri, {bool isDefault = false, String label = 't'}) 
 /// filename pairing rules in isolation, so the same code path stays safe
 /// on a CI box that has no NAS.
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('SidecarSubtitleService.find', () {
     test('returns empty for empty uri', () async {
       final video = VideoItem(
@@ -258,6 +261,49 @@ void main() {
           await SidecarSubtitleService.instance.ensureLocal(video, [smb]);
       expect(out.single.uri, 'smb://server/share/Show.eng.srt');
       expect(out.single.isDefault, isTrue);
+    });
+
+    test('Jellyfin subtitle GET timeout keeps the remote track (the '
+        "'webdav, timed out connecting to the server' regression)", () async {
+      // Regression: a Jellyfin video with external subs localizes each
+      // subtitle via the WebDAV fetchUrl channel. When the Jellyfin server is
+      // slow/unreachable the native side used to report a
+      // PlatformException('webdav', 'Timed out connecting to the server.'),
+      // which propagated out of ensureLocal and aborted the whole video open.
+      // It must stay best-effort: keep the remote URI and let playback
+      // proceed (the engine streams the subtitle itself if needed).
+      const channel = MethodChannel('dreamplayer/webdav');
+      final calls = <String>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+        calls.add(call.method);
+        throw PlatformException(
+          code: 'webdav',
+          message: 'Timed out connecting to the server.',
+        );
+      });
+      addTearDown(() => TestDefaultBinaryMessengerBinding.instance
+          .defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null));
+
+      final video = VideoItem(
+        id: 'j1',
+        title: 'Show',
+        duration: Duration.zero,
+        uri: 'http://192.168.1.16:8096/Videos/abc/stream?static=true&api_key=k',
+        httpHeaders: const {'X-Emby-Token': 'abc'},
+      );
+      const sub = VideoExternalSub(
+        uri: 'http://192.168.1.16:8096/Videos/abc/Subtitles/0/0/Stream.srt'
+            '?static=true&api_key=k',
+        label: 'Show.S01E01.eng.srt',
+        language: 'eng',
+      );
+      final out = await SidecarSubtitleService.instance
+          .ensureLocal(video, const [sub]);
+      expect(calls, ['fetchUrl']);
+      expect(out.single.uri, sub.uri); // remote URI kept → playback not aborted
+      expect(out.single.label, 'Show.S01E01.eng.srt');
     });
   });
 }

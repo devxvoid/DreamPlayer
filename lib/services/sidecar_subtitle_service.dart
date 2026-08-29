@@ -125,13 +125,20 @@ class SidecarSubtitleService {
         // Jellyfin DeliveryUrls already carry `api_key`; UPnP res URLs are
         // plain HTTP. Reuse the WebDAV native fetch (no server id → explicit
         // headers/trust) or the Dart HttpClient on non-Android.
-        final bytes = await _fetch(
-          url: uri,
-          headers: video.httpHeaders,
-          allowSelfSigned: video.allowSelfSigned,
-        );
-        if (bytes != null && bytes.isNotEmpty) {
-          local = await _writeToCache(_filenameOf(uri), bytes);
+        try {
+          final bytes = await _fetch(
+            url: uri,
+            headers: video.httpHeaders,
+            allowSelfSigned: video.allowSelfSigned,
+          );
+          if (bytes != null && bytes.isNotEmpty) {
+            local = await _writeToCache(_filenameOf(uri), bytes);
+          }
+        } catch (e) {
+          // ignore: avoid_print
+          print('[SidecarDBG] ensureLocal http fetch failed ($uri): $e');
+          // Subtitle download is best-effort: keep the remote URI and let the
+          // engine stream it, rather than failing the whole video open.
         }
       }
       out.add(local == null

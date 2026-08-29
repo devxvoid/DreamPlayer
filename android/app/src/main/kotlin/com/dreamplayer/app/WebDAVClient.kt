@@ -423,46 +423,57 @@ class WebDAVClient(private val context: Context) {
         headers: Map<String, String>,
         selfSigned: Boolean,
     ): ByteArray? {
-        val builder = Request.Builder()
-            .url(url)
-            .get()
-            .apply {
-                headers.forEach { (k, v) -> header(k, v) }
-            }
-        val target = if (selfSigned) permissiveClient else client
-        target.newCall(builder.build())
-            .execute()
-            .use { response ->
-                val code = response.code
-                if (code != 200) {
-                    Log.d(TAG, "fetchUrl $url -> $code")
-                    return null
+        // Best-effort by contract (it probes/downloads sidecar subtitles, never
+        // plays or tests a user-visible connection): any network failure —
+        // timeout, refused, unknown host, TLS — returns null so the caller
+        // falls back to "no subtitle data" instead of aborting playback with a
+        // PlatformException("webdav", ...). A dead/slow server must never take
+        // a Jellyfin video down with it.
+        return try {
+            val builder = Request.Builder()
+                .url(url)
+                .get()
+                .apply {
+                    headers.forEach { (k, v) -> header(k, v) }
                 }
-                val body = response.body
-                    ?: return null
-                val bytes = try {
-                    body.byteStream().use { input ->
-                        val out = java.io.ByteArrayOutputStream()
-                        val buf = ByteArray(16 * 1024)
-                        var total = 0
-                        while (true) {
-                            val n = input.read(buf)
-                            if (n < 0) break
-                            total += n
-                            if (total > MAX_SUB_BYTES) {
-                                Log.w(TAG, "fetchUrl too large $total bytes")
-                                return null
-                            }
-                            out.write(buf, 0, n)
-                        }
-                        out.toByteArray()
+            val target = if (selfSigned) permissiveClient else client
+            target.newCall(builder.build())
+                .execute()
+                .use { response ->
+                    val code = response.code
+                    if (code != 200) {
+                        Log.d(TAG, "fetchUrl $url -> $code")
+                        return null
                     }
-                } catch (e: Exception) {
-                    Log.w(TAG, "fetchUrl read failed $e")
-                    return null
+                    val body = response.body
+                        ?: return null
+                    val bytes = try {
+                        body.byteStream().use { input ->
+                            val out = java.io.ByteArrayOutputStream()
+                            val buf = ByteArray(16 * 1024)
+                            var total = 0
+                            while (true) {
+                                val n = input.read(buf)
+                                if (n < 0) break
+                                total += n
+                                if (total > MAX_SUB_BYTES) {
+                                    Log.w(TAG, "fetchUrl too large $total bytes")
+                                    return null
+                                }
+                                out.write(buf, 0, n)
+                            }
+                            out.toByteArray()
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "fetchUrl read failed $e")
+                        return null
+                    }
+                    bytes
                 }
-                return bytes
-            }
+        } catch (e: Exception) {
+            Log.w(TAG, "fetchUrl network failed $e")
+            null
+        }
     }
 
     private fun newCall(
