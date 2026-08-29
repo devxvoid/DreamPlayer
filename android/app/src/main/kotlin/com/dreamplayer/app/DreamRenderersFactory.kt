@@ -10,6 +10,8 @@ import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.FfmpegAudioRenderer
+import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.FfmpegVideoRenderer
+import androidx.media3.exoplayer.video.VideoRendererEventListener
 import java.util.ArrayList
 
 class DreamRenderersFactory(context: Context) : DefaultRenderersFactory(context) {
@@ -35,6 +37,35 @@ class DreamRenderersFactory(context: Context) : DefaultRenderersFactory(context)
             .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
             .setAudioProcessors(arrayOf(audioDelayProcessor))
             .build()
+
+    override fun buildVideoRenderers(
+        context: Context,
+        extensionRendererMode: Int,
+        codecSelector: MediaCodecSelector,
+        enableDecoderFallback: Boolean,
+        eventHandler: Handler,
+        eventListener: VideoRendererEventListener,
+        allowedJoiningTimeMs: Long,
+        out: ArrayList<Renderer>,
+    ) {
+        super.buildVideoRenderers(
+            context,
+            extensionRendererMode,
+            codecSelector,
+            enableDecoderFallback,
+            eventHandler,
+            eventListener,
+            allowedJoiningTimeMs,
+            out,
+        )
+        // Add FfmpegVideoRenderer as ultimate fallback (after all MediaCodec
+        // renderers). Used when hardware + software MediaCodec decoders both
+        // fail (e.g. 10-bit HEVC on devices without 10-bit MediaCodec support).
+        // Added at the END so HDR/DV hardware path stays primary.
+        // Constructor: (allowedJoiningTimeMs, handler, eventListener, maxDroppedFramesToNotify)
+        out.add(FfmpegVideoRenderer(allowedJoiningTimeMs, eventHandler, eventListener, 0))
+        Log.i("DreamRenderersFactory", "Loaded FfmpegVideoRenderer as fallback.")
+    }
 
     override fun buildAudioRenderers(
         context: Context,
