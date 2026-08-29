@@ -366,6 +366,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       }
     }
     final externalSubs = await _resolveExternalSubtitles(video);
+    final readingLang = await SubtitlePrefs.loadReadingLanguage();
     try {
       await _exo?.open(
         video.path ?? '',
@@ -377,6 +378,8 @@ class _PlayerScreenState extends State<PlayerScreen>
         resumeKey: _resumeKey,
         title: video.title,
         externalSubtitles: externalSubs,
+        decoderMode: _decoderMode.storageString,
+        readingLanguage: readingLang,
       );
       // Re-apply the user's persisted fit mode + speed + audio filters.
       _exo?.setFitMode(_fitMode);
@@ -500,6 +503,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         title: video.title,
         externalSubtitles: externalSubs,
         decoderMode: _decoderMode.storageString,
+        readingLanguage: await SubtitlePrefs.loadReadingLanguage(),
       );
       _exo?.setFitMode(_fitMode);
       _exo?.setSpeed(_playbackSpeed);

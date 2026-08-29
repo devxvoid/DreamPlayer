@@ -1059,6 +1059,14 @@ class ExoPlayerView(
                     // Self-signed WebDAV servers: swap in the trust-all client.
                     val allowSelfSigned = call.argument<Boolean>("allowSelfSigned") ?: false
                     httpDataSourceFactory.setPermissive(allowSelfSigned)
+                    // Reading language (Nova-style auto-select): the derived
+                    // preferred text language for Media3. Empty / "system" = no
+                    // preference (Media3 keeps its default non-selection of
+                    // non-forced subtitles).
+                    val readingLanguage = call.argument<String>("readingLanguage")
+                        ?.trim()
+                        ?.takeIf { it.isNotEmpty() && !it.equals("system", true) }
+                        ?: null
                     // A new media item: allow DV P5 rejection to fire again if
                     // this one is also Profile 5 on a DV-less device.
                     dvRejectionShown = false
@@ -1232,6 +1240,7 @@ class ExoPlayerView(
                         }
                         .build()
                     player.setMediaItem(mediaItem)
+                    applyReadingLanguage(readingLanguage)
                     player.prepare()
                     if (startMs > 0L) player.seekTo(startMs)
                     player.play()
@@ -1527,6 +1536,21 @@ class ExoPlayerView(
             }
         } else {
             builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+        }
+        player.setTrackSelectionParameters(builder.build())
+    }
+
+    /// Nova-style reading-language auto-select: sets Media3's preferred text
+    /// language so the engine auto-selects a matching subtitle track (embedded
+    /// or sideloaded) on prepare. `null`/empty clears the preference (Media3
+    /// then keeps its default of not auto-selecting non-forced subtitles).
+    private fun applyReadingLanguage(language: String?) {
+        val builder = player.trackSelectionParameters.buildUpon()
+        builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+        if (language.isNullOrEmpty()) {
+            builder.setPreferredTextLanguage(null)
+        } else {
+            builder.setPreferredTextLanguage(language)
         }
         player.setTrackSelectionParameters(builder.build())
     }

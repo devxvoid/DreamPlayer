@@ -35,6 +35,24 @@ void main() {
       final result = await SidecarSubtitleService.instance.find(video);
       expect(result, isEmpty);
     });
+
+    test('never probes URL-siblings for a generic http stream URL (Jellyfin '
+        "'Open in external player' regression)", () async {
+      // A Jellyfin direct-play / stream URL handed to the app via "Open in
+      // external player" has no WebDAV server identity. Before, `find` treated
+      // it as a generic http(s) source and issued blocking sibling-subtitle
+      // GET probes against the Jellyfin server *before* playback started,
+      // hanging the player ("does not work at all"). This must resolve to
+      // empty without any network — just an empty webdavServerId.
+      final video = VideoItem(
+        id: 'x',
+        title: 'x',
+        duration: Duration.zero,
+        uri: 'http://192.168.1.16:8096/Videos/123/api-stream?static=true&api_key=k',
+      );
+      final result = await SidecarSubtitleService.instance.find(video);
+      expect(result, isEmpty);
+    });
   });
 
   group('promoteFirstExternalAsDefault', () {

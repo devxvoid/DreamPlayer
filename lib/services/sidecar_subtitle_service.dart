@@ -234,41 +234,48 @@ class SidecarSubtitleService {
     // ignore: avoid_print
     print('[SidecarDBG] _findWebDavOrHttp: uri=$uri webdavId=$webdavId');
 
+    // Only probe URL-sibling sidecars for a source backed by a real WebDAV
+    // server directory. For a generic http(s) stream URL that isn't a WebDAV
+    // identity (e.g. a Jellyfin "Open in external player" direct-play URL, or
+    // a CX/SMB localhost proxy), sibling-subtitle probing is wrong and harmful:
+    // rebuilding `…/<file>.<ext>` candidates against a stream/direct-play
+    // endpoint issues several blocking GETs to the server *before* playback
+    // even starts, hanging the player ("does not work at all"). WebDAV carries
+    // the server identity so `listDirectory`-style pairing is reliable; generic
+    // stream URLs have no discoverable sibling names — skip them entirely.
+    if (webdavId == null || webdavId.isEmpty) {
+      // ignore: avoid_print
+      print('[SidecarDBG] _findWebDavOrHttp: no WebDAV identity — skipping probe');
+      return const [];
+    }
+
     String? baseUrl;
     Map<String, String> headers;
     bool allowSelfSigned;
 
-    if (webdavId != null && webdavId.isNotEmpty) {
-      final servers = await WebDavClient.instance.listServers();
-      final server = servers.firstWhere(
-        (s) => s.id == webdavId,
-        orElse: () => const WebDavServer(
-          id: '',
-          name: '',
-          url: '',
-          username: '',
-          hasPassword: false,
-        ),
-      );
-      if (server.id.isEmpty) {
-        // ignore: avoid_print
-        print('[SidecarDBG] _findWebDavOrHttp: server not found');
-        return const [];
-      }
-      baseUrl = server.url.replaceAll(RegExp(r'/+$'), '');
-      allowSelfSigned = server.allowSelfSigned;
-      // Credentials are read natively per-fetch; passing an empty headers map
-      // makes the native side build `Authorization` from the saved server.
-      headers = const {};
+    final servers = await WebDavClient.instance.listServers();
+    final server = servers.firstWhere(
+      (s) => s.id == webdavId,
+      orElse: () => const WebDavServer(
+        id: '',
+        name: '',
+        url: '',
+        username: '',
+        hasPassword: false,
+      ),
+    );
+    if (server.id.isEmpty) {
       // ignore: avoid_print
-      print('[SidecarDBG] _findWebDavOrHttp: server url=$baseUrl selfSigned=$allowSelfSigned');
-    } else {
-      // Generic http(s): no WebDAV identity. Probe with the video's own headers
-      // (e.g. Jellyfin api_key / anonymous) + its TLS policy.
-      baseUrl = uri.replaceAll(RegExp(r'/+$'), '');
-      headers = video.httpHeaders;
-      allowSelfSigned = video.allowSelfSigned;
+      print('[SidecarDBG] _findWebDavOrHttp: server not found');
+      return const [];
     }
+    baseUrl = server.url.replaceAll(RegExp(r'/+$'), '');
+    allowSelfSigned = server.allowSelfSigned;
+    // Credentials are read natively per-fetch; passing an empty headers map
+    // makes the native side build `Authorization` from the saved server.
+    headers = const {};
+    // ignore: avoid_print
+    print('[SidecarDBG] _findWebDavOrHttp: server url=$baseUrl selfSigned=$allowSelfSigned');
 
     // Work from the parsed URI: `Uri.path` is decoded, so a playback URL that
     // is percent-encoded (`Test%20Video.en.mp4`) yields a clean `Test Video.en`
