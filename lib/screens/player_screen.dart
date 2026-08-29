@@ -499,6 +499,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         resumeKey: _resumeKey,
         title: video.title,
         externalSubtitles: externalSubs,
+        decoderMode: _decoderMode.storageString,
       );
       _exo?.setFitMode(_fitMode);
       _exo?.setSpeed(_playbackSpeed);

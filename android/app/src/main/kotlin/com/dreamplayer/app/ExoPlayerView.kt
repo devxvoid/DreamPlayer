@@ -1028,10 +1028,15 @@ class ExoPlayerView(
                         registerSpatialListenerOnce()
                         // Recreate the player when the decoder mode changed so
                         // renderers are rebuilt with the new MediaCodecSelector
-                        // (the lambda reads prefs live on every query).
-                        val currentMode = PlayerCodecs.decoderMode(activity)
+                        // (the lambda reads prefs live on every query). Prefer the
+                        // decoderMode arg passed straight through the channel
+                        // (bootstrapped from prefs on the Dart side), falling back
+                        // to a direct prefs read for older callers.
+                        val currentMode = call.argument<String>("decoderMode")
+                            ?.takeIf { it.isNotEmpty() }
+                            ?: PlayerCodecs.decoderMode(activity)
                         if (currentMode != lastDecoderMode) {
-                            Log.i("ExoPlayerView", "Decoder mode changed: $lastDecoderMode -> $currentMode, recreating player.")
+                            Log.i("ExoPlayerView", "Decoder mode changed: $lastDecoderMode -> $currentMode (from open channel), recreating player.")
                             player.removeListener(listener)
                             player.release()
                             player = createPlayer()

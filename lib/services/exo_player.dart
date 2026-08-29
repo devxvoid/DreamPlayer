@@ -437,6 +437,7 @@ abstract class PlaybackController {
     String? resumeKey,
     String? title,
     List<VideoExternalSub>? externalSubtitles,
+    String? decoderMode,
   });
 
   Future<void> play();
@@ -561,6 +562,7 @@ class ExoPlayerController implements PlaybackController {
     String? resumeKey,
     String? title,
     List<VideoExternalSub>? externalSubtitles,
+    String? decoderMode,
   }) => _send('open', {
     if (uri != null && uri.isNotEmpty) 'uri': uri else 'path': path,
     if (path.isNotEmpty) 'path': path,
@@ -575,6 +577,8 @@ class ExoPlayerController implements PlaybackController {
     if (externalSubtitles != null && externalSubtitles.isNotEmpty)
       'externalSubtitles':
           externalSubtitles.map((s) => s.toJson()).toList(),
+    if (decoderMode != null && decoderMode.isNotEmpty)
+      'decoderMode': decoderMode,
   });
 
   @override
