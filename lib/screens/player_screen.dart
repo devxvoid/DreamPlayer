@@ -540,7 +540,10 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   Future<void> _startMpvFallback() async {
+    // The fallback is Android-only — iOS uses AetherEngine and its own
+    // codec/error paths. Belt-and-braces: never instantiate libmpv on iOS.
     if (_mpvActive || _inTests) return;
+    if (!Platform.isAndroid) return;
     try {
       // Idempotent: loads the bundled libmpv native library.
       MediaKit.ensureInitialized();

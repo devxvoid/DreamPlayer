@@ -217,7 +217,7 @@ A video player app supporting:
   been downgraded to software once, a corrupt container, or a codec no ExoPlayer
   renderer can find), the same `PlayerScreen` flips to a bundled **libmpv**
   instance — `media_kit: ^1.2.6` + `media_kit_video: ^2.0.1` +
-  `media_kit_libs_video: ^1.0.7` in `pubspec.yaml`; the engine renders into a
+  `media_kit_libs_android_video: ^1.3.8` in `pubspec.yaml`; the engine renders into a
   Flutter `Texture` (media_kit's `VideoController`) and drives the SAME UI
   (transport, seekbar, gestures, auto-hide, ended-routing, resume). It cannot
   do DV/HDR (Flutter textures have no HDR path), so the native engine keeps
@@ -308,7 +308,7 @@ A video player app supporting:
   `libflutter.so` + `libmedia3ext.so` remain).
   *(This block is outdated and superseded by the 2026-08-29 libmpv fallback
   section above — kept here for the historical record. The current build
-  DOES ship `libmpv.so` via `media_kit_libs_video`, but only as a fallback
+  DOES ship `libmpv.so` via `media_kit_libs_android_video`, but only as a fallback
   engine, never as the primary decoder.)*
 - **Subtitles done (embedded + sideloaded)**: every sibling subtitle file in
   the video's folder auto-attaches (SRT, SSA/ASS, WebVTT, TTML, SAMI, MicroDVD,
@@ -330,7 +330,7 @@ A video player app supporting:
 | SMB client (iPad) | **removed (2026-08)** | In-app SMB (AMSMB2 browse + AetherEngineSMB playback) was retired; NAS playback is WebDAV / Jellyfin / Files-app "Open with". `AetherEngineSMB` still ships for WebDAV's `ByteRangeSource`. |
 | Android audio decode | Media3 `FFmpegAudioRenderer` (ffmpeg extension) | DTS, DTS-HD, E-AC3, AC3, TrueHD — same bundled-FFmpeg approach Nova uses. |
 | Reference architecture | **Nova Video Player** (`nova-video-player/aos-AVP`) | See "Playback research notes". |
-| **Fallback engine (Android)** | **media_kit + libmpv** (FFmpeg software decode, Flutter `Texture` render) | Engaged automatically when the native engine surfaces a terminal decode error after the existing software-decoder auto-fallback has run. Renders into a Flutter texture so no DV/HDR — by design, the native engine keeps the project goal. Ships `libmpv.so` via `media_kit_libs_video`. iOS does not fall back. |
+| **Fallback engine (Android)** | **media_kit + libmpv** (FFmpeg software decode, Flutter `Texture` render) | Engaged automatically when the native engine surfaces a terminal decode error after the existing software-decoder auto-fallback has run. Renders into a Flutter texture so no DV/HDR — by design, the native engine keeps the project goal. Ships `libmpv.so` via `media_kit_libs_android_video` — Android-only, so iOS doesn't pull in `Mpv.framework` (which breaks SideStore's `ldid` signer). iOS does not fall back. |
 | Permissions | `permission_handler` | Runtime `READ_MEDIA_VIDEO` request on video open |
 | Refresh rate | `flutter_displaymode` | Selects highest refresh mode at startup |
 
