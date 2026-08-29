@@ -453,10 +453,13 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
     await _loadDetailsAndSeasons();
   }
 
-  Future<void> _play() async {
+  Future<void> _play({bool fromBeginning = false}) async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => PlayerScreen(video: widget.video!),
+        builder: (_) => PlayerScreen(
+          video: widget.video!,
+          startFromBeginning: fromBeginning,
+        ),
       ),
     );
     // The playhead may have moved (or the video finished) — refresh the label.
@@ -599,18 +602,46 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
                 // Always reachable: a metadata failure (or a slow lookup) must
                 // never block playing the video, whatever the metadata state.
-                child: FilledButton.icon(
-                  onPressed: _play,
-                  style: FilledButton.styleFrom(
-                    minimumSize: const Size.fromHeight(52),
-                  ),
-                  icon: const Icon(Icons.play_arrow),
-                  label: Text(
-                    resume != null
-                        ? 'Resume from ${_formatClock(resume)}'
-                        : 'Play',
-                  ),
-                ),
+                child: resume != null
+                    ? Row(
+                        children: [
+                          Expanded(
+                            flex: 3,
+                            child: FilledButton.icon(
+                              onPressed: _play,
+                              style: FilledButton.styleFrom(
+                                minimumSize: const Size.fromHeight(52),
+                              ),
+                              icon: const Icon(Icons.play_arrow),
+                              label: Text(
+                                'Resume from ${_formatClock(resume)}',
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            flex: 2,
+                            child: OutlinedButton.icon(
+                              onPressed: () =>
+                                  _play(fromBeginning: true),
+                              style: OutlinedButton.styleFrom(
+                                minimumSize: const Size.fromHeight(52),
+                              ),
+                              icon: const Icon(Icons.replay),
+                              label: const Text('Watch from beginning'),
+                            ),
+                          ),
+                        ],
+                      )
+                    : FilledButton.icon(
+                        onPressed: _play,
+                        style: FilledButton.styleFrom(
+                          minimumSize: const Size.fromHeight(52),
+                        ),
+                        icon: const Icon(Icons.play_arrow),
+                        label: const Text('Play'),
+                      ),
               ),
             )
           : null,

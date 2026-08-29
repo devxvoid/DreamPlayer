@@ -45,9 +45,13 @@ enum _SwipeType { brightness, volume }
 enum _PanAxis { horizontal, vertical }
 
 class PlayerScreen extends StatefulWidget {
-  const PlayerScreen({super.key, required this.video});
+  const PlayerScreen({super.key, required this.video, this.startFromBeginning = false});
 
   final VideoItem video;
+
+  /// When true, ignore any saved resume position and play from the very
+  /// beginning of the video (the "Watch from beginning" entry point).
+  final bool startFromBeginning;
 
   @override
   State<PlayerScreen> createState() => _PlayerScreenState();
@@ -355,7 +359,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       return;
     }
     Duration? resume;
-    if (!_inTests) {
+    if (!_inTests && !widget.startFromBeginning) {
       resume = await ResumeStore.positionFor(_resumeKey);
       // Skip trivial positions and "basically finished" ones.
       if (resume != null && resume < const Duration(seconds: 10)) resume = null;

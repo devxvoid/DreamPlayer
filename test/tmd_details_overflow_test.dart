@@ -3,7 +3,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:dream_player/models/video_item.dart';
+import 'package:dream_player/screens/player_screen.dart';
 import 'package:dream_player/screens/tmd_details_screen.dart';
+import 'package:dream_player/services/resume_store.dart';
 import 'package:dream_player/services/tmdb_client.dart';
 
 const _video = VideoItem(
@@ -183,5 +185,57 @@ void main() {
       const Size(2400, 1080),
       textScale: 1.3,
     );
+  });
+
+  testWidgets('saved position shows both Resume and Watch from beginning '
+      '(no overflow at device sizes)', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    await TmdStore.save(
+      _video.path!,
+      const TmdMeta(
+        movie: TmdMovie(
+          id: 1,
+          title: 'Dolby Core Universe',
+          year: 2024,
+          overview: 'A short overview.',
+          voteAverage: 8.2,
+          posterPath: '/poster.jpg',
+          backdropPath: '/backdrop.jpg',
+        ),
+      ),
+    );
+    // Resume key for `_video` is its path (no explicit resumeKey).
+    await ResumeStore.save(_video.path!, const Duration(minutes: 12, seconds: 30));
+
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      const MaterialApp(home: TmdDetailsScreen(video: _video)),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(
+      find.widgetWithText(FilledButton, 'Resume from 12:30'),
+      findsOneWidget,
+    );
+    expect(
+      find.widgetWithText(OutlinedButton, 'Watch from beginning'),
+      findsOneWidget,
+    );
+
+    // Tapping "Watch from beginning" must push the player with the
+    // startFromBeginning flag instead of resuming.
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Watch from beginning'));
+    await tester.pumpAndSettle();
+    final screen = tester.widget<PlayerScreen>(
+      find.byType(PlayerScreen),
+    );
+    expect(screen.startFromBeginning, isTrue);
+    addTearDown(() async {
+      // Return to the details screen state after the incidental player push.
+      tester.pumpWidget(const SizedBox());
+    });
   });
 }
