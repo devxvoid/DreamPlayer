@@ -629,4 +629,86 @@ void main() {
       expect(subtitleFileNameLabel('noext'), 'noext');
     });
   });
+
+  group('JellyfinExternalSub.displayTitle (exact subtitle name)', () {
+    JellyfinExternalSub withJson(Map<String, Object?> stream) =>
+        JellyfinExternalSub.fromJson(stream);
+
+    test('Title (the file name) wins', () {
+      expect(
+        withJson({
+          'Index': 0,
+          'Codec': 'srt',
+          'Title': 'Show.S01E01.eng.srt',
+          'Language': 'eng',
+          'DeliveryUrl': '/Videos/x/y/Subtitles/0/0/Stream.srt',
+        }).displayTitle,
+        'Show.S01E01.eng.srt',
+      );
+    });
+
+    test('basename of Path is used when Title is missing', () {
+      expect(
+        withJson({
+          'Index': 0,
+          'Codec': 'srt',
+          'Language': 'eng',
+          'Path': '/media/TV/Show S01E01/Show.S01E01.eng.srt',
+          'DeliveryUrl': '/Videos/x/y/Subtitles/0/0/Stream.srt',
+        }).displayTitle,
+        'Show.S01E01.eng.srt',
+      );
+    });
+
+    test('Windows-style Path backslashes are resolved too', () {
+      expect(
+        withJson({
+          'Index': 0,
+          'Codec': 'ass',
+          'Language': 'zho',
+          'Path': r'D:\Media\Series\Show.S01E01.chs.ass',
+          'DeliveryUrl': '/Videos/x/y/Subtitles/0/0/Stream.ass',
+        }).displayTitle,
+        'Show.S01E01.chs.ass',
+      );
+    });
+
+    test('full language name when no file name exists', () {
+      expect(
+        withJson({
+          'Index': 2,
+          'Codec': 'srt',
+          'Language': 'eng',
+          'DeliveryUrl': '/Videos/x/y/Subtitles/2/0/Stream.srt',
+        }).displayTitle,
+        'English',
+      );
+    });
+
+    test('neutral fallback never yields "undefined"', () {
+      expect(
+        withJson({
+          'Index': 3,
+          'Codec': 'srt',
+          'Language': 'und',
+          'DeliveryUrl': '/Videos/x/y/Subtitles/3/0/Stream.srt',
+        }).displayTitle,
+        'External subtitle 4',
+      );
+    });
+
+    test('fromJson keeps Title and DisplayTitle separate from Path', () {
+      final parsed = withJson({
+        'Index': 1,
+        'Codec': 'srt',
+        'Title': 'My.Custom.Name.srt',
+        'Language': 'eng',
+        'Path': '/media/movies/My.Custom.Name.srt',
+        'DeliveryUrl': '/Videos/x/y/Subtitles/1/0/Stream.srt',
+      });
+      expect(parsed.title, 'My.Custom.Name.srt');
+      expect(parsed.path, '/media/movies/My.Custom.Name.srt');
+      expect(parsed.displayTitle, 'My.Custom.Name.srt');
+    });
+  });
 }

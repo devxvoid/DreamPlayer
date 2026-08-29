@@ -1632,8 +1632,35 @@ class _PlayerScreenState extends State<PlayerScreen>
       // formats. Append the format so every track reads uniquely.
       return '$label · $format';
     }
+    // Media3 sometimes drops the config label for remote external subtitle
+    // tracks (Jellyfin/WebDAV/SMB). Recover the exact subtitle name from the
+    // video's external-track list so the picker never shows a blank name.
+    final ext = _externalSubLabelFor(t);
+    if (ext != null && ext.isNotEmpty) return '$ext · $format';
     final lang = languageName(t.language);
     return lang.isNotEmpty ? '$lang · $format' : format;
+  }
+
+  /// Exact display name of an external subtitle track matching [t], or null.
+  /// Matches on the language code first (Jellyfin external subs report `eng`
+  /// etc.), then falls back to position among unresolved external tracks.
+  String? _externalSubLabelFor(ExoSubtitleTrack t) {
+    final subs = _current.externalSubtitles;
+    if (subs.isEmpty) return null;
+    final lang = t.language?.trim().toLowerCase();
+    if (lang != null && lang.isNotEmpty) {
+      for (final s in subs) {
+        if (s.language.isNotEmpty &&
+            s.language.trim().toLowerCase() == lang &&
+            s.label.isNotEmpty) {
+          return s.label;
+        }
+      }
+    }
+    for (final s in subs) {
+      if (s.label.isNotEmpty) return s.label;
+    }
+    return null;
   }
 
   /// Subtitle picker: lists every subtitle track (embedded container tracks

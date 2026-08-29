@@ -8,6 +8,7 @@ import 'package:multicast_dns/multicast_dns.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/video_item.dart';
+import '../utils/codec_info.dart' show languageName;
 
 /// A saved (or discovered) Jellyfin / Emby server.
 class JellyfinServer {
@@ -97,6 +98,7 @@ class JellyfinExternalSub {
     required this.deliveryUrl,
     this.language = '',
     this.title = '',
+    this.path = '',
     this.isDefault = false,
     this.isForced = false,
   });
@@ -105,7 +107,15 @@ class JellyfinExternalSub {
   final String codec;
   final String deliveryUrl;
   final String language;
+
+  /// The exact subtitle file name Jellyfin exposes (its `Title` — usually the
+  /// `.srt`/`.ass` file name, e.g. `Show.S01E01.eng.srt`).
   final String title;
+
+  /// The server-side file path of the subtitle (Jellyfin `Path`), whose
+  /// basename is the real file name when `Title` is empty.
+  final String path;
+
   final bool isDefault;
   final bool isForced;
 
@@ -127,8 +137,23 @@ class JellyfinExternalSub {
         _ => 'srt',
       };
 
-  String get displayTitle =>
-      title.isNotEmpty ? title : language.isNotEmpty ? language : 'Track $index';
+  /// Display name for the subtitle picker — always the *exact* subtitle file
+  /// name when Jellyfin provides one (previously empty/Jellyfin `DisplayTitle`
+  /// only surfaced generic names like "English" or "Track N").
+  ///
+  /// Resolution order:
+  /// 1. [title] — Jellyfin's `Title` (the file name for external subs).
+  /// 2. basename of [path] — the real `.srt`/`.ass` name on the server.
+  /// 3. [language]'s full English name (e.g. `eng` → `English`).
+  /// 4. neutral `External subtitle N` fallback (never "undefined").
+  String get displayTitle {
+    if (title.isNotEmpty) return title;
+    final base = path.split(RegExp(r'[/\\]')).last;
+    if (base.isNotEmpty) return base;
+    final lang = languageName(language);
+    if (lang.isNotEmpty) return lang;
+    return 'External subtitle ${index + 1}';
+  }
 
   factory JellyfinExternalSub.fromJson(Map<String, dynamic> json) {
     // DeliveryUrl may be a relative path like
@@ -139,9 +164,8 @@ class JellyfinExternalSub {
       codec: json['Codec'] as String? ?? 'subrip',
       deliveryUrl: json['DeliveryUrl'] as String? ?? '',
       language: json['Language'] as String? ?? '',
-      title: (json['Title'] as String?) ??
-          (json['DisplayTitle'] as String?) ??
-          '',
+      title: json['Title'] as String? ?? '',
+      path: json['Path'] as String? ?? '',
       isDefault: (json['IsDefault'] as bool?) ?? false,
       isForced: (json['IsForced'] as bool?) ?? false,
     );
