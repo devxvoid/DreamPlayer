@@ -606,7 +606,6 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
                     ? Row(
                         children: [
                           Expanded(
-                            flex: 3,
                             child: FilledButton.icon(
                               onPressed: _play,
                               style: FilledButton.styleFrom(
@@ -620,23 +619,20 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
                             ),
                           ),
                           const SizedBox(width: 12),
-                          Expanded(
-                            flex: 2,
-                            // A tonal sibling of the filled Resume button:
-                            // same height + stadium shape, but rendered in the
-                            // theme's secondaryContainer (a muted seed-tinted
-                            // fill) so it reads as the secondary action while
-                            // staying inside the app's color system — a plain
-                            // OutlinedButton looked foreign next to the
-                            // filled primary.
-                            child: FilledButton.tonalIcon(
+                          // Icon-only tonal sibling of the Resume button
+                          // (label removed per feedback — the replay glyph is
+                          // the affordance; the tooltip keeps the meaning
+                          // discoverable on hover/long-press).
+                          Tooltip(
+                            message: 'Watch from beginning',
+                            child: FilledButton.tonal(
                               onPressed: () =>
                                   _play(fromBeginning: true),
                               style: FilledButton.styleFrom(
-                                minimumSize: const Size.fromHeight(52),
+                                minimumSize: const Size(52, 52),
+                                padding: EdgeInsets.zero,
                               ),
-                              icon: const Icon(Icons.replay),
-                              label: const Text('Watch from beginning'),
+                              child: const Icon(Icons.replay),
                             ),
                           ),
                         ],

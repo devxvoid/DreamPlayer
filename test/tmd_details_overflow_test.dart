@@ -220,16 +220,14 @@ void main() {
       find.widgetWithText(FilledButton, 'Resume from 12:30'),
       findsOneWidget,
     );
-    // "Watch from beginning" is a tonal FilledButton (the outlined look
-    // clashed with the theme) sitting next to the filled Resume button.
-    expect(
-      find.widgetWithText(FilledButton, 'Watch from beginning'),
-      findsOneWidget,
-    );
+    // "Watch from beginning" is now an icon-only tonal button (the replay
+    // glyph) next to the filled Resume button — no text label.
+    expect(find.byIcon(Icons.replay), findsOneWidget);
+    expect(find.text('Watch from beginning'), findsNothing);
 
-    // Tapping "Watch from beginning" must push the player with the
+    // Tapping the replay button must push the player with the
     // startFromBeginning flag instead of resuming.
-    await tester.tap(find.text('Watch from beginning'));
+    await tester.tap(find.byIcon(Icons.replay));
     await tester.pumpAndSettle();
     final screen = tester.widget<PlayerScreen>(
       find.byType(PlayerScreen),
