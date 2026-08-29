@@ -457,13 +457,13 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// failed, switch to software once, reopen at the current position, and
   /// remember the original mode so we can restore it on the next open or
   /// when the screen is disposed.
-  void _trySoftwareDecodeFallback() {
+  Future<void> _trySoftwareDecodeFallback() async {
     if (_swRetried) return;
     if (_decoderMode == DecoderMode.sw) return;
     _swRetried = true;
     _decoderOverride ??= _decoderMode;
     _decoderMode = DecoderMode.sw;
-    unawaited(DecoderModeStore.save(DecoderMode.sw));
+    await DecoderModeStore.save(DecoderMode.sw);
     _error = 'Hardware decoder failed — retrying with software…';
     setState(() {});
     _reopenAt(_position, _duration);

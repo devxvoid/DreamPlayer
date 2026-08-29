@@ -1024,19 +1024,23 @@ class ExoPlayerView(
         methodChannel.setMethodCallHandler { call: MethodCall, result: MethodChannel.Result ->
             when (call.method) {
                 "open" -> {
-                    registerSpatialListenerOnce()
-                    // Recreate the player when the decoder mode changed so
-                    // renderers are rebuilt with the new MediaCodecSelector
-                    // (the lambda reads prefs live on every query).
-                    val currentMode = PlayerCodecs.decoderMode(activity)
-                    if (currentMode != lastDecoderMode) {
-                        player.removeListener(listener)
-                        player.release()
-                        player = createPlayer()
-                        player.addListener(listener)
-                        playerView.player = player
-                    }
-                    val path = call.argument<String>("path")
+                    try {
+                        registerSpatialListenerOnce()
+                        // Recreate the player when the decoder mode changed so
+                        // renderers are rebuilt with the new MediaCodecSelector
+                        // (the lambda reads prefs live on every query).
+                        val currentMode = PlayerCodecs.decoderMode(activity)
+                        if (currentMode != lastDecoderMode) {
+                            Log.i("ExoPlayerView", "Decoder mode changed: $lastDecoderMode -> $currentMode, recreating player.")
+                            player.removeListener(listener)
+                            player.release()
+                            player = createPlayer()
+                            player.addListener(listener)
+                            playerView.player = player
+                        } else {
+                            Log.i("ExoPlayerView", "Decoder mode unchanged: $currentMode, no player recreation.")
+                        }
+                        val path = call.argument<String>("path")
                     val uri = call.argument<String>("uri")
                     val subtitleUri = call.argument<String>("subtitleUri")
                     val startMs = call.argument<Number>("startPositionMs")?.toLong() ?: 0L
@@ -1239,6 +1243,10 @@ class ExoPlayerView(
                     probeHdr10(path, uri, headers)
                     probeChapters(path, uri, headers, allowSelfSigned)
                     result.success(null)
+                    } catch (e: Exception) {
+                        Log.e("ExoPlayerView", "open failed", e)
+                        result.error("open_failed", e.message, e.stackTraceToString())
+                    }
                 }
                 "play" -> {
                     player.play()
